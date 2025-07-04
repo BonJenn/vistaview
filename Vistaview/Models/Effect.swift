@@ -1,15 +1,10 @@
 import Foundation
+import AVFoundation
+import MetalKit
 
-public struct Effect: Identifiable, Codable, Hashable {
-    public let id: UUID
-    public var name: String
-    public var isEnabled: Bool
-    public var intensity: Float
+protocol Effect {
+    var type: String { get }
+    var amount: Float { get set }
 
-    public init(id: UUID = UUID(), name: String, isEnabled: Bool, intensity: Float) {
-        self.id = id
-        self.name = name
-        self.isEnabled = isEnabled
-        self.intensity = intensity
-    }
+    func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer) -> MTLTexture
 }
