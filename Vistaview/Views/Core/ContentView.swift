@@ -1,28 +1,22 @@
 // File: Views/Core/ContentView.swift
 import SwiftUI
-import AVKit
+import AVFoundation
 import UniformTypeIdentifiers
 import AppKit
 
-/// Main application view with a split layout for presets and video preview.
+/// Main application view with a split layout for presets and custom video preview & controls.
 struct ContentView: View {
     @StateObject private var presetManager = PresetManager()
     @State private var videoURL: URL?
-    @State private var player: AVPlayer = AVPlayer()
+    @State private var player = AVPlayer()
+    @State private var isPlaying = false
+    @State private var playhead: Double = 0.0
 
     var body: some View {
         NavigationSplitView {
             // Sidebar: Preset list and actions
-            List(selection: $presetManager.selectedPresetID) {
-                ForEach(presetManager.presets, id: \.id) { preset in
-                    Text(preset.name)
-                        .tag(preset.id)
-                }
-            }
-            .listStyle(.sidebar)
-            .navigationTitle("Presets")
-            .toolbar {
-                ToolbarItemGroup(placement: .automatic) {
+            VStack {
+                HStack {
                     Button(action: loadVideo) {
                         Label("Load Video", systemImage: "film")
                     }
@@ -30,25 +24,67 @@ struct ContentView: View {
                         Label("New Preset", systemImage: "plus")
                     }
                 }
+                .padding([.top, .horizontal])
+
+                List(presetManager.presets, id: \.id, selection: $presetManager.selectedPresetID) { preset in
+                    Text(preset.name)
+                        .tag(preset.id)
+                }
+                .listStyle(.sidebar)
             }
+            .navigationTitle("Presets")
         } detail: {
-            // Main area: Video preview + effect controls
             VStack(spacing: 20) {
-                // Video Preview
+                // Video Preview with custom controls
                 GroupBox(label: Label("Preview", systemImage: "play.rectangle")) {
                     if let url = videoURL, let preset = presetManager.selectedPreset {
-                        VideoPlayer(player: player)
-                            .onAppear {
-                                player.replaceCurrentItem(with: AVPlayerItem(url: url))
-                                player.play()
+                        ZStack {
+                            // Video Layer
+                            CustomVideoPlayerView(player: $player)
+                                .onAppear {
+                                    let item = AVPlayerItem(url: url)
+                                    player.replaceCurrentItem(with: item)
+                                    player.play()
+                                    isPlaying = true
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 250)
+                                .blur(radius: preset.isBlurEnabled ? CGFloat(preset.blurAmount) * 20 : 0)
+                                .cornerRadius(8)
+
+                            // Controls Overlay
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Button(action: togglePlay) {
+                                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                            .font(.title2)
+                                            .padding(8)
+                                            .background(Color.black.opacity(0.6))
+                                            .clipShape(Circle())
+                                    }
+                                    Slider(value: $playhead, in: 0...1, onEditingChanged: seek)
+                                        .accentColor(.white)
+                                        .padding(.horizontal)
+                                }
+                                .padding()
+                                .background(Color.black.opacity(0.2))
+                                .cornerRadius(8)
+                                .padding()
                             }
-                            .frame(maxWidth: .infinity, minHeight: 250)
-                            .blur(radius: preset.isBlurEnabled ? CGFloat(preset.blurAmount) * 20 : 0)
+                        }
+                    } else if videoURL == nil {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.gray.opacity(0.2))
+                            Text("No video loaded")
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 250)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8)
                                 .fill(Color.gray.opacity(0.2))
-                            Text(videoURL == nil ? "No video loaded" : "No preset selected")
+                            Text("No preset selected")
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 250)
@@ -87,6 +123,21 @@ struct ContentView: View {
         let name = "Preset \(presetManager.presets.count + 1)"
         presetManager.addPreset(name: name)
     }
+
+    private func togglePlay() {
+        if isPlaying {
+            player.pause()
+        } else {
+            player.play()
+        }
+        isPlaying.toggle()
+    }
+
+    private func seek(editingStarted: Bool) {
+        guard let duration = player.currentItem?.duration.seconds, duration > 0 else { return }
+        let newTime = CMTime(seconds: playhead * duration, preferredTimescale: 600)
+        player.seek(to: newTime)
+    }
 }
 
 struct ContentView_Previews: PreviewProvider {
@@ -94,3 +145,4 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
