@@ -1,10 +1,13 @@
+// File: Views/Core/ContentView.swift
 import SwiftUI
-import AppKit
+import AVKit
+import UniformTypeIdentifiers
 
 /// Main application view with a split layout for presets and video preview.
 struct ContentView: View {
     @StateObject private var presetManager = PresetManager()
     @State private var videoURL: URL?
+    @State private var player: AVPlayer = AVPlayer()
 
     var body: some View {
         NavigationSplitView {
@@ -28,28 +31,31 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            // Main area: Video preview + effect controls
             VStack(spacing: 20) {
                 // Video Preview Group
                 GroupBox(label: Label("Preview", systemImage: "play.rectangle")) {
-                    ZStack {
-                        // Placeholder background
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.gray.opacity(0.2))
-                            .overlay(
-                                Text(videoURL == nil ? "No video loaded" : "Video playing…")
-                                    .foregroundColor(.secondary)
-                            )
+                    if let url = videoURL {
+                        VideoPlayer(player: player)
+                            .onAppear {
+                                player.replaceCurrentItem(with: AVPlayerItem(url: url))
+                                player.play()
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 250)
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.gray.opacity(0.2))
+                            Text("No video loaded")
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 250)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 250)
                 }
 
                 // Effect Controls Group
                 GroupBox(label: Label("Effect Controls", systemImage: "slider.horizontal.3")) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        EffectControlsView(presetManager: presetManager)
-                    }
-                    .padding()
+                    EffectControlsView(presetManager: presetManager)
+                        .padding()
                 }
 
                 Spacer()
@@ -62,10 +68,14 @@ struct ContentView: View {
     // MARK: - Actions
     private func loadVideo() {
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["mov", "mp4", "m4v"]
+        if #available(macOS 12.0, *) {
+            panel.allowedContentTypes = [UTType.movie, UTType.mpeg4Movie]
+        } else {
+            panel.allowedFileTypes = ["mov", "mp4", "m4v"]
+        }
         panel.begin { response in
-            if response == .OK {
-                videoURL = panel.url
+            if response == .OK, let url = panel.url {
+                videoURL = url
             }
         }
     }
