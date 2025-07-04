@@ -4,90 +4,92 @@ import AVFoundation
 import UniformTypeIdentifiers
 import AppKit
 
-/// Main application view with a split layout for presets and custom video preview & controls.
+/// Main application view with multi-deck camera switching and custom video preview & controls.
 struct ContentView: View {
     @StateObject private var presetManager = PresetManager()
-    @State private var videoURL: URL?
-    @State private var player = AVPlayer()
-    @State private var isPlaying = false
-    @State private var playhead: Double = 0.0
+    @State private var videoURLs: [URL?] = [nil, nil]
+    @State private var players: [AVPlayer] = [AVPlayer(), AVPlayer()]
+    @State private var isPlaying: [Bool] = [false, false]
+    @State private var playheads: [Double] = [0.0, 0.0]
+    @State private var previewIndex: Int = 0
+    @State private var programIndex: Int = 1
 
     var body: some View {
         NavigationSplitView {
-            // Sidebar: Preset list and actions
-            VStack {
+            // Sidebar: load decks and presets
+            VStack(alignment: .leading) {
+                Text("Deck Controls")
+                    .font(.headline)
+                    .padding(.top)
                 HStack {
-                    Button(action: loadVideo) {
-                        Label("Load Video", systemImage: "film")
-                    }
-                    Button(action: addPreset) {
-                        Label("New Preset", systemImage: "plus")
-                    }
+                    Button("Load Deck 1") { loadVideo(for: 0) }
+                    Button("Load Deck 2") { loadVideo(for: 1) }
                 }
-                .padding([.top, .horizontal])
+                .padding(.vertical)
 
+                Picker("Preview Deck", selection: $previewIndex) {
+                    Text("Deck 1").tag(0)
+                    Text("Deck 2").tag(1)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.bottom)
+
+                Button("Take") {
+                    programIndex = previewIndex
+                }
+                .padding(.bottom)
+
+                Divider()
+
+                Text("Presets")
+                    .font(.headline)
                 List(presetManager.presets, id: \.id, selection: $presetManager.selectedPresetID) { preset in
-                    Text(preset.name)
-                        .tag(preset.id)
+                    Text(preset.name).tag(preset.id)
                 }
                 .listStyle(.sidebar)
-            }
-            .navigationTitle("Presets")
-        } detail: {
-            VStack(spacing: 20) {
-                // Video Preview with custom controls
-                GroupBox(label: Label("Preview", systemImage: "play.rectangle")) {
-                    if let url = videoURL, let preset = presetManager.selectedPreset {
-                        ZStack {
-                            // Video Layer
-                            CustomVideoPlayerView(player: $player)
-                                .onAppear {
-                                    let item = AVPlayerItem(url: url)
-                                    player.replaceCurrentItem(with: item)
-                                    player.play()
-                                    isPlaying = true
-                                }
-                                .frame(maxWidth: .infinity, minHeight: 250)
-                                .blur(radius: preset.isBlurEnabled ? CGFloat(preset.blurAmount) * 20 : 0)
-                                .cornerRadius(8)
 
-                            // Controls Overlay
-                            VStack {
-                                Spacer()
-                                HStack {
-                                    Button(action: togglePlay) {
-                                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.title2)
-                                            .padding(8)
-                                            .background(Color.black.opacity(0.6))
-                                            .clipShape(Circle())
-                                    }
-                                    Slider(value: $playhead, in: 0...1, onEditingChanged: seek)
-                                        .accentColor(.white)
-                                        .padding(.horizontal)
-                                }
-                                .padding()
-                                .background(Color.black.opacity(0.2))
-                                .cornerRadius(8)
-                                .padding()
-                            }
-                        }
-                    } else if videoURL == nil {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.gray.opacity(0.2))
-                            Text("No video loaded")
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Vistaview")
+            .frame(minWidth: 200)
+        } detail: {
+            // Detail: show preview/program side by side
+            VStack(spacing: 16) {
+                HStack(spacing: 16) {
+                    // Preview Window
+                    GroupBox(label: Label("Preview (Deck \(previewIndex+1))", systemImage: "eye")) {
+                        if let url = videoURLs[previewIndex] {
+                            VideoPlayerContainerView(
+                                player: $players[previewIndex],
+                                isPlaying: $isPlaying[previewIndex],
+                                playhead: $playheads[previewIndex]
+                            )
+                            .onAppear { startPlayer(at: previewIndex) }
+                            .frame(maxWidth: .infinity, minHeight: 200)
+                        } else {
+                            Text("No source")
+                                .frame(maxWidth: .infinity, minHeight: 200)
                                 .foregroundColor(.secondary)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 250)
-                    } else {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.gray.opacity(0.2))
-                            Text("No preset selected")
+                    }
+
+                    // Program Window
+                    GroupBox(label: Label("Program (Deck \(programIndex+1))", systemImage: "play.circle")) {
+                        if let url = videoURLs[programIndex], let preset = presetManager.selectedPreset {
+                            VideoPlayerContainerView(
+                                player: $players[programIndex],
+                                isPlaying: $isPlaying[programIndex],
+                                playhead: $playheads[programIndex]
+                            )
+                            .onAppear { startPlayer(at: programIndex) }
+                            .frame(maxWidth: .infinity, minHeight: 200)
+                            .blur(radius: preset.isBlurEnabled ? CGFloat(preset.blurAmount) * 20 : 0)
+                        } else {
+                            Text("No source")
+                                .frame(maxWidth: .infinity, minHeight: 200)
                                 .foregroundColor(.secondary)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 250)
                     }
                 }
 
@@ -101,11 +103,11 @@ struct ContentView: View {
             }
             .padding()
         }
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 1000, minHeight: 600)
     }
 
-    // MARK: - Actions
-    private func loadVideo() {
+    // MARK: - Deck Actions
+    private func loadVideo(for deck: Int) {
         let panel = NSOpenPanel()
         if #available(macOS 12.0, *) {
             panel.allowedContentTypes = [UTType.movie, UTType.mpeg4Movie]
@@ -114,29 +116,18 @@ struct ContentView: View {
         }
         panel.begin { response in
             if response == .OK, let url = panel.url {
-                videoURL = url
+                videoURLs[deck] = url
             }
         }
     }
 
-    private func addPreset() {
-        let name = "Preset \(presetManager.presets.count + 1)"
-        presetManager.addPreset(name: name)
-    }
-
-    private func togglePlay() {
-        if isPlaying {
-            player.pause()
-        } else {
-            player.play()
-        }
-        isPlaying.toggle()
-    }
-
-    private func seek(editingStarted: Bool) {
-        guard let duration = player.currentItem?.duration.seconds, duration > 0 else { return }
-        let newTime = CMTime(seconds: playhead * duration, preferredTimescale: 600)
-        player.seek(to: newTime)
+    private func startPlayer(at deck: Int) {
+        guard let url = videoURLs[deck] else { return }
+        let item = AVPlayerItem(url: url)
+        players[deck].replaceCurrentItem(with: item)
+        players[deck].play()
+        isPlaying[deck] = true
+        playheads[deck] = 0.0
     }
 }
 
