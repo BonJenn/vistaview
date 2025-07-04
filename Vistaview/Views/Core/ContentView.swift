@@ -2,6 +2,7 @@
 import SwiftUI
 import AVKit
 import UniformTypeIdentifiers
+import AppKit
 
 /// Main application view with a split layout for presets and video preview.
 struct ContentView: View {
@@ -31,28 +32,30 @@ struct ContentView: View {
                 }
             }
         } detail: {
+            // Main area: Video preview + effect controls
             VStack(spacing: 20) {
-                // Video Preview Group
+                // Video Preview
                 GroupBox(label: Label("Preview", systemImage: "play.rectangle")) {
-                    if let url = videoURL {
+                    if let url = videoURL, let preset = presetManager.selectedPreset {
                         VideoPlayer(player: player)
                             .onAppear {
                                 player.replaceCurrentItem(with: AVPlayerItem(url: url))
                                 player.play()
                             }
                             .frame(maxWidth: .infinity, minHeight: 250)
+                            .blur(radius: preset.isBlurEnabled ? CGFloat(preset.blurAmount) * 20 : 0)
                     } else {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8)
                                 .fill(Color.gray.opacity(0.2))
-                            Text("No video loaded")
+                            Text(videoURL == nil ? "No video loaded" : "No preset selected")
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 250)
                     }
                 }
 
-                // Effect Controls Group
+                // Effect Controls
                 GroupBox(label: Label("Effect Controls", systemImage: "slider.horizontal.3")) {
                     EffectControlsView(presetManager: presetManager)
                         .padding()
@@ -91,4 +94,3 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
-
