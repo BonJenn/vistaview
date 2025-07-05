@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		98AD706F2E189DD600A6B1EB /* HaishinKit in Frameworks */ = {isa = PBXBuildFile; productRef = 98AD706E2E189DD600A6B1EB /* HaishinKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		9800B39B2E0C88DE00AABCE9 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				98AD706F2E189DD600A6B1EB /* HaishinKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +83,7 @@
 				9800B38B2E0C88DB00AABCE9 /* Vistaview */,
 				9800B39D2E0C88DE00AABCE9 /* VistaviewTests */,
 				9800B3A72E0C88DE00AABCE9 /* VistaviewUITests */,
+				98AD706B2E189DB700A6B1EB /* Frameworks */,
 				9800B38A2E0C88DB00AABCE9 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +96,13 @@
 				9800B3A42E0C88DE00AABCE9 /* VistaviewUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		98AD706B2E189DB700A6B1EB /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -112,6 +125,7 @@
 			);
 			name = Vistaview;
 			packageProductDependencies = (
+				98AD706E2E189DD600A6B1EB /* HaishinKit */,
 			);
 			productName = Vistaview;
 			productReference = 9800B3892E0C88DB00AABCE9 /* Vistaview.app */;
@@ -195,6 +209,9 @@
 			);
 			mainGroup = 9800B3802E0C88DA00AABCE9;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				98AD706A2E189AE100A6B1EB /* XCRemoteSwiftPackageReference "HaishinKit.swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9800B38A2E0C88DB00AABCE9 /* Products */;
 			projectDirPath = "";
@@ -549,6 +566,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		98AD706A2E189AE100A6B1EB /* XCRemoteSwiftPackageReference "HaishinKit.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/shogo4405/HaishinKit.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.9;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		98AD706E2E189DD600A6B1EB /* HaishinKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 98AD706A2E189AE100A6B1EB /* XCRemoteSwiftPackageReference "HaishinKit.swift" */;
+			productName = HaishinKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9800B3812E0C88DB00AABCE9 /* Project object */;
 }

@@ -4,129 +4,206 @@ import AVFoundation
 import UniformTypeIdentifiers
 import AppKit
 
-/// Main application view with multi-deck camera switching and smooth crossfades.
+// MARK: - Streaming Platform & Credentials
+enum StreamingPlatform: String, CaseIterable, Identifiable {
+    case twitch, youtube
+    var id: String { rawValue }
+    var rtmpURL: String {
+        switch self {
+        case .twitch:  return "rtmp://live.twitch.tv/app"
+        case .youtube: return "rtmp://a.rtmp.youtube.com/live2"
+        }
+    }
+}
+
+class StreamingCredentials {
+    private enum Keys {
+        static let platform = "streamingPlatform"
+        static let streamKey = "streamKey"
+    }
+    static var platform: StreamingPlatform? {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: Keys.platform) else { return nil }
+            return StreamingPlatform(rawValue: raw)
+        }
+        set {
+            UserDefaults.standard.set(newValue?.rawValue, forKey: Keys.platform)
+        }
+    }
+    static var streamKey: String? {
+        get { UserDefaults.standard.string(forKey: Keys.streamKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.streamKey) }
+    }
+    static var hasSavedCredentials: Bool {
+        platform != nil && !(streamKey?.isEmpty ?? true)
+    }
+}
+
+// MARK: - Main App View
 struct ContentView: View {
-    // MARK: - State
+    // State
     @StateObject private var presetManager = PresetManager()
+    @StateObject private var streamer: Streamer
     @State private var videoURLs: [URL?] = [nil, nil]
     @State private var players: [AVPlayer] = [AVPlayer(), AVPlayer()]
     @State private var isPlaying: [Bool] = [false, false]
     @State private var playheads: [Double] = [0.0, 0.0]
-    @State private var previewIndex: Int = 0
-    @State private var programIndex: Int = 1
+    @State private var previewIndex = 0
+    @State private var programIndex = 1
     @State private var crossfadePosition: Double = 1.0
+    @State private var showSetup = false
+    @State private var chosenPlatform: StreamingPlatform = .twitch
+    @State private var enteredKey: String = ""
 
-    // MARK: - Body
+    // Custom initializer to configure streamer with saved creds if available
+    init() {
+        let (url, key) = StreamingCredentials.hasSavedCredentials
+            ? (StreamingCredentials.platform!.rtmpURL, StreamingCredentials.streamKey!)
+            : ("", "")
+        _streamer = StateObject(wrappedValue: Streamer(streamURL: url, streamName: key))
+    }
+
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading) {
-                Text("Deck Controls")
-                    .font(.headline)
-                    .padding(.top)
-
-                HStack {
-                    Button("Load Deck 1") { loadVideo(for: 0) }
-                    Button("Load Deck 2") { loadVideo(for: 1) }
-                }
-                .padding(.vertical)
-
-                Picker("Preview Deck", selection: $previewIndex) {
-                    Text("Deck 1").tag(0)
-                    Text("Deck 2").tag(1)
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding(.bottom)
-
-                Button("Take") { autoTake() }
-                    .padding(.bottom)
-
+                deckControls
                 Divider()
-
-                Text("Presets")
-                    .font(.headline)
-                List(presetManager.presets, id: \.id, selection: $presetManager.selectedPresetID) { preset in
-                    Text(preset.name).tag(preset.id)
-                }
-                .listStyle(.sidebar)
-
+                liveButton
+                Divider()
+                presetsList
                 Spacer()
             }
             .padding()
             .navigationTitle("Vistaview")
-            .frame(minWidth: 200)
         } detail: {
-            VStack(spacing: 16) {
-                HStack(spacing: 16) {
-                    // Preview Window
-                    GroupBox(label: Label("Preview (Deck \(previewIndex+1))", systemImage: "eye")) {
-                        if videoURLs[previewIndex] != nil {
-                            VideoPlayerContainerView(
-                                player: $players[previewIndex],
-                                isPlaying: $isPlaying[previewIndex],
-                                playhead: $playheads[previewIndex]
-                            )
-                            .onAppear { startPlayer(at: previewIndex) }
-                            .frame(maxWidth: .infinity, minHeight: 200)
-                        } else {
-                            Text("No source")
-                                .frame(maxWidth: .infinity, minHeight: 200)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    // Program Window (blended)
-                    GroupBox(label: Label("Program (Blend)", systemImage: "play.circle")) {
-                        ZStack {
-                            if videoURLs[programIndex] != nil {
-                                VideoPlayerContainerView(
-                                    player: $players[programIndex],
-                                    isPlaying: $isPlaying[programIndex],
-                                    playhead: $playheads[programIndex]
-                                )
-                                .onAppear { startPlayer(at: programIndex) }
-                                .frame(maxWidth: .infinity, minHeight: 200)
-                                .opacity(1 - crossfadePosition)
-                            }
-                            if videoURLs[previewIndex] != nil {
-                                VideoPlayerContainerView(
-                                    player: $players[previewIndex],
-                                    isPlaying: $isPlaying[previewIndex],
-                                    playhead: $playheads[previewIndex]
-                                )
-                                .frame(maxWidth: .infinity, minHeight: 200)
-                                .opacity(crossfadePosition)
-                            }
-                        }
-                        .blur(radius: (presetManager.selectedPreset?.isBlurEnabled ?? false)
-                              ? CGFloat(presetManager.selectedPreset?.blurAmount ?? 0) * 20 : 0)
-                    }
-                }
-
-                // Crossfade slider
-                HStack {
-                    Text("Transition")
-                    Slider(value: $crossfadePosition, in: 0...1)
-                }
-                .padding(.horizontal)
-
-                Divider()
-
-                // Effect Controls
-                GroupBox(label: Label("Effect Controls", systemImage: "slider.horizontal.3")) {
-                    EffectControlsView(presetManager: presetManager)
-                        .padding()
-                }
-
-                Spacer()
-            }
-            .padding()
+            mainDetailView
         }
         .frame(minWidth: 1000, minHeight: 600)
+        .sheet(isPresented: $showSetup) { setupSheet }
     }
 
-    // MARK: - Deck Actions
-    /// Opens a picker, assigns the chosen URL to the given deck, switches preview to it, and starts playback.
-    private func loadVideo(for deck: Int) {
+    // MARK: - Subviews
+    private var deckControls: some View {
+        VStack(alignment: .leading) {
+            Text("Deck Controls").font(.headline)
+            HStack {
+                Button("Load Deck 1") { loadVideo(0) }
+                Button("Load Deck 2") { loadVideo(1) }
+            }
+            .padding(.vertical)
+            Picker("Preview", selection: $previewIndex) {
+                Text("1").tag(0)
+                Text("2").tag(1)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            Button("Take", action: autoTake)
+                .padding(.vertical)
+        }
+    }
+
+    private var liveButton: some View {
+        HStack {
+            Button(action: toggleLive) {
+                Label(
+                    streamer.isStreaming ? "Stop Live" : "Go Live",
+                    systemImage: streamer.isStreaming ? "dot.radiowaves.left.and.right.slash" : "dot.radiowaves.left.and.right"
+                )
+            }
+            .foregroundColor(streamer.isStreaming ? .red : .primary)
+            if streamer.isStreaming {
+                Circle().fill(Color.red).frame(width: 10, height: 10)
+            }
+        }
+        .padding(.vertical)
+    }
+
+    private var presetsList: some View {
+        VStack(alignment: .leading) {
+            Text("Presets").font(.headline)
+            List(presetManager.presets, id: \.id, selection: $presetManager.selectedPresetID) {
+                Text($0.name).tag($0.id)
+            }
+            .listStyle(SidebarListStyle())
+        }
+    }
+
+    private var mainDetailView: some View {
+        VStack(spacing: 20) {
+            HStack(spacing: 16) {
+                deckView(isPreview: true)
+                deckView(isPreview: false)
+            }
+            crossfadeSlider
+            effectControls
+            Spacer()
+        }
+        .padding()
+    }
+
+    private func deckView(isPreview: Bool) -> some View {
+        let idx = isPreview ? previewIndex : programIndex
+        return GroupBox(label: Label(isPreview ? "Preview" : "Program", systemImage: isPreview ? "eye" : "play.circle")) {
+            if let _ = videoURLs[idx] {
+                VideoPlayerContainerView(
+                    player: $players[idx],
+                    isPlaying: $isPlaying[idx],
+                    playhead: $playheads[idx]
+                )
+                .onAppear { startPlayer(idx) }
+                .opacity(isPreview ? crossfadePosition : (1 - crossfadePosition))
+                .blur(radius: (!isPreview && (presetManager.selectedPreset?.isBlurEnabled ?? false))
+                        ? CGFloat(presetManager.selectedPreset!.blurAmount) * 20 : 0)
+            } else {
+                Text("No source").foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+    }
+
+    private var crossfadeSlider: some View {
+        HStack {
+            Text("Transition")
+            Slider(value: $crossfadePosition, in: 0...1)
+        }
+        .padding(.horizontal)
+    }
+
+    private var effectControls: some View {
+        GroupBox(label: Label("Effect Controls", systemImage: "slider.horizontal.3")) {
+            EffectControlsView(presetManager: presetManager)
+                .padding()
+        }
+    }
+
+    private var setupSheet: some View {
+        VStack(spacing: 16) {
+            Text("First Time Streaming").font(.headline)
+            Picker("Platform", selection: $chosenPlatform) {
+                ForEach(StreamingPlatform.allCases) { Text($0.rawValue.capitalized).tag($0) }
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            TextField("Stream Key", text: $enteredKey)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .padding(.horizontal)
+            HStack {
+                Button("Cancel") { showSetup = false }
+                Spacer()
+                Button("Save & Go Live") {
+                    StreamingCredentials.platform = chosenPlatform
+                    StreamingCredentials.streamKey = enteredKey.trimmingCharacters(in: .whitespaces)
+                    showSetup = false
+                    toggleLive()
+                }
+                .disabled(enteredKey.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal)
+        }
+        .padding()
+        .frame(width: 300)
+    }
+
+    // MARK: - Actions
+    private func loadVideo(_ deck: Int) {
         let panel = NSOpenPanel()
         if #available(macOS 12.0, *) {
             panel.allowedContentTypes = [UTType.movie, UTType.mpeg4Movie]
@@ -137,29 +214,40 @@ struct ContentView: View {
             if response == .OK, let url = panel.url {
                 videoURLs[deck] = url
                 previewIndex = deck
-                startPlayer(at: deck)
+                startPlayer(deck)
             }
         }
     }
 
-    /// Configures and plays the deck at the specified index.
-    private func startPlayer(at deck: Int) {
+    private func startPlayer(_ deck: Int) {
         guard let url = videoURLs[deck] else { return }
         let item = AVPlayerItem(url: url)
         players[deck].replaceCurrentItem(with: item)
         players[deck].play()
         isPlaying[deck] = true
-        playheads[deck] = 0.0
+        playheads[deck] = 0
     }
 
-    /// Performs a smooth dissolve from preview to program over 1 second.
     private func autoTake() {
-        crossfadePosition = 1.0
+        crossfadePosition = 1
         withAnimation(.linear(duration: 1.0)) {
-            crossfadePosition = 0.0
+            crossfadePosition = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             programIndex = previewIndex
+        }
+    }
+
+    private func toggleLive() {
+        guard let programItem = players[programIndex].currentItem else { return }
+        if streamer.isStreaming {
+            streamer.stopStreaming()
+        } else if StreamingCredentials.hasSavedCredentials {
+            if let view = NSApp.mainWindow?.contentView {
+                streamer.startStreaming(playerItem: programItem, on: view)
+            }
+        } else {
+            showSetup = true
         }
     }
 }
