@@ -1,89 +1,96 @@
-//
-//  ContentView.swift
-//  Vistaview
-//
-
 import SwiftUI
+import HaishinKit
+import AVFoundation
 
 struct ContentView: View {
     @StateObject private var streamer = Streamer()
-    @State private var rtmpURL: String = "rtmp://127.0.0.1:1935/stream"
-    @State private var streamKey: String = "test"
-    @State private var showSettings = false
+    @State private var isStreaming = false
+    @State private var streamURL = "rtmp://127.0.0.1:1935/stream"
+    @State private var streamKey = "test"
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                // Placeholder for your video renderer
-                Rectangle()
-                    .fill(Color.black)
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .overlay(Text("Video Preview").foregroundColor(.white))
+        VStack(spacing: 20) {
+            // Live camera preview
+            HaishinPreviewView(stream: streamer.stream)
+                .frame(width: 640, height: 360)
+                .cornerRadius(8)
+                .shadow(radius: 4)
 
-                // MARK: –– Streaming Controls ––
-                VStack(spacing: 10) {
-                    HStack {
-                        TextField("RTMP URL", text: $rtmpURL)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                        Button("Settings") {
-                            showSettings.toggle()
-                        }
-                        .sheet(isPresented: $showSettings) {
-                            SettingsView(rtmpURL: $rtmpURL, streamKey: $streamKey)
-                        }
-                    }
-
-                    TextField("Stream Key", text: $streamKey)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                    HStack(spacing: 30) {
-                        Button {
-                            streamer.startStreaming(to: rtmpURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                   streamName: streamKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                        } label: {
-                            Label("Go Live", systemImage: "antenna.radiowaves.left.and.right")
-                                .frame(minWidth: 100)
-                        }
-                        .disabled(streamer.isStreaming)
-
-                        Button {
-                            streamer.stopStreaming()
-                        } label: {
-                            Label("Stop", systemImage: "stop.circle")
-                                .frame(minWidth: 100)
-                        }
-                        .disabled(!streamer.isStreaming)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.bottom)
-
-                Spacer()
-            }
-            .navigationTitle("Vistaview")
-        }
-    }
-}
-
-struct SettingsView: View {
-    @Binding var rtmpURL: String
-    @Binding var streamKey: String
-
-    var body: some View {
-        Form {
-            Section(header: Text("Streaming Endpoint")) {
-                TextField("RTMP URL", text: $rtmpURL)
+            // RTMP connection fields
+            HStack {
+                TextField("RTMP URL", text: $streamURL)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(minWidth: 300)
                 TextField("Stream Key", text: $streamKey)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(minWidth: 150)
+            }.padding(.horizontal)
+
+            // Go Live / Stop button
+            Button(isStreaming ? "Stop Streaming" : "Go Live") {
+                if isStreaming {
+                    streamer.stopStreaming()
+                } else {
+                    streamer.startStreaming(streamURL: streamURL, streamKey: streamKey)
+                }
+                isStreaming.toggle()
             }
+            .keyboardShortcut(.defaultAction)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 20)
+            .background(isStreaming ? Color.red : Color.green)
+            .foregroundColor(.white)
+            .cornerRadius(6)
         }
-        .frame(width: 400, height: 200)
         .padding()
     }
 }
 
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
+/// NSViewRepresentable wrapper for HaishinKit preview
+struct HaishinPreviewView: NSViewRepresentable {
+    let stream: RTMPStream
+    
+    func makeNSView(context: Context) -> NSView {
+        // Create a container view
+        let container = NSView()
+        container.wantsLayer = true
+        
+        // Try to create MTHKView if it exists
+        if let hkViewClass = NSClassFromString("HaishinKit.MTHKView") as? NSView.Type {
+            let hkView = hkViewClass.init(frame: .zero)
+            
+            // Try to attach stream using performSelector
+            if hkView.responds(to: Selector("attachStream:")) {
+                hkView.perform(Selector("attachStream:"), with: stream)
+            }
+            
+            container.addSubview(hkView)
+            hkView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                hkView.topAnchor.constraint(equalTo: container.topAnchor),
+                hkView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                hkView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                hkView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            ])
+        } else {
+            // Fallback: Try to get a preview layer from the stream
+            print("MTHKView not found, using fallback preview")
+            
+            // This is a placeholder - you'll need to implement based on what HaishinKit provides
+            let label = NSTextField(labelWithString: "Camera Preview")
+            label.alignment = .center
+            container.addSubview(label)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+            ])
+        }
+        
+        return container
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // Updates handled by the view itself
     }
 }
