@@ -1,96 +1,98 @@
 import SwiftUI
-import HaishinKit
 import AVFoundation
 
+// MARK: – Camera Controller
+
+final class CameraController: ObservableObject {
+    let session = AVCaptureSession()
+
+    init() {
+        session.beginConfiguration()
+        session.sessionPreset = .hd1280x720
+
+        // video input
+        guard let videoDevice = AVCaptureDevice.default(
+                .builtInWideAngleCamera,
+                for: .video,
+                position: .front
+              ),
+              let videoInput = try? AVCaptureDeviceInput(device: videoDevice)
+        else {
+            print("❌ Unable to open video device")
+            session.commitConfiguration()
+            return
+        }
+        session.addInput(videoInput)
+
+        // audio input
+        guard let audioDevice = AVCaptureDevice.default(for: .audio),
+              let audioInput = try? AVCaptureDeviceInput(device: audioDevice)
+        else {
+            print("❌ Unable to open audio device")
+            session.commitConfiguration()
+            return
+        }
+        session.addInput(audioInput)
+
+        session.commitConfiguration()
+    }
+}
+
+// MARK: – Preview Layer
+
+struct CameraPreview: NSViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = view.bounds
+        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        view.wantsLayer = true
+        view.layer?.addSublayer(previewLayer)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: – Main UI
+
 struct ContentView: View {
-    @StateObject private var streamer = Streamer()
-    @State private var isStreaming = false
-    @State private var streamURL = "rtmp://127.0.0.1:1935/stream"
-    @State private var streamKey = "test"
+    @StateObject private var cam = CameraController()
+    @State private var rtmpURL   = "rtmp://live.twitch.tv/app"
+    @State private var streamKey = "<YOUR_STREAM_KEY>"
+    @State private var isLive     = false
+
+    private let streamer = FFmpegStreamer()
 
     var body: some View {
         VStack(spacing: 20) {
-            // Live camera preview
-            HaishinPreviewView(stream: streamer.stream)
+            CameraPreview(session: cam.session)
+                .onAppear { cam.session.startRunning() }
                 .frame(width: 640, height: 360)
                 .cornerRadius(8)
                 .shadow(radius: 4)
 
-            // RTMP connection fields
             HStack {
-                TextField("RTMP URL", text: $streamURL)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .frame(minWidth: 300)
+                TextField("RTMP URL", text: $rtmpURL)
+                    .textFieldStyle(.roundedBorder)
                 TextField("Stream Key", text: $streamKey)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .frame(minWidth: 150)
-            }.padding(.horizontal)
-
-            // Go Live / Stop button
-            Button(isStreaming ? "Stop Streaming" : "Go Live") {
-                if isStreaming {
-                    streamer.stopStreaming()
-                } else {
-                    streamer.startStreaming(streamURL: streamURL, streamKey: streamKey)
+                    .textFieldStyle(.roundedBorder)
+                Button(isLive ? "Stop" : "Go Live") {
+                    if isLive {
+                        streamer.stop()
+                    } else {
+                        streamer.start(rtmpURL: rtmpURL, streamKey: streamKey)
+                    }
+                    isLive.toggle()
                 }
-                isStreaming.toggle()
+                .padding(.horizontal)
+                .buttonStyle(.borderedProminent)
             }
-            .keyboardShortcut(.defaultAction)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 20)
-            .background(isStreaming ? Color.red : Color.green)
-            .foregroundColor(.white)
-            .cornerRadius(6)
+            .padding(.horizontal)
         }
         .padding()
-    }
-}
-
-/// NSViewRepresentable wrapper for HaishinKit preview
-struct HaishinPreviewView: NSViewRepresentable {
-    let stream: RTMPStream
-    
-    func makeNSView(context: Context) -> NSView {
-        // Create a container view
-        let container = NSView()
-        container.wantsLayer = true
-        
-        // Try to create MTHKView if it exists
-        if let hkViewClass = NSClassFromString("HaishinKit.MTHKView") as? NSView.Type {
-            let hkView = hkViewClass.init(frame: .zero)
-            
-            // Try to attach stream using performSelector
-            if hkView.responds(to: Selector("attachStream:")) {
-                hkView.perform(Selector("attachStream:"), with: stream)
-            }
-            
-            container.addSubview(hkView)
-            hkView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hkView.topAnchor.constraint(equalTo: container.topAnchor),
-                hkView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                hkView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                hkView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-            ])
-        } else {
-            // Fallback: Try to get a preview layer from the stream
-            print("MTHKView not found, using fallback preview")
-            
-            // This is a placeholder - you'll need to implement based on what HaishinKit provides
-            let label = NSTextField(labelWithString: "Camera Preview")
-            label.alignment = .center
-            container.addSubview(label)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-            ])
-        }
-        
-        return container
-    }
-    
-    func updateNSView(_ nsView: NSView, context: Context) {
-        // Updates handled by the view itself
     }
 }
