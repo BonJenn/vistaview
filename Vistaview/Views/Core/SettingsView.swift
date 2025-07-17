@@ -1,35 +1,29 @@
-// =========================
-// File: Views/Core/SettingsView.swift
-// =========================
 import SwiftUI
 
-/// Preferences for configuring RTMP URL and stream key.
 struct SettingsView: View {
-    @AppStorage("rtmpURL") private var rtmpURL: String = "rtmp://127.0.0.1:1935/stream"
-    @AppStorage("streamKey") private var streamKey: String = "test"
+    @AppStorage("rtmpURL") private var rtmpURL = "rtmp://127.0.0.1:1935/stream"
+    @AppStorage("streamKey") private var streamKey = "test"
 
     var body: some View {
         Form {
-            Section(header: Text("RTMP Configuration")) {
-                TextField("RTMP URL", text: $rtmpURL)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                TextField("Stream Key", text: $streamKey)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-            }
-            Section(header: Text("Connection Info")) {
-                Text("Endpoint: \(rtmpURL)/\(streamKey)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            Section("Streaming Configuration") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("RTMP URL:")
+                            .frame(width: 80, alignment: .trailing)
+                        TextField("rtmp://…", text: $rtmpURL)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                    }
+                    HStack {
+                        Text("Stream Key:")
+                            .frame(width: 80, alignment: .trailing)
+                        SecureField("yourStreamName", text: $streamKey)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                    }
+                }
             }
         }
         .padding()
-        .frame(width: 400)
-        .navigationTitle("Preferences")
-    }
-}
-
-struct SettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        SettingsView()
+        .frame(minWidth: 400, minHeight: 200)
     }
 }

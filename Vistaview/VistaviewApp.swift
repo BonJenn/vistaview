@@ -1,4 +1,3 @@
-// File: VistaviewApp.swift
 import SwiftUI
 
 @main
@@ -7,8 +6,10 @@ struct VistaviewApp: App {
         WindowGroup {
             ContentView()
         }
+        #if os(macOS)
         Settings {
             SettingsView()
         }
+        #endif
     }
 }

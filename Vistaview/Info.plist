@@ -22,3 +22,12 @@
     <string>This app needs microphone access for live audio streaming.</string>
 </dict>
 </plist>
+
+
+<key>NSCameraUseContinuityCameraDeviceType</key>
+<array>
+    <!-- for iPhone continuity cameras -->
+    <string>AVCaptureDeviceTypeContinuityCamera</string>
+    <!-- if you want to allow “normal” external USB cams too -->
+    <string>AVCaptureDeviceTypeExternal</string>
+</array>

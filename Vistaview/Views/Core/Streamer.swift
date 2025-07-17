@@ -1,52 +1,189 @@
 import Foundation
+import SwiftUI
+import HaishinKit
+import AVFoundation
 
-/// Uses an external ffmpeg process to capture the Mac webcam + mic
-/// and push to any RTMP endpoint.
-final class FFmpegStreamer {
-    private var process: Process?
-
-    /// Starts streaming via ffmpeg.
-    /// - Parameters:
-    ///   - rtmpURL: base RTMP URL, e.g. "rtmp://live.twitch.tv/app"
-    ///   - streamKey: your service-specific stream key
-    func start(rtmpURL: String, streamKey: String) {
-        stop()
-
-        // build full destination URL
-        let destination = "\(rtmpURL)/\(streamKey)"
-
-        let ffmpeg = Process()
-        ffmpeg.executableURL = URL(fileURLWithPath: "/usr/local/bin/ffmpeg")
-        ffmpeg.arguments = [
-            "-f", "avfoundation",        // macOS AVFoundation input
-            "-framerate", "30",
-            "-video_size", "1280x720",
-            "-i", "0:0",                 // device indexes (camera:mic)
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-b:v", "2000k", "-maxrate", "2000k", "-bufsize", "4000k",
-            "-g", "60",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
-            "-f", "flv", destination
-        ]
-
-        // optionally capture ffmpeg logs
-        ffmpeg.standardOutput = FileHandle.nullDevice
-        ffmpeg.standardError  = FileHandle.standardError
-
+@MainActor
+class StreamingViewModel: ObservableObject {
+    private let mixer = MediaMixer()
+    private let connection = RTMPConnection()
+    private let stream: RTMPStream
+    private var previewView: MTHKView?
+    
+    @Published var isPublishing = false
+    @Published var cameraSetup = false
+    @Published var statusMessage = "Initializing..."
+    
+    init() {
+        stream = RTMPStream(connection: connection)
+        setupAudioSession()
+        
+        // Enable detailed logging
+        #if DEBUG
+        print("StreamingViewModel: Initialized")
+        #endif
+    }
+    
+    private func setupAudioSession() {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
         do {
-            try ffmpeg.run()
-            process = ffmpeg
-            print("✅ FFmpeg started, streaming to \(destination)")
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setActive(true)
+            statusMessage = "Audio session configured"
+            print("✅ Audio session setup successful")
         } catch {
-            print("❌ FFmpeg failed to start:", error)
+            statusMessage = "Audio session error: \(error.localizedDescription)"
+            print("❌ Audio session setup error:", error)
+        }
+        #else
+        statusMessage = "macOS - no audio session needed"
+        print("✅ macOS detected - skipping audio session setup")
+        #endif
+    }
+    
+    func setupCamera() async {
+        statusMessage = "Setting up camera..."
+        print("🎥 Starting camera setup...")
+        
+        do {
+            // Configure mixer first
+            print("📝 Configuring mixer...")
+            try await mixer.setFrameRate(30)
+            try await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
+            
+            // Add stream as output
+            print("🔗 Adding stream to mixer...")
+            try await mixer.addOutput(stream)
+            
+            // Find and attach camera
+            print("🔍 Looking for camera devices...")
+            
+            #if os(macOS)
+            // On macOS, try different camera types
+            let cameraDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
+                ?? AVCaptureDevice.default(for: .video)
+            #else
+            // On iOS, try front camera first, then back
+            let cameraDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+                ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+            #endif
+            
+            guard let videoDevice = cameraDevice else {
+                statusMessage = "❌ No camera device found"
+                print("❌ No camera device found")
+                return
+            }
+            
+            print("✅ Found camera: \(videoDevice.localizedName)")
+            statusMessage = "Found camera: \(videoDevice.localizedName)"
+            
+            // Attach camera to mixer
+            print("📹 Attaching camera to mixer...")
+            try await mixer.attachVideo(videoDevice)
+            
+            cameraSetup = true
+            statusMessage = "✅ Camera ready"
+            print("✅ Camera setup successful!")
+            
+        } catch {
+            statusMessage = "❌ Camera error: \(error.localizedDescription)"
+            print("❌ Camera setup error:", error)
         }
     }
+    
+    func attachPreview(_ view: MTHKView) async {
+        print("🖼️ Attaching preview view...")
+        previewView = view
+        
+        do {
+            try await stream.addOutput(view)
+            statusMessage = "✅ Preview attached"
+            print("✅ Preview attached successfully")
+        } catch {
+            statusMessage = "❌ Preview error: \(error.localizedDescription)"
+            print("❌ Preview attachment error:", error)
+        }
+    }
+    
+    func start(rtmpURL: String, streamKey: String) async throws {
+        print("🚀 Starting stream...")
+        statusMessage = "Starting stream..."
+        
+        guard cameraSetup else {
+            let error = StreamingError.noCamera
+            statusMessage = "❌ Camera not ready"
+            print("❌ Camera not set up yet")
+            throw error
+        }
+        
+        // Attach microphone
+        if let audioDevice = AVCaptureDevice.default(for: .audio) {
+            do {
+                print("🎤 Attaching microphone...")
+                try await mixer.attachAudio(audioDevice)
+                print("✅ Microphone attached")
+            } catch {
+                print("⚠️ Audio attachment error:", error)
+                statusMessage = "⚠️ Audio error (continuing): \(error.localizedDescription)"
+            }
+        } else {
+            print("⚠️ No microphone found")
+            statusMessage = "⚠️ No microphone found"
+        }
+        
+        // Connect and publish
+        do {
+            print("🌐 Connecting to: \(rtmpURL)")
+            statusMessage = "Connecting to server..."
+            try await connection.connect(rtmpURL)
+            
+            print("📡 Publishing stream with key: \(streamKey)")
+            statusMessage = "Publishing stream..."
+            try await stream.publish(streamKey)
+            
+            isPublishing = true
+            statusMessage = "✅ Streaming live!"
+            print("✅ Streaming started successfully")
+        } catch {
+            statusMessage = "❌ Stream error: \(error.localizedDescription)"
+            print("❌ Streaming start error:", error)
+            isPublishing = false
+            throw error
+        }
+    }
+    
+    func stop() async {
+        print("🛑 Stopping stream...")
+        statusMessage = "Stopping stream..."
+        
+        do {
+            try await stream.close()
+            try await connection.close()
+            isPublishing = false
+            statusMessage = "✅ Stream stopped"
+            print("✅ Streaming stopped")
+        } catch {
+            statusMessage = "❌ Stop error: \(error.localizedDescription)"
+            print("❌ Stop streaming error:", error)
+            isPublishing = false
+        }
+    }
+}
 
-    /// Stops the running ffmpeg process, if any.
-    func stop() {
-        process?.terminate()
-        process = nil
-        print("🛑 FFmpeg stopped")
+enum StreamingError: Error, LocalizedError {
+    case noCamera
+    case noMicrophone
+    case connectionFailed
+    
+    var errorDescription: String? {
+        switch self {
+        case .noCamera:
+            return "No camera device found"
+        case .noMicrophone:
+            return "No microphone device found"
+        case .connectionFailed:
+            return "Failed to connect to streaming server"
+        }
     }
 }

@@ -1,98 +1,134 @@
 import SwiftUI
+import HaishinKit
 import AVFoundation
 
-// MARK: – Camera Controller
-
-final class CameraController: ObservableObject {
-    let session = AVCaptureSession()
-
-    init() {
-        session.beginConfiguration()
-        session.sessionPreset = .hd1280x720
-
-        // video input
-        guard let videoDevice = AVCaptureDevice.default(
-                .builtInWideAngleCamera,
-                for: .video,
-                position: .front
-              ),
-              let videoInput = try? AVCaptureDeviceInput(device: videoDevice)
-        else {
-            print("❌ Unable to open video device")
-            session.commitConfiguration()
-            return
-        }
-        session.addInput(videoInput)
-
-        // audio input
-        guard let audioDevice = AVCaptureDevice.default(for: .audio),
-              let audioInput = try? AVCaptureDeviceInput(device: audioDevice)
-        else {
-            print("❌ Unable to open audio device")
-            session.commitConfiguration()
-            return
-        }
-        session.addInput(audioInput)
-
-        session.commitConfiguration()
-    }
-}
-
-// MARK: – Preview Layer
-
-struct CameraPreview: NSViewRepresentable {
-    let session: AVCaptureSession
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.frame = view.bounds
-        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        view.wantsLayer = true
-        view.layer?.addSublayer(previewLayer)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-// MARK: – Main UI
-
 struct ContentView: View {
-    @StateObject private var cam = CameraController()
-    @State private var rtmpURL   = "rtmp://live.twitch.tv/app"
-    @State private var streamKey = "<YOUR_STREAM_KEY>"
-    @State private var isLive     = false
-
-    private let streamer = FFmpegStreamer()
+    @StateObject private var viewModel = StreamingViewModel()
+    @State private var rtmpURL = "rtmp://127.0.0.1:1935/stream"
+    @State private var streamKey = "test"
 
     var body: some View {
-        VStack(spacing: 20) {
-            CameraPreview(session: cam.session)
-                .onAppear { cam.session.startRunning() }
-                .frame(width: 640, height: 360)
-                .cornerRadius(8)
-                .shadow(radius: 4)
-
-            HStack {
-                TextField("RTMP URL", text: $rtmpURL)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Stream Key", text: $streamKey)
-                    .textFieldStyle(.roundedBorder)
-                Button(isLive ? "Stop" : "Go Live") {
-                    if isLive {
-                        streamer.stop()
-                    } else {
-                        streamer.start(rtmpURL: rtmpURL, streamKey: streamKey)
-                    }
-                    isLive.toggle()
-                }
+        VStack(spacing: 16) {
+            Text("Vistaview Streaming App")
+                .font(.largeTitle)
+                .padding()
+            
+            // Status Display
+            Text(viewModel.statusMessage)
+                .font(.caption)
+                .foregroundColor(viewModel.cameraSetup ? .green : .orange)
                 .padding(.horizontal)
-                .buttonStyle(.borderedProminent)
+            
+            // Settings Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("RTMP URL:")
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("rtmp://…", text: $rtmpURL)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
+                HStack {
+                    Text("Stream Key:")
+                        .frame(width: 80, alignment: .trailing)
+                    TextField("yourStreamName", text: $streamKey)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
             }
+            .padding(.horizontal)
+
+            // Camera Preview
+            CameraPreview(viewModel: viewModel)
+                .frame(minHeight: 360)
+                .border(Color.gray)
+                .overlay(
+                    // Show loading indicator if camera isn't ready
+                    Group {
+                        if !viewModel.cameraSetup {
+                            VStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                Text("Setting up camera...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(10)
+                        }
+                    }
+                )
+
+            // Start / Stop Button
+            Button(action: {
+                Task {
+                    await toggleStreaming()
+                }
+            }) {
+                Text(viewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(!viewModel.cameraSetup)  // Disable button until camera is ready
             .padding(.horizontal)
         }
         .padding()
+        .task {
+            await requestPermissions()
+            await viewModel.setupCamera()
+        }
+    }
+
+    private func toggleStreaming() async {
+        if viewModel.isPublishing {
+            await viewModel.stop()
+        } else {
+            do {
+                try await viewModel.start(rtmpURL: rtmpURL, streamKey: streamKey)
+            } catch {
+                print("Setup error:", error)
+            }
+        }
+    }
+
+    private func requestPermissions() async {
+        let _ = await AVCaptureDevice.requestAccess(for: .video)
+        let _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
 }
+
+// Camera Preview Component
+#if os(macOS)
+import AppKit
+struct CameraPreview: NSViewRepresentable {
+    let viewModel: StreamingViewModel
+    
+    func makeNSView(context: Context) -> MTHKView {
+        let view = MTHKView(frame: CGRect.zero)
+        Task { @MainActor in
+            await viewModel.attachPreview(view)
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: MTHKView, context: Context) {
+        // Updates handled through viewModel
+    }
+}
+#else
+import UIKit
+struct CameraPreview: UIViewRepresentable {
+    let viewModel: StreamingViewModel
+    
+    func makeUIView(context: Context) -> MTHKView {
+        let view = MTHKView(frame: CGRect.zero)
+        Task { @MainActor in
+            await viewModel.attachPreview(view)
+        }
+        return view
+    }
+    
+    func updateUIView(_ uiView: MTHKView, context: Context) {
+        // Updates handled through viewModel
+    }
+}
+#endif

@@ -27,6 +27,18 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		98AD70772E1F7E9C00A6B1EB /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		9800B3892E0C88DB00AABCE9 /* Vistaview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vistaview.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9800B39A2E0C88DE00AABCE9 /* VistaviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VistaviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -115,6 +127,7 @@
 				9800B3852E0C88DB00AABCE9 /* Sources */,
 				9800B3862E0C88DB00AABCE9 /* Frameworks */,
 				9800B3872E0C88DB00AABCE9 /* Resources */,
+				98AD70772E1F7E9C00A6B1EB /* CopyFiles */,
 			);
 			buildRules = (
 			);
