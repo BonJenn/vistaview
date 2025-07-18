@@ -7,6 +7,10 @@ import AppKit
 import UIKit
 #endif
 
+enum ProductionMode {
+    case live, virtual
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = StreamingViewModel()
     @State private var rtmpURL = "rtmp://live.twitch.tv/live/"
@@ -16,6 +20,119 @@ struct ContentView: View {
     @State private var showingFilePicker = false
     @State private var mediaFiles: [MediaFile] = []
     @State private var selectedPlatform = "Twitch"
+    @State private var productionMode: ProductionMode = .live
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top Navigation Bar
+            HStack {
+                // Mode Switcher
+                HStack(spacing: 0) {
+                    Button(action: { productionMode = .live }) {
+                        HStack {
+                            Image(systemName: "video.circle.fill")
+                            Text("Live Production")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(productionMode == .live ? Color.blue : Color.clear)
+                        .foregroundColor(productionMode == .live ? .white : .primary)
+                        .cornerRadius(8, corners: [.topLeft, .bottomLeft])
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Button(action: { productionMode = .virtual }) {
+                        HStack {
+                            Image(systemName: "cube.transparent.fill")
+                            Text("Virtual Production")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(productionMode == .virtual ? Color.blue : Color.clear)
+                        .foregroundColor(productionMode == .virtual ? .white : .primary)
+                        .cornerRadius(8, corners: [.topRight, .bottomRight])
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .background(Color.gray.opacity(0.2))
+                .cornerRadius(8)
+                
+                Spacer()
+                
+                // Global Controls
+                HStack {
+                    if productionMode == .live {
+                        // Streaming status indicator
+                        HStack {
+                            Circle()
+                                .fill(viewModel.isPublishing ? Color.red : Color.gray)
+                                .frame(width: 8, height: 8)
+                            Text(viewModel.isPublishing ? "LIVE" : "OFFLINE")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(viewModel.isPublishing ? .red : .secondary)
+                        }
+                    }
+                    
+                    Button(action: {}) {
+                        Image(systemName: "gear")
+                    }
+                }
+            }
+            .padding()
+            .background(Color.gray.opacity(0.05))
+            
+            Divider()
+            
+            // Main Content Area
+            Group {
+                switch productionMode {
+                case .live:
+                    LiveProductionView(
+                        viewModel: viewModel,
+                        rtmpURL: $rtmpURL,
+                        streamKey: $streamKey,
+                        selectedTab: $selectedTab,
+                        selectedLayer: $selectedLayer,
+                        showingFilePicker: $showingFilePicker,
+                        mediaFiles: $mediaFiles,
+                        selectedPlatform: $selectedPlatform
+                    )
+                case .virtual:
+                    VirtualProductionView()
+                }
+            }
+        }
+        .task {
+            await requestPermissions()
+            await viewModel.setupCamera()
+        }
+        .fileImporter(
+            isPresented: $showingFilePicker,
+            allowedContentTypes: [.movie, .image, .audio],
+            allowsMultipleSelection: true
+        ) { result in
+            // Handle file import
+        }
+    }
+    
+    private func requestPermissions() async {
+        let _ = await AVCaptureDevice.requestAccess(for: .video)
+        let _ = await AVCaptureDevice.requestAccess(for: .audio)
+    }
+}
+
+// MARK: - Live Production View (Original Interface)
+
+struct LiveProductionView: View {
+    let viewModel: StreamingViewModel
+    @Binding var rtmpURL: String
+    @Binding var streamKey: String
+    @Binding var selectedTab: Int
+    @Binding var selectedLayer: Int
+    @Binding var showingFilePicker: Bool
+    @Binding var mediaFiles: [MediaFile]
+    @Binding var selectedPlatform: String
     
     var body: some View {
         HSplitView {
@@ -318,17 +435,6 @@ struct ContentView: View {
             .frame(minWidth: 280, maxWidth: 350)
             .background(Color.gray.opacity(0.05))
         }
-        .task {
-            await requestPermissions()
-            await viewModel.setupCamera()
-        }
-        .fileImporter(
-            isPresented: $showingFilePicker,
-            allowedContentTypes: [.movie, .image, .audio],
-            allowsMultipleSelection: true
-        ) { result in
-            // Handle file import
-        }
     }
     
     private func toggleStreaming() async {
@@ -342,14 +448,9 @@ struct ContentView: View {
             }
         }
     }
-
-    private func requestPermissions() async {
-        let _ = await AVCaptureDevice.requestAccess(for: .video)
-        let _ = await AVCaptureDevice.requestAccess(for: .audio)
-    }
 }
 
-// MARK: - Source Views
+// MARK: - Source Views (keeping your existing views)
 
 struct CameraSourceView: View {
     let viewModel: StreamingViewModel
@@ -641,5 +742,87 @@ enum MediaType {
         case .image: return "photo.fill"
         case .audio: return "music.note"
         }
+    }
+}
+
+// MARK: - Helper Extension for Rounded Corners
+
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: CornerSet) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct CornerSet: OptionSet {
+    let rawValue: Int
+    
+    static let topLeft = CornerSet(rawValue: 1 << 0)
+    static let topRight = CornerSet(rawValue: 1 << 1)
+    static let bottomLeft = CornerSet(rawValue: 1 << 2)
+    static let bottomRight = CornerSet(rawValue: 1 << 3)
+    
+    static let all: CornerSet = [.topLeft, .topRight, .bottomLeft, .bottomRight]
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: CornerSet = .all
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        
+        let width = rect.size.width
+        let height = rect.size.height
+        
+        // Start from top-left
+        let topLeftRadius = corners.contains(.topLeft) ? radius : 0
+        let topRightRadius = corners.contains(.topRight) ? radius : 0
+        let bottomLeftRadius = corners.contains(.bottomLeft) ? radius : 0
+        let bottomRightRadius = corners.contains(.bottomRight) ? radius : 0
+        
+        path.move(to: CGPoint(x: topLeftRadius, y: 0))
+        
+        // Top edge and top-right corner
+        path.addLine(to: CGPoint(x: width - topRightRadius, y: 0))
+        if topRightRadius > 0 {
+            path.addArc(center: CGPoint(x: width - topRightRadius, y: topRightRadius),
+                       radius: topRightRadius,
+                       startAngle: Angle(degrees: -90),
+                       endAngle: Angle(degrees: 0),
+                       clockwise: false)
+        }
+        
+        // Right edge and bottom-right corner
+        path.addLine(to: CGPoint(x: width, y: height - bottomRightRadius))
+        if bottomRightRadius > 0 {
+            path.addArc(center: CGPoint(x: width - bottomRightRadius, y: height - bottomRightRadius),
+                       radius: bottomRightRadius,
+                       startAngle: Angle(degrees: 0),
+                       endAngle: Angle(degrees: 90),
+                       clockwise: false)
+        }
+        
+        // Bottom edge and bottom-left corner
+        path.addLine(to: CGPoint(x: bottomLeftRadius, y: height))
+        if bottomLeftRadius > 0 {
+            path.addArc(center: CGPoint(x: bottomLeftRadius, y: height - bottomLeftRadius),
+                       radius: bottomLeftRadius,
+                       startAngle: Angle(degrees: 90),
+                       endAngle: Angle(degrees: 180),
+                       clockwise: false)
+        }
+        
+        // Left edge and top-left corner
+        path.addLine(to: CGPoint(x: 0, y: topLeftRadius))
+        if topLeftRadius > 0 {
+            path.addArc(center: CGPoint(x: topLeftRadius, y: topLeftRadius),
+                       radius: topLeftRadius,
+                       startAngle: Angle(degrees: 180),
+                       endAngle: Angle(degrees: 270),
+                       clockwise: false)
+        }
+        
+        path.closeSubpath()
+        return path
     }
 }
