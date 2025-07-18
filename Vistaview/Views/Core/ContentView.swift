@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var productionManager = UnifiedProductionManager()
     @State private var productionMode: ProductionMode = .live
     @State private var showingStudioSelector = false
+    @State private var showingVirtualCameraDemo = false
     
     // Live Production States (keeping your existing ones)
     @State private var rtmpURL = "rtmp://live.twitch.tv/live/"
@@ -119,6 +120,12 @@ struct ContentView: View {
                     Button(action: {}) {
                         Image(systemName: "gear")
                     }
+                    
+                    // Virtual Camera Demo Button
+                    Button(action: { showingVirtualCameraDemo = true }) {
+                        Image(systemName: "video.3d")
+                    }
+                    .help("Virtual Camera Demo")
                 }
             }
             .padding()
@@ -148,6 +155,10 @@ struct ContentView: View {
         .sheet(isPresented: $showingStudioSelector) {
             StudioSelectorSheet(productionManager: productionManager)
         }
+        .sheet(isPresented: $showingVirtualCameraDemo) {
+            VirtualCameraDemoView()
+                .frame(minWidth: 1000, minHeight: 700)
+        }
         .task {
             await requestPermissions()
             await productionManager.initialize()
@@ -173,6 +184,19 @@ struct ContentView: View {
         productionManager.syncVirtualToLive()
     }
     
+    private func updateRTMPURL(for platform: String) {
+        switch platform {
+        case "Twitch":
+            rtmpURL = "rtmp://live.twitch.tv/live/"
+        case "YouTube":
+            rtmpURL = "rtmp://a.rtmp.youtube.com/live2"
+        case "Facebook":
+            rtmpURL = "rtmps://live-api-s.facebook.com:443/rtmp/"
+        default:
+            rtmpURL = "rtmp://127.0.0.1:1935/stream"
+        }
+    }
+    
     private func requestPermissions() async {
         let _ = await AVCaptureDevice.requestAccess(for: .video)
         let _ = await AVCaptureDevice.requestAccess(for: .audio)
@@ -195,7 +219,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Enhanced Live Production View (Simplified)
+// MARK: - Enhanced Live Production View
 
 struct EnhancedLiveProductionView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -252,7 +276,7 @@ struct EnhancedLiveProductionView: View {
             .frame(minWidth: 300, maxWidth: 400)
             .background(Color.black.opacity(0.05))
             
-            // Center Panel - Main Preview & Layers (Your existing layout)
+            // Center Panel - Main Preview & Layers
             VStack(spacing: 0) {
                 // Main Preview
                 VStack {
@@ -313,7 +337,7 @@ struct EnhancedLiveProductionView: View {
             }
             .frame(minWidth: 500)
             
-            // Right Panel - Your existing output controls + virtual studio info
+            // Right Panel - Output Controls + Virtual Studio Info
             VStack(spacing: 0) {
                 // Output Settings Header
                 HStack {
@@ -353,7 +377,7 @@ struct EnhancedLiveProductionView: View {
                             }
                         }
                         
-                        // Your existing streaming controls (unchanged)
+                        // Streaming Section
                         GroupBox("Live Streaming") {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
@@ -367,16 +391,7 @@ struct EnhancedLiveProductionView: View {
                                     }
                                     .pickerStyle(MenuPickerStyle())
                                     .onChange(of: selectedPlatform) { platform in
-                                        switch platform {
-                                        case "Twitch":
-                                            rtmpURL = "rtmp://live.twitch.tv/live/"
-                                        case "YouTube":
-                                            rtmpURL = "rtmp://a.rtmp.youtube.com/live2"
-                                        case "Facebook":
-                                            rtmpURL = "rtmps://live-api-s.facebook.com:443/rtmp/"
-                                        default:
-                                            rtmpURL = "rtmp://127.0.0.1:1935/stream"
-                                        }
+                                        updateRTMPURL(for: platform)
                                     }
                                 }
                                 
@@ -390,8 +405,34 @@ struct EnhancedLiveProductionView: View {
                                 HStack {
                                     Text("Key:")
                                         .frame(width: 70, alignment: .leading)
-                                    SecureField("Stream key", text: $streamKey)
-                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    VStack(spacing: 4) {
+                                        SecureField("Get from platform", text: $streamKey)
+                                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        
+                                        if selectedPlatform == "Twitch" && streamKey.isEmpty {
+                                            Button("Open Twitch Dashboard") {
+                                                if let url = URL(string: "https://dashboard.twitch.tv/settings/stream") {
+                                                    #if os(macOS)
+                                                    NSWorkspace.shared.open(url)
+                                                    #else
+                                                    UIApplication.shared.open(url)
+                                                    #endif
+                                                }
+                                            }
+                                            .font(.caption)
+                                            .foregroundColor(.blue)
+                                        }
+                                    }
+                                }
+                                
+                                // Connection Status
+                                HStack {
+                                    Circle()
+                                        .fill(productionManager.streamingViewModel.isPublishing ? Color.green : (productionManager.streamingViewModel.cameraSetup ? Color.orange : Color.red))
+                                        .frame(width: 8, height: 8)
+                                    Text(productionManager.streamingViewModel.isPublishing ? "LIVE" : (productionManager.streamingViewModel.cameraSetup ? "Ready" : "Not Ready"))
+                                        .font(.caption)
+                                        .foregroundColor(productionManager.streamingViewModel.isPublishing ? .green : .secondary)
                                 }
                                 
                                 Button(action: {
@@ -413,7 +454,49 @@ struct EnhancedLiveProductionView: View {
                             }
                         }
                         
-                        // Audio Controls (keeping existing)
+                        // Recording Section
+                        GroupBox("Recording") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Format:")
+                                        .frame(width: 70, alignment: .leading)
+                                    Picker("Format", selection: .constant("MP4")) {
+                                        Text("MP4").tag("MP4")
+                                        Text("MOV").tag("MOV")
+                                        Text("AVI").tag("AVI")
+                                    }
+                                    .pickerStyle(MenuPickerStyle())
+                                }
+                                
+                                HStack {
+                                    Text("Quality:")
+                                        .frame(width: 70, alignment: .leading)
+                                    Picker("Quality", selection: .constant("High")) {
+                                        Text("Low").tag("Low")
+                                        Text("Medium").tag("Medium")
+                                        Text("High").tag("High")
+                                        Text("Ultra").tag("Ultra")
+                                    }
+                                    .pickerStyle(MenuPickerStyle())
+                                }
+                                
+                                Button(action: {
+                                    // TODO: Recording functionality
+                                }) {
+                                    HStack {
+                                        Image(systemName: "record.circle")
+                                        Text("Start Recording")
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(Color.red.opacity(0.8))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                                }
+                            }
+                        }
+                        
+                        // Audio Controls
                         GroupBox("Audio") {
                             VStack(spacing: 12) {
                                 HStack {
@@ -448,7 +531,7 @@ struct EnhancedLiveProductionView: View {
                             }
                         }
                         
-                        // Statistics (keeping existing)
+                        // Statistics
                         GroupBox("Statistics") {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
@@ -486,6 +569,19 @@ struct EnhancedLiveProductionView: View {
         }
     }
     
+    private func updateRTMPURL(for platform: String) {
+        switch platform {
+        case "Twitch":
+            rtmpURL = "rtmp://live.twitch.tv/live/"
+        case "YouTube":
+            rtmpURL = "rtmp://a.rtmp.youtube.com/live2"
+        case "Facebook":
+            rtmpURL = "rtmps://live-api-s.facebook.com:443/rtmp/"
+        default:
+            rtmpURL = "rtmp://127.0.0.1:1935/stream"
+        }
+    }
+    
     private func toggleStreaming() async {
         if productionManager.streamingViewModel.isPublishing {
             await productionManager.streamingViewModel.stop()
@@ -499,7 +595,7 @@ struct EnhancedLiveProductionView: View {
     }
 }
 
-// MARK: - New Components (Simplified)
+// MARK: - New Components
 
 struct VirtualSourceView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -542,7 +638,7 @@ struct VirtualSourceView: View {
                 ], spacing: 8) {
                     ForEach(productionManager.availableVirtualCameras, id: \.id) { camera in
                         Button(action: {
-                            productionManager.selectVirtualCamera(camera)
+                            productionManager.switchToVirtualCamera(camera)
                         }) {
                             VStack {
                                 Rectangle()
@@ -639,40 +735,37 @@ struct StudioSelectorSheet: View {
                 .font(.title2)
                 .fontWeight(.semibold)
             
-            ScrollView {
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible())
-                ], spacing: 16) {
-                    ForEach(productionManager.availableStudios) { studio in
-                        Button(action: {
-                            productionManager.loadStudio(studio)
-                            dismiss()
-                        }) {
-                            VStack {
-                                Rectangle()
-                                    .fill(Color.blue.opacity(0.1))
-                                    .frame(height: 80)
-                                    .overlay(
-                                        Image(systemName: studio.icon)
-                                            .font(.largeTitle)
-                                            .foregroundColor(.blue)
-                                    )
-                                    .cornerRadius(8)
-                                
-                                Text(studio.name)
-                                    .font(.headline)
-                                
-                                Text(studio.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 16) {
+                ForEach(productionManager.availableStudios, id: \.id) { studio in
+                    Button(action: {
+                        productionManager.loadStudio(studio)
+                        dismiss()
+                    }) {
+                        VStack {
+                            Rectangle()
+                                .fill(Color.blue.opacity(0.1))
+                                .frame(height: 80)
+                                .overlay(
+                                    Image(systemName: studio.icon)
+                                        .font(.largeTitle)
+                                        .foregroundColor(.blue)
+                                )
+                                .cornerRadius(8)
+                            
+                            Text(studio.name)
+                                .font(.headline)
+                            
+                            Text(studio.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
                         }
-                        .buttonStyle(PlainButtonStyle())
                     }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .padding(.horizontal)
             }
             
             Button("Cancel") {
@@ -685,7 +778,7 @@ struct StudioSelectorSheet: View {
     }
 }
 
-// MARK: - Keep all your existing views (unchanged)
+// MARK: - Keep all your existing views
 
 struct CameraSourceView: View {
     let viewModel: StreamingViewModel
@@ -877,7 +970,7 @@ struct MediaThumbnailView: View {
     }
 }
 
-// Platform-specific preview wrapper (keeping existing)
+// Platform-specific preview wrapper
 #if os(macOS)
 struct CameraPreview: NSViewRepresentable {
     let viewModel: StreamingViewModel
@@ -912,7 +1005,7 @@ struct CameraPreview: UIViewRepresentable {
 }
 #endif
 
-// MARK: - Data Models (keeping existing)
+// MARK: - Data Models
 
 struct MediaFile: Identifiable {
     let id = UUID()
