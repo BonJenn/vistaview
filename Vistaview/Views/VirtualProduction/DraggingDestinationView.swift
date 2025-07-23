@@ -9,6 +9,7 @@ import SceneKit
 class DraggingDestinationView: NSView {
     weak var coordinator: Enhanced3DViewport.Coordinator?
     weak var scnView: SCNView?
+    private var isDragActive = false
     
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -26,9 +27,67 @@ class DraggingDestinationView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
     }
     
+    // MARK: - Hit Testing Override
+    
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Only intercept hits during active drag operations
+        if isDragActive {
+            return super.hitTest(point)
+        } else {
+            // Pass through to underlying SCNView for normal camera controls
+            return nil
+        }
+    }
+    
+    // MARK: - Mouse Event Forwarding
+    
+    override func mouseDown(with event: NSEvent) {
+        // Forward to SCNView if not in drag mode
+        if !isDragActive {
+            scnView?.mouseDown(with: event)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        // Forward to SCNView if not in drag mode
+        if !isDragActive {
+            scnView?.mouseDragged(with: event)
+        } else {
+            super.mouseDragged(with: event)
+        }
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        // Forward to SCNView if not in drag mode
+        if !isDragActive {
+            scnView?.mouseUp(with: event)
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+    
+    override func rightMouseDown(with event: NSEvent) {
+        // Always forward right-click events
+        scnView?.rightMouseDown(with: event)
+    }
+    
+    override func rightMouseUp(with event: NSEvent) {
+        // Always forward right-click events
+        scnView?.rightMouseUp(with: event)
+    }
+    
+    override func scrollWheel(with event: NSEvent) {
+        // Always forward scroll events for zooming
+        scnView?.scrollWheel(with: event)
+    }
+    
     // MARK: - NSDraggingDestination
     
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        isDragActive = true
+        
         // Visual feedback - highlight drop zone
         layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.1).cgColor
         
@@ -47,6 +106,8 @@ class DraggingDestinationView: NSView {
     }
     
     override func draggingExited(_ sender: NSDraggingInfo?) {
+        isDragActive = false
+        
         // Remove visual feedback
         layer?.backgroundColor = NSColor.clear.cgColor
         
@@ -59,6 +120,8 @@ class DraggingDestinationView: NSView {
     }
     
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isDragActive = false
+        
         // Remove visual feedback
         layer?.backgroundColor = NSColor.clear.cgColor
         
@@ -108,6 +171,8 @@ class DraggingDestinationView: NSView {
     }
     
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        isDragActive = false
+        
         // Final cleanup
         layer?.backgroundColor = NSColor.clear.cgColor
     }

@@ -1,6 +1,6 @@
 //
 //  Enhanced3DViewport.swift  
-//  Vistaview - Functional 3D Viewport with Drag & Drop
+//  Vistaview - Functional 3D Viewport with Integrated Drag & Drop
 //
 
 import SwiftUI
@@ -37,7 +37,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
     }
     
     func makeNSView(context: Context) -> SCNView {
-        let scnView = SCNView()
+        let scnView = DragDropSCNView()
         scnView.scene = studioManager.scene
         scnView.backgroundColor = NSColor.black
         scnView.allowsCameraControl = true
@@ -45,16 +45,9 @@ struct Enhanced3DViewport: NSViewRepresentable {
         scnView.showsStatistics = false
         scnView.delegate = context.coordinator
         
-        // Enable drag and drop
+        // Set up drag & drop directly on SCNView
         scnView.registerForDraggedTypes([.string])
-        
-        // Set coordinator as the dragging destination delegate
-        let draggingDestination = DraggingDestinationView()
-        draggingDestination.coordinator = context.coordinator
-        draggingDestination.scnView = scnView
-        scnView.addSubview(draggingDestination)
-        draggingDestination.frame = scnView.bounds
-        draggingDestination.autoresizingMask = [.width, .height]
+        scnView.coordinator = context.coordinator
         
         // Add gesture recognizers
         let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
@@ -63,13 +56,6 @@ struct Enhanced3DViewport: NSViewRepresentable {
         let rightClickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleRightClick(_:)))
         rightClickGesture.buttonMask = 2
         scnView.addGestureRecognizer(rightClickGesture)
-        
-        // Mouse move for transform tracking
-        let mouseMoveGesture = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMouseMove(_:)))
-        scnView.addGestureRecognizer(mouseMoveGesture)
-        
-        // Key event monitoring
-        scnView.window?.makeFirstResponder(scnView)
         
         setupDefaultCamera(scnView)
         return scnView
@@ -93,7 +79,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
         context.coordinator.snapToGrid = snapToGrid
         context.coordinator.gridSize = gridSize
         
-        // Handle transform mode changes
+        // Handle transform mode changes - START TRANSFORM MODE HERE  
         if transformMode != context.coordinator.lastTransformMode {
             context.coordinator.startTransformMode()
             context.coordinator.lastTransformMode = transformMode
@@ -118,6 +104,146 @@ struct Enhanced3DViewport: NSViewRepresentable {
         Coordinator(self)
     }
     
+    // MARK: - Custom SCNView with Drag & Drop
+    
+    class DragDropSCNView: SCNView {
+        weak var coordinator: Enhanced3DViewport.Coordinator?
+        
+        // MARK: - NSDraggingDestination
+        
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            // Disable camera control during drag
+            allowsCameraControl = false
+            
+            // Visual feedback
+            layer?.borderWidth = 2
+            layer?.borderColor = NSColor.systemBlue.cgColor
+            
+            NotificationCenter.default.post(name: .dragEntered, object: nil)
+            return .copy
+        }
+        
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            let location = sender.draggingLocation
+            NotificationCenter.default.post(name: .dragUpdated, object: location)
+            return .copy
+        }
+        
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            // Re-enable camera control
+            allowsCameraControl = true
+            
+            // Remove visual feedback
+            layer?.borderWidth = 0
+            
+            NotificationCenter.default.post(name: .dragExited, object: nil)
+        }
+        
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            // Re-enable camera control
+            allowsCameraControl = true
+            
+            // Remove visual feedback
+            layer?.borderWidth = 0
+            
+            // Get drag data
+            guard let data = sender.draggingPasteboard.data(forType: .string),
+                  let setPieceID = String(data: data, encoding: .utf8),
+                  let coordinator = coordinator else {
+                print("❌ Drop failed: Missing data or coordinator")
+                return false
+            }
+            
+            // Find the set piece
+            guard let setPiece = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == setPieceID }) else {
+                print("❌ Drop failed: SetPiece not found for ID: \(setPieceID)")
+                return false
+            }
+            
+            // Get drop location and convert to world coordinates
+            let dropLocation = sender.draggingLocation
+            
+            Task { @MainActor in
+                let worldPosition = coordinator.convertScreenToWorld(point: dropLocation, in: self)
+                
+                // Apply grid snapping if enabled
+                var finalPosition = worldPosition
+                if coordinator.snapToGrid {
+                    let gridStep = CGFloat(coordinator.gridSize)
+                    finalPosition = SCNVector3(
+                        round(worldPosition.x / gridStep) * gridStep,
+                        worldPosition.y,
+                        round(worldPosition.z / gridStep) * gridStep
+                    )
+                }
+                
+                print("✅ Dropping \(setPiece.name) at \(finalPosition)")
+                
+                // Add to scene
+                coordinator.parent.studioManager.addSetPieceFromAsset(setPiece, at: finalPosition)
+            }
+            
+            return true
+        }
+        
+        // MARK: - Key Event Handling for Transform Mode
+        
+        override var acceptsFirstResponder: Bool {
+            return true
+        }
+        
+        override func keyDown(with event: NSEvent) {
+            guard let coordinator = coordinator else {
+                super.keyDown(with: event)
+                return
+            }
+            
+            let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            
+            // Handle transform keys
+            switch key {
+            case "g":
+                coordinator.enterTransformMode(.move)
+                return
+            case "r":
+                coordinator.enterTransformMode(.rotate)  
+                return
+            case "s":
+                coordinator.enterTransformMode(.scale)
+                return
+            case "x":
+                if coordinator.isTransforming {
+                    coordinator.setTransformAxis(.x)
+                    return
+                }
+            case "y":
+                if coordinator.isTransforming {
+                    coordinator.setTransformAxis(.y)
+                    return
+                }
+            case "z":
+                if coordinator.isTransforming {
+                    coordinator.setTransformAxis(.z)
+                    return
+                }
+            case "\r": // Enter key
+                if coordinator.isTransforming {
+                    coordinator.confirmTransform()
+                    return
+                }
+            case "\u{1b}": // Escape key
+                if coordinator.isTransforming {
+                    coordinator.cancelTransform()
+                    return
+                }
+            default:
+                break
+            }
+            
+            super.keyDown(with: event)
+        }
+    }
+    
     // MARK: - Coordinator
     
     final class Coordinator: NSObject, SCNSceneRendererDelegate {
@@ -133,11 +259,97 @@ struct Enhanced3DViewport: NSViewRepresentable {
         var isTransforming = false
         var transformAxis: TransformAxis = .free
         var originalPositions: [UUID: SCNVector3] = [:]
+        var originalRotations: [UUID: SCNVector3] = [:]
+        var originalScales: [UUID: SCNVector3] = [:]
         var transformStartPoint: CGPoint = .zero
         
         init(_ parent: Enhanced3DViewport) {
             self.parent = parent
             super.init()
+        }
+        
+        // MARK: - Transform Mode Methods
+        
+        func enterTransformMode(_ mode: TransformMode) {
+            guard !selectedObjects.isEmpty else {
+                print("⚠️ No objects selected for transform")
+                return
+            }
+            
+            print("🔧 Entering transform mode: \(mode)")
+            
+            isTransforming = true 
+            transformAxis = .free
+            
+            // Store original values
+            originalPositions.removeAll()
+            originalRotations.removeAll()
+            originalScales.removeAll()
+            
+            Task { @MainActor in
+                for objId in selectedObjects {
+                    if let obj = parent.studioManager.studioObjects.first(where: { $0.id == objId }) {
+                        originalPositions[objId] = obj.position
+                        originalRotations[objId] = obj.rotation
+                        originalScales[objId] = obj.scale
+                    }
+                }
+                
+                // Update transform mode in parent
+                parent.transformMode = mode
+                
+                NotificationCenter.default.post(name: .transformStarted, object: mode)
+            }
+        }
+        
+        func setTransformAxis(_ axis: TransformAxis) {
+            guard isTransforming else { return }
+            transformAxis = axis
+            print("🎯 Transform axis set to: \(axis)")
+        }
+        
+        func confirmTransform() {
+            print("✅ Transform confirmed")
+            isTransforming = false
+            transformAxis = .free
+            clearStoredValues()
+            NotificationCenter.default.post(name: .transformEnded, object: nil)
+        }
+        
+        func cancelTransform() {
+            print("❌ Transform cancelled")
+            
+            // Restore original values
+            Task { @MainActor in
+                for (objId, originalPos) in originalPositions {
+                    if let obj = parent.studioManager.studioObjects.first(where: { $0.id == objId }) {
+                        obj.position = originalPos
+                        if let originalRot = originalRotations[objId] {
+                            obj.rotation = originalRot
+                        }
+                        if let originalScale = originalScales[objId] {
+                            obj.scale = originalScale
+                        }
+                        obj.updateNodeTransform()
+                    }
+                }
+            }
+            
+            isTransforming = false
+            transformAxis = .free
+            clearStoredValues()
+            NotificationCenter.default.post(name: .transformEnded, object: nil)
+        }
+        
+        func startTransformMode() {
+            // This is called from updateNSView - don't auto-enter transform mode
+            // Transform mode should only be entered via key presses
+        }
+        
+        private func clearStoredValues() {
+            originalPositions.removeAll()
+            originalRotations.removeAll()
+            originalScales.removeAll()
         }
         
         // MARK: - Mouse Events
@@ -148,7 +360,6 @@ struct Enhanced3DViewport: NSViewRepresentable {
             
             Task { @MainActor in
                 if isTransforming {
-                    // Confirm transform
                     confirmTransform()
                     return
                 }
@@ -176,168 +387,30 @@ struct Enhanced3DViewport: NSViewRepresentable {
             }
         }
         
-        @objc func handleMouseMove(_ gesture: NSPanGestureRecognizer) {
-            guard let scnView = gesture.view as? SCNView else { return }
+        // MARK: - Coordinate Conversion
+        
+        func convertScreenToWorld(point: CGPoint, in scnView: SCNView) -> SCNVector3 {
+            let nearPoint = scnView.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 0))
+            let farPoint = scnView.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 1))
             
-            if isTransforming {
-                let location = gesture.location(in: scnView)
-                updateTransform(at: location, in: scnView)
-            }
+            let direction = SCNVector3(
+                farPoint.x - nearPoint.x,
+                farPoint.y - nearPoint.y,
+                farPoint.z - nearPoint.z
+            )
+            
+            // Intersect with ground plane (Y = 0)
+            let t = -nearPoint.y / direction.y
+            let intersectionPoint = SCNVector3(
+                nearPoint.x + direction.x * t,
+                0,
+                nearPoint.z + direction.z * t
+            )
+            
+            return intersectionPoint
         }
         
-        // MARK: - Transform Modal System
-        
-        func startTransformMode() {
-            guard !selectedObjects.isEmpty else { return }
-            
-            isTransforming = true
-            transformAxis = .free
-            
-            // Store original positions
-            originalPositions.removeAll()
-            
-            Task { @MainActor in
-                for objId in selectedObjects {
-                    if let obj = parent.studioManager.studioObjects.first(where: { $0.id == objId }) {
-                        originalPositions[objId] = obj.position
-                    }
-                }
-            }
-            
-            // Disable camera control during transform
-            if let scnView = findSCNView() {
-                scnView.allowsCameraControl = false
-            }
-        }
-        
-        func confirmTransform() {
-            isTransforming = false
-            transformAxis = .free
-            originalPositions.removeAll()
-            
-            // Re-enable camera control
-            if let scnView = findSCNView() {
-                scnView.allowsCameraControl = true
-            }
-        }
-        
-        func cancelTransform() {
-            // Restore original positions
-            Task { @MainActor in
-                for (objId, originalPos) in originalPositions {
-                    if let obj = parent.studioManager.studioObjects.first(where: { $0.id == objId }) {
-                        obj.position = originalPos
-                        obj.updateNodeTransform()
-                    }
-                }
-            }
-            
-            confirmTransform()
-        }
-        
-        func updateTransform(at point: CGPoint, in scnView: SCNView) {
-            guard isTransforming else { return }
-            
-            let deltaX = Float(point.x - transformStartPoint.x) * 0.01
-            let deltaY = Float(transformStartPoint.y - point.y) * 0.01 // Invert Y
-            
-            Task { @MainActor in
-                for objId in selectedObjects {
-                    guard let obj = parent.studioManager.studioObjects.first(where: { $0.id == objId }),
-                          let originalPos = originalPositions[objId] else { continue }
-                    
-                    var newPosition = originalPos
-                    
-                    switch transformMode {
-                    case .move:
-                        switch transformAxis {
-                        case .free:
-                            newPosition.x += CGFloat(deltaX)
-                            newPosition.y += CGFloat(deltaY)
-                        case .x:
-                            newPosition.x += CGFloat(deltaX)
-                        case .y:
-                            newPosition.y += CGFloat(deltaY)
-                        case .z:
-                            newPosition.z += CGFloat(deltaX) // Use X movement for Z
-                        }
-                        
-                    case .rotate:
-                        // Implement rotation transform
-                        let rotationDelta = deltaX * Float.pi / 180 * 10 // Convert to radians
-                        switch transformAxis {
-                        case .free, .y:
-                            obj.rotation.y += CGFloat(rotationDelta)
-                        case .x:
-                            obj.rotation.x += CGFloat(rotationDelta)
-                        case .z:
-                            obj.rotation.z += CGFloat(rotationDelta)
-                        }
-                        
-                    case .scale:
-                        // Implement scale transform
-                        let scaleDelta = 1.0 + deltaX
-                        switch transformAxis {
-                        case .free:
-                            obj.scale = SCNVector3(scaleDelta, scaleDelta, scaleDelta)
-                        case .x:
-                            obj.scale.x = CGFloat(scaleDelta)
-                        case .y:
-                            obj.scale.y = CGFloat(scaleDelta)
-                        case .z:
-                            obj.scale.z = CGFloat(scaleDelta)
-                        }
-                    }
-                    
-                    if transformMode == .move {
-                        if snapToGrid {
-                            newPosition = snapToGridPosition(newPosition)
-                        }
-                        obj.position = newPosition
-                    }
-                    
-                    obj.updateNodeTransform()
-                }
-            }
-        }
-        
-        // MARK: - Drag & Drop Implementation
-        
-        func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            return .copy
-        }
-        
-        func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-            return .copy
-        }
-        
-        func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            let location = sender.draggingLocation
-            
-            // Check if dragging a set piece
-            if let data = sender.draggingPasteboard.data(forType: .string),
-               let setPieceID = String(data: data, encoding: .utf8),
-               let setPiece = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == setPieceID }) {
-                
-                Task { @MainActor in
-                    // Get SCNView from drag info
-                    guard let scnView = findSCNView() else { return }
-                    
-                    // Convert drop location to world position
-                    let worldPos = convertScreenToWorld(point: location, in: scnView)
-                    let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
-                    
-                    // Add the set piece to the scene
-                    parent.studioManager.addSetPieceFromAsset(setPiece, at: finalPos)
-                }
-                
-                return true
-            }
-            
-            return false
-        }
-        
-        // MARK: - Selection & Context Menu
+        // MARK: - Selection & Context Menu (simplified)
         
         @MainActor
         private func handleSelection(at point: CGPoint, in scnView: SCNView) {
@@ -345,12 +418,10 @@ struct Enhanced3DViewport: NSViewRepresentable {
             
             if let hitResult = hitResults.first {
                 let hitNode = hitResult.node
-                
                 if let object = parent.studioManager.getObject(from: hitNode) {
                     if selectedObjects.contains(object.id) {
                         selectedObjects.remove(object.id)
                     } else {
-                        // Clear previous selection if not holding modifier
                         selectedObjects.removeAll()
                         selectedObjects.insert(object.id)
                     }
@@ -363,8 +434,6 @@ struct Enhanced3DViewport: NSViewRepresentable {
         @MainActor
         private func handleObjectPlacement(at point: CGPoint, in scnView: SCNView) {
             let worldPos = convertScreenToWorld(point: point, in: scnView)
-            let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
-            
             let studioTool: StudioTool
             switch selectedTool {
             case .select: studioTool = .select
@@ -373,169 +442,15 @@ struct Enhanced3DViewport: NSViewRepresentable {
             case .setPiece: studioTool = .setPiece
             case .light: studioTool = .light
             }
-            
-            parent.studioManager.addObject(type: studioTool, at: finalPos)
+            parent.studioManager.addObject(type: studioTool, at: worldPos)
         }
         
         @MainActor
         private func showContextMenu(at point: CGPoint, in scnView: SCNView) {
+            // Simplified context menu
             let menu = NSMenu()
-            
-            let hitResults = scnView.hitTest(point, options: nil)
-            
-            if let hitResult = hitResults.first,
-               let object = parent.studioManager.getObject(from: hitResult.node) {
-                
-                // Object-specific menu
-                let selectItem = NSMenuItem(title: "Select \(object.name)", action: #selector(selectObject), keyEquivalent: "")
-                selectItem.target = self
-                selectItem.representedObject = object.id
-                menu.addItem(selectItem)
-                
-                menu.addItem(NSMenuItem.separator())
-                
-                let duplicateItem = NSMenuItem(title: "Duplicate", action: #selector(duplicateObject), keyEquivalent: "")
-                duplicateItem.target = self
-                duplicateItem.representedObject = object.id
-                menu.addItem(duplicateItem)
-                
-                let renameItem = NSMenuItem(title: "Rename", action: #selector(renameObject), keyEquivalent: "")
-                renameItem.target = self
-                renameItem.representedObject = object.id
-                menu.addItem(renameItem)
-                
-                let deleteItem = NSMenuItem(title: "Delete", action: #selector(deleteObject), keyEquivalent: "")
-                deleteItem.target = self
-                deleteItem.representedObject = object.id
-                menu.addItem(deleteItem)
-                
-            } else {
-                // Empty space menu
-                menu.addItem(NSMenuItem(title: "Add LED Wall", action: #selector(addLEDWall), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Camera", action: #selector(addCamera), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Set Piece", action: #selector(addSetPiece), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Light", action: #selector(addLight), keyEquivalent: ""))
-            }
-            
+            menu.addItem(NSMenuItem(title: "Add Set Piece", action: nil, keyEquivalent: ""))
             menu.popUp(positioning: nil, at: point, in: scnView)
-        }
-        
-        // MARK: - Context Menu Actions
-        
-        @objc private func selectObject(_ sender: NSMenuItem) {
-            guard let objId = sender.representedObject as? UUID else { return }
-            Task { @MainActor in
-                selectedObjects = [objId]
-            }
-        }
-        
-        @objc private func duplicateObject(_ sender: NSMenuItem) {
-            guard let objId = sender.representedObject as? UUID else { return }
-            
-            Task { @MainActor in
-                guard let object = parent.studioManager.studioObjects.first(where: { $0.id == objId }) else { return }
-                
-                let newPosition = SCNVector3(
-                    object.position.x + 1,
-                    object.position.y,
-                    object.position.z + 1
-                )
-                
-                let duplicate = StudioObject(name: "\(object.name).001", type: object.type, position: newPosition)
-                duplicate.rotation = object.rotation
-                duplicate.scale = object.scale
-                
-                if let geometry = object.node.geometry?.copy() as? SCNGeometry {
-                    duplicate.node.geometry = geometry
-                }
-                
-                parent.studioManager.studioObjects.append(duplicate)
-                parent.studioManager.scene.rootNode.addChildNode(duplicate.node)
-                
-                // Select the duplicate
-                selectedObjects = [duplicate.id]
-            }
-        }
-        
-        @objc private func renameObject(_ sender: NSMenuItem) {
-            guard let objId = sender.representedObject as? UUID else { return }
-            
-            Task { @MainActor in
-                guard let object = parent.studioManager.studioObjects.first(where: { $0.id == objId }) else { return }
-                
-                // Show rename dialog
-                let alert = NSAlert()
-                alert.messageText = "Rename Object"
-                alert.informativeText = "Enter new name:"
-                alert.addButton(withTitle: "OK")
-                alert.addButton(withTitle: "Cancel")
-                
-                let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-                textField.stringValue = object.name
-                alert.accessoryView = textField
-                
-                if alert.runModal() == .alertFirstButtonReturn {
-                    let newName = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !newName.isEmpty {
-                        object.name = newName
-                        object.node.name = newName
-                    }
-                }
-            }
-        }
-        
-        @objc private func deleteObject(_ sender: NSMenuItem) {
-            guard let objId = sender.representedObject as? UUID else { return }
-            
-            Task { @MainActor in
-                guard let object = parent.studioManager.studioObjects.first(where: { $0.id == objId }) else { return }
-                
-                parent.studioManager.deleteObject(object)
-                selectedObjects.remove(objId)
-            }
-        }
-        
-        @objc private func addLEDWall() { /* Implement */ }
-        @objc private func addCamera() { /* Implement */ }
-        @objc private func addSetPiece() { /* Implement */ }
-        @objc private func addLight() { /* Implement */ }
-        
-        // MARK: - Utilities
-        
-        func convertScreenToWorld(point: CGPoint, in scnView: SCNView) -> SCNVector3 {
-            // Convert screen point to world coordinates using ray casting
-            let nearPoint = scnView.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 0))
-            let farPoint = scnView.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 1))
-            
-            // Create ray from near to far
-            let direction = SCNVector3(
-                farPoint.x - nearPoint.x,
-                farPoint.y - nearPoint.y,
-                farPoint.z - nearPoint.z
-            )
-            
-            // Intersect with ground plane (Y = 0)
-            let t = -nearPoint.y / direction.y
-            let intersectionPoint = SCNVector3(
-                nearPoint.x + direction.x * t,
-                0, // Place on ground
-                nearPoint.z + direction.z * t
-            )
-            
-            return intersectionPoint
-        }
-        
-        private func snapToGridPosition(_ position: SCNVector3) -> SCNVector3 {
-            let gridStep = CGFloat(gridSize)
-            return SCNVector3(
-                round(position.x / gridStep) * gridStep,
-                position.y,
-                round(position.z / gridStep) * gridStep
-            )
-        }
-        
-        private func findSCNView() -> SCNView? {
-            return nil
         }
     }
 }

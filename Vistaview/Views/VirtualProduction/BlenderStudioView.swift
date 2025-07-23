@@ -272,7 +272,6 @@ struct BlenderStudioView: View {
                     }
                     .foregroundColor(transformMode == .move ? .white : .primary)
                 }
-                .keyboardShortcut("g")
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -292,7 +291,6 @@ struct BlenderStudioView: View {
                     }
                     .foregroundColor(transformMode == .rotate ? .white : .primary)
                 }
-                .keyboardShortcut("r")
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -312,7 +310,6 @@ struct BlenderStudioView: View {
                     }
                     .foregroundColor(transformMode == .scale ? .white : .primary)
                 }
-                .keyboardShortcut("s")
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -485,6 +482,12 @@ struct BlenderStudioView: View {
                 gridSize: $gridSize
             )
             
+            // Drop feedback overlay
+            DropFeedbackOverlay()
+            
+            // Debug overlay (temporary)
+            InteractionDebugOverlay()
+            
             // 3D Viewport Overlays
             VStack {
                 HStack {
@@ -518,27 +521,37 @@ struct BlenderStudioView: View {
                     
                     Spacer()
                     
-                    // Center - Grid info
-                    HStack(spacing: 8) {
-                        Image(systemName: snapToGrid ? "grid" : "grid")
-                            .foregroundColor(snapToGrid ? .blue : .secondary)
+                    // Center - Instructions
+                    VStack(spacing: 2) {
+                        Text("💡 Click & drag to orbit camera • Drag set pieces from left panel to place")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.8))
                         
-                        Text("Grid: \(gridSize, specifier: "%.1f")m")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                        Text("G=Move • R=Rotate • S=Scale • Enter=Confirm • Esc=Cancel")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.6))
                     }
                     
                     Spacer()
                     
-                    // Right - View mode
+                    // Right - View mode and grid
                     HStack(spacing: 8) {
-                        Text("View: \(viewMode.rawValue)")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                        HStack(spacing: 4) {
+                            Image(systemName: snapToGrid ? "grid" : "grid")
+                                .foregroundColor(snapToGrid ? .blue : .secondary)
+                            Text("Grid: \(gridSize, specifier: "%.1f")m")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                         
-                        Image(systemName: viewMode.icon)
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
+                        HStack(spacing: 4) {
+                            Text("View: \(viewMode.rawValue)")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Image(systemName: viewMode.icon)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
                 }
                 .padding(.horizontal, 12)
