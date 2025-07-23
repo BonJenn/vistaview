@@ -1,625 +1,225 @@
+//
+//  VirtualProductionView.swift
+//  Vistaview
+//
+
 import SwiftUI
 import SceneKit
-import AVFoundation
-#if os(macOS)
-import AppKit
-#else
-import UIKit
-#endif
 
 struct VirtualProductionView: View {
-    @StateObject private var studioManager = VirtualStudioManager()
+    @EnvironmentObject var studioManager: VirtualStudioManager
+    
     @State private var selectedTool: StudioTool = .select
     @State private var selectedObject: StudioObject?
-    @State private var showingAssetLibrary = false
-    @State private var cameraMode: CameraMode = .overview
+    @State private var cameraMode: CameraMode = .orbit
+    @State private var lastWorldPos: SCNVector3 = SCNVector3(0,0,0)
     
     var body: some View {
-        HSplitView {
-            // Left Panel - Tools & Assets
-            VStack(spacing: 0) {
-                // Tool Palette
-                VStack(spacing: 0) {
-                    Text("Studio Tools")
-                        .font(.headline)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .background(Color.blue.opacity(0.1))
-                    
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 8) {
-                        ForEach(StudioTool.allCases, id: \.self) { tool in
-                            ToolButton(
-                                tool: tool,
-                                isSelected: selectedTool == tool,
-                                action: { selectedTool = tool }
-                            )
-                        }
-                    }
-                    .padding()
-                }
-                
-                Divider()
-                
-                // Asset Library
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        AssetCategoryView(
-                            title: "LED Walls",
-                            assets: LEDWallAsset.predefinedWalls,
-                            onAdd: { asset in
-                                studioManager.addLEDWall(from: asset)
-                            }
-                        )
-                        
-                        AssetCategoryView(
-                            title: "Cameras",
-                            assets: CameraAsset.predefinedCameras,
-                            onAdd: { asset in
-                                studioManager.addCamera(from: asset)
-                            }
-                        )
-                        
-                        AssetCategoryView(
-                            title: "Set Pieces",
-                            assets: SetPieceAsset.predefinedPieces,
-                            onAdd: { asset in
-                                studioManager.addSetPiece(from: asset)
-                            }
-                        )
-                    }
-                    .padding()
-                }
-            }
-            .frame(minWidth: 300, maxWidth: 350)
-            .background(Color.gray.opacity(0.05))
+        HStack(spacing: 0) {
+            leftSidebar
+            centerScene
+            rightSidebar
+        }
+        .onChange(of: selectedTool) { _, newValue in
+            // handle tool change if needed
+            if newValue == .select { selectedObject = nil }
+        }
+    }
+    
+    // MARK: - Left
+    private var leftSidebar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Tools").font(.headline)
+            ToolButton(icon: "cursorarrow", label: "Select", tool: .select, current: $selectedTool)
+            ToolButton(icon: "display", label: "LED Wall", tool: .ledWall, current: $selectedTool)
+            ToolButton(icon: "video", label: "Camera", tool: .camera, current: $selectedTool)
+            ToolButton(icon: "cube", label: "Set Piece", tool: .setPiece, current: $selectedTool)
+            ToolButton(icon: "lightbulb", label: "Light", tool: .light, current: $selectedTool)
             
-            // Center Panel - 3D Scene
-            VStack(spacing: 0) {
-                // Scene Controls
-                HStack {
-                    Text("Virtual Studio")
-                        .font(.headline)
-                    
-                    Spacer()
-                    
-                    // Camera Mode Selector
-                    Picker("View", selection: $cameraMode) {
-                        Text("Overview").tag(CameraMode.overview)
-                        Text("Camera 1").tag(CameraMode.camera1)
-                        Text("Camera 2").tag(CameraMode.camera2)
-                        Text("Camera 3").tag(CameraMode.camera3)
+            Divider().padding(.vertical, 8)
+            
+            Text("Cameras").font(.headline)
+            List(studioManager.virtualCameras, id: \.id, selection: selectedCameraBinding) { cam in
+                Text(cam.name)
+                    .onTapGesture {
+                        studioManager.selectCamera(cam)
                     }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .frame(width: 200)
-                    
-                    Button(action: { studioManager.resetView() }) {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Reset View")
-                    }
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                
-                // Main 3D Scene
-                VirtualStudioSceneView(
-                    studioManager: studioManager,
-                    selectedTool: $selectedTool,
-                    selectedObject: $selectedObject,
-                    cameraMode: $cameraMode
-                )
-                .background(Color.black)
-                
-                // Timeline & Playback Controls
-                TimelineControlView(studioManager: studioManager)
             }
             
-            // Right Panel - Properties & Camera Feeds
-            VStack(spacing: 0) {
-                // Object Properties
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("Properties")
-                            .font(.headline)
-                        Spacer()
-                        if selectedObject != nil {
-                            Button("Delete") {
-                                if let obj = selectedObject {
-                                    studioManager.deleteObject(obj)
-                                    selectedObject = nil
-                                }
-                            }
-                            .foregroundColor(.red)
-                        }
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    
-                    ScrollView {
-                        if let object = selectedObject {
-                            ObjectPropertiesView(object: object, studioManager: studioManager)
-                        } else {
-                            Text("Select an object to edit properties")
-                                .foregroundColor(.secondary)
-                                .padding()
-                        }
-                    }
-                }
-                .frame(maxHeight: 300)
-                
-                Divider()
-                
-                // Camera Feeds
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("Camera Feeds")
-                            .font(.headline)
-                        Spacer()
-                        Button(action: { studioManager.addCamera() }) {
-                            Image(systemName: "plus.circle")
-                        }
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.1))
-                    
-                    ScrollView {
-                        LazyVStack(spacing: 8) {
-                            ForEach(studioManager.virtualCameras) { camera in
-                                CameraFeedView(camera: camera, studioManager: studioManager)
-                            }
-                        }
-                        .padding()
-                    }
-                }
-            }
-            .frame(minWidth: 300, maxWidth: 400)
-            .background(Color.gray.opacity(0.05))
+            Spacer()
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Export Scene") {
-                    studioManager.exportScene()
-                }
-                
-                Button("Import Scene") {
-                    studioManager.importScene()
-                }
-                
-                Button("Render Preview") {
-                    studioManager.renderPreview()
-                }
+        .padding()
+        .frame(width: 220)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+    
+    // MARK: - Camera Binding
+    private var selectedCameraBinding: Binding<VirtualCamera.ID?> {
+        Binding<VirtualCamera.ID?>(
+            get: { studioManager.selectedCamera?.id },
+            set: { id in
+                guard let id,
+                      let cam = studioManager.virtualCameras.first(where: { $0.id == id }) else { return }
+                studioManager.selectCamera(cam)
             }
+        )
+    }
+    
+    // MARK: - Center
+    private var centerScene: some View {
+        VirtualStudioSceneView(
+            studioManager: studioManager,
+            selectedTool: $selectedTool,
+            selectedObject: $selectedObject,
+            cameraMode: $cameraMode,
+            lastWorldPos: $lastWorldPos
+        )
+        .background(Color.black)
+    }
+    
+    // MARK: - Right
+    private var rightSidebar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Properties").font(.headline)
+            if let obj = selectedObject {
+                ObjectPropertiesView(object: obj)
+            } else {
+                Text("No selection").foregroundColor(.secondary)
+            }
+            Spacer()
         }
+        .padding()
+        .frame(width: 260)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
-// MARK: - Supporting Views
+// MARK: - SceneKit Representable
 
-struct ToolButton: View {
-    let tool: StudioTool
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: tool.icon)
-                    .font(.title2)
-                Text(tool.name)
-                    .font(.caption)
-            }
-            .foregroundColor(isSelected ? .white : .primary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(isSelected ? Color.blue : Color.clear)
-            .cornerRadius(8)
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
+#if os(macOS)
+typealias PlatformViewRepresentable = NSViewRepresentable
+#else
+typealias PlatformViewRepresentable = UIViewRepresentable
+#endif
 
-struct AssetCategoryView<T: StudioAsset>: View {
-    let title: String
-    let assets: [T]
-    let onAdd: (T) -> Void
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 6) {
-                ForEach(assets, id: \.id) { asset in
-                    Button(action: { onAdd(asset) }) {
-                        VStack(spacing: 4) {
-                            Rectangle()
-                                .fill(asset.color.opacity(0.3))
-                                .frame(height: 40)
-                                .overlay(
-                                    Image(systemName: asset.icon)
-                                        .foregroundColor(asset.color)
-                                )
-                                .cornerRadius(6)
-                            
-                            Text(asset.name)
-                                .font(.caption)
-                                .lineLimit(1)
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-        }
-    }
-}
-
-struct VirtualStudioSceneView: NSViewRepresentable {
+struct VirtualStudioSceneView: PlatformViewRepresentable {
     let studioManager: VirtualStudioManager
     @Binding var selectedTool: StudioTool
     @Binding var selectedObject: StudioObject?
     @Binding var cameraMode: CameraMode
+    @Binding var lastWorldPos: SCNVector3
     
     func makeNSView(context: Context) -> SCNView {
-        let scnView = SCNView()
-        scnView.scene = studioManager.scene
-        scnView.allowsCameraControl = true
-        scnView.autoenablesDefaultLighting = true
-        #if os(macOS)
-        scnView.backgroundColor = NSColor.black
-        #endif
+        let v = SCNView()
+        v.scene = studioManager.scene
+        v.allowsCameraControl = (cameraMode == .orbit)
+        v.backgroundColor = .black
+        v.delegate = context.coordinator
         
-        // Add gesture recognizers for object manipulation
         let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
-        scnView.addGestureRecognizer(clickGesture)
+        v.addGestureRecognizer(clickGesture)
         
-        return scnView
+        return v
     }
     
     func updateNSView(_ nsView: SCNView, context: Context) {
-        // Update camera based on mode
-        switch cameraMode {
-        case .overview:
-            nsView.allowsCameraControl = true
-        case .camera1, .camera2, .camera3:
-            nsView.allowsCameraControl = false
-            // Set to specific camera view
-        }
+        nsView.allowsCameraControl = (cameraMode == .orbit)
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(self)
+        Coordinator(self, studioManager: studioManager)
     }
     
-    class Coordinator: NSObject {
-        var parent: VirtualStudioSceneView
+    final class Coordinator: NSObject, SCNSceneRendererDelegate {
+        let parent: VirtualStudioSceneView
+        let studioManager: VirtualStudioManager
         
-        init(_ parent: VirtualStudioSceneView) {
+        init(_ parent: VirtualStudioSceneView, studioManager: VirtualStudioManager) {
             self.parent = parent
+            self.studioManager = studioManager
         }
         
-        @MainActor
-        @objc func handleClick(_ gestureRecognizer: NSClickGestureRecognizer) {
-            let scnView = gestureRecognizer.view as! SCNView
-            let location = gestureRecognizer.location(in: scnView)
-            
-            let hitResults = scnView.hitTest(location, options: [:])
+        @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
+            guard let view = gesture.view as? SCNView else { return }
+            let pt = gesture.location(in: view)
             
             Task { @MainActor in
-                if let hitResult = hitResults.first {
-                    // Handle object selection
-                    if let studioObject = parent.studioManager.getObject(from: hitResult.node) {
-                        parent.selectedObject = studioObject
-                    }
-                } else if parent.selectedTool != .select {
-                    // Add new object at clicked location
-                    parent.studioManager.addObject(
-                        type: parent.selectedTool,
-                        at: parent.studioManager.worldPosition(from: location, in: scnView)
-                    )
-                }
-            }
-        }
-    }
-}
-
-struct ObjectPropertiesView: View {
-    let object: StudioObject
-    let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Basic Properties
-            Group {
-                Text("Transform")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                
-                VStack(spacing: 8) {
-                    HStack {
-                        Text("Position")
-                        Spacer()
-                        VStack(spacing: 2) {
-                            HStack {
-                                Text("X:"); TextField("0", value: .constant(object.position.x), format: .number)
-                                Text("Y:"); TextField("0", value: .constant(object.position.y), format: .number)
-                                Text("Z:"); TextField("0", value: .constant(object.position.z), format: .number)
-                            }
+                switch self.parent.selectedTool {
+                case .select:
+                    let hits = view.hitTest(pt, options: nil)
+                    if let hit = hits.first {
+                        let node = hit.node
+                        if let obj = self.studioManager.getObject(from: node) {
+                            self.parent.selectedObject = obj
+                            return
                         }
                     }
-                    
-                    HStack {
-                        Text("Rotation")
-                        Spacer()
-                        VStack(spacing: 2) {
-                            HStack {
-                                Text("X:"); TextField("0", value: .constant(object.rotation.x), format: .number)
-                                Text("Y:"); TextField("0", value: .constant(object.rotation.y), format: .number)
-                                Text("Z:"); TextField("0", value: .constant(object.rotation.z), format: .number)
-                            }
-                        }
-                    }
-                    
-                    HStack {
-                        Text("Scale")
-                        Spacer()
-                        VStack(spacing: 2) {
-                            HStack {
-                                Text("X:"); TextField("1", value: .constant(object.scale.x), format: .number)
-                                Text("Y:"); TextField("1", value: .constant(object.scale.y), format: .number)
-                                Text("Z:"); TextField("1", value: .constant(object.scale.z), format: .number)
-                            }
-                        }
-                    }
-                }
-                .font(.caption)
-            }
-            
-            Divider()
-            
-            // Object-specific properties
-            switch object.type {
-            case .ledWall:
-                LEDWallPropertiesView(object: object, studioManager: studioManager)
-            case .camera:
-                CameraPropertiesView(object: object, studioManager: studioManager)
-            case .setPiece:
-                SetPiecePropertiesView(object: object, studioManager: studioManager)
-            case .light:
-                LightPropertiesView(object: object, studioManager: studioManager)
-            }
-        }
-        .padding()
-    }
-}
-
-struct CameraFeedView: View {
-    let camera: VirtualCamera
-    let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text(camera.name)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                Spacer()
-                Button(action: { studioManager.selectCamera(camera) }) {
-                    Image(systemName: "viewfinder")
+                    self.parent.selectedObject = nil
+                default:
+                    // Place object
+                    let world = self.studioManager.worldPosition(from: pt, in: view)
+                    self.parent.lastWorldPos = world
+                    self.studioManager.addObject(type: self.parent.selectedTool, at: world)
                 }
             }
-            
-            Rectangle()
-                .fill(Color.black)
-                .aspectRatio(16/9, contentMode: .fit)
-                .overlay(
-                    Text("Camera \(camera.id)")
-                        .foregroundColor(.white)
-                        .font(.caption)
-                )
-                .cornerRadius(4)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(camera.isActive ? Color.red : Color.gray, lineWidth: 2)
-                )
         }
     }
 }
 
-struct TimelineControlView: View {
-    let studioManager: VirtualStudioManager
-    @State private var isPlaying = false
-    @State private var currentTime: Double = 0
+#if !os(macOS)
+// iOS version would go here if needed
+struct VirtualStudioSceneView: UIViewRepresentable {
+    // iOS implementation would be similar but using UIViewRepresentable
+    func makeUIView(context: Context) -> SCNView { SCNView() }
+    func updateUIView(_ uiView: SCNView, context: Context) {}
+}
+#endif
+
+// MARK: - Supporting Views
+
+struct ToolButton: View {
+    let icon: String
+    let label: String
+    let tool: StudioTool
+    @Binding var current: StudioTool
     
     var body: some View {
-        HStack {
-            Button(action: { isPlaying.toggle() }) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+        Button {
+            current = tool
+        } label: {
+            HStack {
+                Image(systemName: icon)
+                Text(label)
             }
-            
-            Button(action: { currentTime = 0 }) {
-                Image(systemName: "backward.end.fill")
-            }
-            
-            Slider(value: $currentTime, in: 0...100)
-            
-            Text("00:00 / 05:00")
-                .font(.caption)
-                .monospaced()
         }
-        .padding()
-        .background(Color.gray.opacity(0.1))
+        .buttonStyle(.bordered)
+        .tint(current == tool ? .accentColor : .gray)
     }
 }
 
-struct LightPropertiesView: View {
-    let object: StudioObject
+// Placeholder detail views – keep whatever you already had.
+struct LEDWallProperties: View {
+    @ObservedObject var object: StudioObject
     let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Light Settings")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            HStack {
-                Text("Type:")
-                Spacer()
-                Picker("Type", selection: .constant("Spot")) {
-                    Text("Directional").tag("Directional")
-                    Text("Spot").tag("Spot")
-                    Text("Point").tag("Point")
-                }
-                .frame(width: 100)
-            }
-            
-            HStack {
-                Text("Intensity:")
-                Spacer()
-                Slider(value: .constant(1.0), in: 0...2)
-                    .frame(width: 100)
-            }
-            
-            HStack {
-                Text("Color:")
-                Spacer()
-                ColorPicker("", selection: .constant(Color.white))
-                    .frame(width: 50)
-            }
-        }
-        .font(.caption)
-    }
+    var body: some View { Text("LED Wall Props for \(object.name)") }
 }
-
-// MARK: - Placeholder Property Views
-
-struct LEDWallPropertiesView: View {
-    let object: StudioObject
+struct CameraProperties: View {
+    @ObservedObject var object: StudioObject
     let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("LED Wall Settings")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            HStack {
-                Text("Resolution:")
-                Spacer()
-                Text("1920x1080")
-            }
-            
-            HStack {
-                Text("Pixel Pitch:")
-                Spacer()
-                TextField("2.6", value: .constant(2.6), format: .number)
-                    .frame(width: 60)
-                Text("mm")
-            }
-            
-            HStack {
-                Text("Brightness:")
-                Spacer()
-                Slider(value: .constant(0.8), in: 0...1)
-                    .frame(width: 100)
-            }
-        }
-        .font(.caption)
-    }
+    var body: some View { Text("Camera Props for \(object.name)") }
 }
-
-struct CameraPropertiesView: View {
-    let object: StudioObject
+struct SetPieceProperties: View {
+    @ObservedObject var object: StudioObject
     let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Camera Settings")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            HStack {
-                Text("Lens:")
-                Spacer()
-                TextField("24", value: .constant(24), format: .number)
-                    .frame(width: 60)
-                Text("mm")
-            }
-            
-            HStack {
-                Text("Active:")
-                Spacer()
-                Toggle("", isOn: .constant(true))
-            }
-        }
-        .font(.caption)
-    }
+    var body: some View { Text("Set Piece Props for \(object.name)") }
 }
-
-struct SetPiecePropertiesView: View {
-    let object: StudioObject
+struct LightProperties: View {
+    @ObservedObject var object: StudioObject
     let studioManager: VirtualStudioManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Set Piece Settings")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-            
-            HStack {
-                Text("Material:")
-                Spacer()
-                Picker("Material", selection: .constant("Wood")) {
-                    Text("Wood").tag("Wood")
-                    Text("Metal").tag("Metal")
-                    Text("Fabric").tag("Fabric")
-                }
-                .frame(width: 100)
-            }
-        }
-        .font(.caption)
-    }
+    var body: some View { Text("Light Props for \(object.name)") }
 }
 
-// MARK: - Data Models & Enums
-
-enum StudioTool: CaseIterable {
-    case select, ledWall, camera, setPiece, light
-    
-    var name: String {
-        switch self {
-        case .select: return "Select"
-        case .ledWall: return "LED Wall"
-        case .camera: return "Camera"
-        case .setPiece: return "Set Piece"
-        case .light: return "Light"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .select: return "cursorarrow"
-        case .ledWall: return "tv"
-        case .camera: return "video"
-        case .setPiece: return "cube.box"
-        case .light: return "lightbulb"
-        }
-    }
-}
-
-enum CameraMode {
-    case overview, camera1, camera2, camera3
-}
-
-protocol StudioAsset {
-    var id: UUID { get }
-    var name: String { get }
-    var icon: String { get }
-    var color: Color { get }
+// MARK: - Simple enums you already have
+enum CameraMode: String, CaseIterable, Hashable {
+    case orbit, pan, fly
 }

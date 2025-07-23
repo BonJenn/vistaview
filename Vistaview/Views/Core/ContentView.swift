@@ -137,7 +137,8 @@ struct ContentView: View {
             Group {
                 switch productionMode {
                 case .virtual:
-                    VirtualProductionView()
+                    BlenderStudioView()
+                        .environmentObject(productionManager.studioManager)
                 case .live:
                     EnhancedLiveProductionView(
                         productionManager: productionManager,
@@ -151,6 +152,7 @@ struct ContentView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $showingStudioSelector) {
             StudioSelectorSheet(productionManager: productionManager)
@@ -198,8 +200,11 @@ struct ContentView: View {
     }
     
     private func requestPermissions() async {
-        let _ = await AVCaptureDevice.requestAccess(for: .video)
-        let _ = await AVCaptureDevice.requestAccess(for: .audio)
+        let videoPermission = await AVCaptureDevice.requestAccess(for: .video)
+        let audioPermission = await AVCaptureDevice.requestAccess(for: .audio)
+        
+        print("Video permission: \(videoPermission)")
+        print("Audio permission: \(audioPermission)")
     }
     
     private func handleFileImport(_ result: Result<[URL], Error>) {
@@ -234,338 +239,326 @@ struct EnhancedLiveProductionView: View {
     var body: some View {
         HSplitView {
             // Left Panel - Sources & Media (ENHANCED)
-            VStack(spacing: 0) {
-                // Source Tabs (Enhanced with Virtual)
-                HStack(spacing: 0) {
-                    ForEach(["Camera", "Virtual", "Media", "Effects"], id: \.self) { tab in
-                        Button(action: {
-                            selectedTab = ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?? 0
-                        }) {
-                            Text(tab)
-                                .font(.caption)
-                                .padding(.vertical, 8)
-                                .padding(.horizontal, 12)
-                                .background(selectedTab == ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?
-                                          Color.blue : Color.gray.opacity(0.2))
-                                .foregroundColor(selectedTab == ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?
-                                               .white : .primary)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    Spacer()
-                }
-                .background(Color.gray.opacity(0.1))
-                
-                // Source Content
-                Group {
-                    switch selectedTab {
-                    case 0:
-                        CameraSourceView(viewModel: productionManager.streamingViewModel)
-                    case 1:
-                        VirtualSourceView(productionManager: productionManager) // NEW TAB
-                    case 2:
-                        MediaBrowserView(mediaFiles: $mediaFiles, showingFilePicker: $showingFilePicker)
-                    case 3:
-                        EffectsView()
-                    default:
-                        CameraSourceView(viewModel: productionManager.streamingViewModel)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+            LeftPanelView(
+                productionManager: productionManager,
+                selectedTab: $selectedTab,
+                mediaFiles: $mediaFiles,
+                showingFilePicker: $showingFilePicker
+            )
             .frame(minWidth: 300, maxWidth: 400)
             .background(Color.black.opacity(0.05))
             
             // Center Panel - Main Preview & Layers
-            VStack(spacing: 0) {
-                // Main Preview
-                VStack {
-                    HStack {
-                        Text("Output Preview")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Spacer()
-                        
-                        // Virtual Studio Indicator (NEW)
-                        if productionManager.isVirtualStudioActive {
-                            HStack {
-                                Image(systemName: "cube.transparent")
-                                    .foregroundColor(.blue)
-                                Text("Virtual Studio Active")
-                                    .font(.caption)
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        
-                        Text(productionManager.streamingViewModel.statusMessage)
-                            .font(.caption)
-                            .foregroundColor(productionManager.streamingViewModel.cameraSetup ? .green : .orange)
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    
-                    // Main video output
-                    CameraPreview(viewModel: productionManager.streamingViewModel)
-                        .background(Color.black)
-                        .overlay(
-                            Group {
-                                if !productionManager.streamingViewModel.cameraSetup {
-                                    VStack {
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                        Text("Initializing Camera...")
-                                            .font(.caption)
-                                            .foregroundColor(.white)
-                                    }
-                                    .padding()
-                                    .background(Color.black.opacity(0.7))
-                                    .cornerRadius(10)
-                                }
-                            }
-                        )
-                        .aspectRatio(16/9, contentMode: .fit)
-                }
-                .background(Color.black.opacity(0.9))
-                .cornerRadius(8)
-                .padding()
-                
-                // Enhanced Layer Control
-                EnhancedLayerControlView(
-                    selectedLayer: $selectedLayer,
-                    productionManager: productionManager
-                )
-            }
+            CenterPanelView(
+                productionManager: productionManager,
+                selectedLayer: $selectedLayer
+            )
             .frame(minWidth: 500)
             
             // Right Panel - Output Controls + Virtual Studio Info
-            VStack(spacing: 0) {
-                // Output Settings Header
-                HStack {
-                    Text("Output Controls")
-                        .font(.headline)
-                    Spacer()
+            RightPanelView(
+                productionManager: productionManager,
+                rtmpURL: $rtmpURL,
+                streamKey: $streamKey,
+                selectedPlatform: $selectedPlatform
+            )
+            .frame(minWidth: 280, maxWidth: 350)
+            .background(Color.gray.opacity(0.05))
+        }
+    }
+}
+
+// MARK: - Left Panel Component
+
+struct LeftPanelView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Binding var selectedTab: Int
+    @Binding var mediaFiles: [MediaFile]
+    @Binding var showingFilePicker: Bool
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Source Tabs (Enhanced with Virtual)
+            HStack(spacing: 0) {
+                ForEach(["Camera", "Virtual", "Media", "Effects"], id: \.self) { tab in
+                    Button(action: {
+                        selectedTab = ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?? 0
+                    }) {
+                        Text(tab)
+                            .font(.caption)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(selectedTab == ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?
+                                      Color.blue : Color.gray.opacity(0.2))
+                            .foregroundColor(selectedTab == ["Camera", "Virtual", "Media", "Effects"].firstIndex(of: tab) ?
+                                           .white : .primary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                Spacer()
+            }
+            .background(Color.gray.opacity(0.1))
+            
+            // Source Content
+            Group {
+                switch selectedTab {
+                case 0:
+                    CameraSourceView(viewModel: productionManager.streamingViewModel)
+                case 1:
+                    VirtualSourceView(productionManager: productionManager)
+                case 2:
+                    MediaBrowserView(mediaFiles: $mediaFiles, showingFilePicker: $showingFilePicker)
+                case 3:
+                    EffectsView()
+                default:
+                    CameraSourceView(viewModel: productionManager.streamingViewModel)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: - Center Panel Component
+
+struct CenterPanelView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Binding var selectedLayer: Int
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Main Preview
+            MainPreviewView(productionManager: productionManager)
+            
+            // Enhanced Layer Control
+            EnhancedLayerControlView(
+                selectedLayer: $selectedLayer,
+                productionManager: productionManager
+            )
+        }
+    }
+}
+
+// MARK: - Main Preview Component
+
+struct MainPreviewView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    
+    var body: some View {
+        VStack {
+            HStack {
+                Text("Output Preview")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Spacer()
+                
+                // Virtual Studio Indicator
+                if productionManager.isVirtualStudioActive {
+                    HStack {
+                        Image(systemName: "cube.transparent")
+                            .foregroundColor(.blue)
+                        Text("Virtual Studio Active")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                Text(productionManager.streamingViewModel.statusMessage)
+                    .font(.caption)
+                    .foregroundColor(productionManager.streamingViewModel.cameraSetup ? .green : .orange)
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+            
+            // Main video output
+            CameraPreview(viewModel: productionManager.streamingViewModel)
+                .background(Color.black)
+                .overlay(
+                    Group {
+                        if !productionManager.streamingViewModel.cameraSetup {
+                            VStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("Initializing Camera...")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(10)
+                        }
+                    }
+                )
+                .aspectRatio(16/9, contentMode: .fit)
+        }
+        .background(Color.black.opacity(0.9))
+        .cornerRadius(8)
+        .padding()
+    }
+}
+
+// MARK: - Right Panel Component
+
+struct RightPanelView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Binding var rtmpURL: String
+    @Binding var streamKey: String
+    @Binding var selectedPlatform: String
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Output Settings Header
+            HStack {
+                Text("Output Controls")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Virtual Studio Integration
+                    if productionManager.isVirtualStudioActive {
+                        VirtualStudioInfoView(productionManager: productionManager)
+                    }
+                    
+                    // Streaming Section
+                    StreamingControlsView(
+                        productionManager: productionManager,
+                        rtmpURL: $rtmpURL,
+                        streamKey: $streamKey,
+                        selectedPlatform: $selectedPlatform
+                    )
+                    
+                    // Recording Section
+                    RecordingControlsView()
+                    
+                    // Audio Controls
+                    AudioControlsView()
+                    
+                    // Statistics
+                    StatisticsView(productionManager: productionManager)
                 }
                 .padding()
-                .background(Color.gray.opacity(0.1))
+            }
+        }
+    }
+}
+
+// MARK: - Supporting Components
+
+struct VirtualStudioInfoView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    
+    var body: some View {
+        GroupBox("Virtual Studio") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Virtual Cameras:")
+                    Spacer()
+                    Text("\(productionManager.availableVirtualCameras.count)")
+                        .foregroundColor(.blue)
+                }
                 
-                ScrollView {
-                    VStack(spacing: 16) {
-                        // Virtual Studio Integration (NEW)
-                        if productionManager.isVirtualStudioActive {
-                            GroupBox("Virtual Studio") {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text("Virtual Cameras:")
-                                        Spacer()
-                                        Text("\(productionManager.availableVirtualCameras.count)")
-                                            .foregroundColor(.blue)
-                                    }
-                                    
-                                    HStack {
-                                        Text("LED Walls:")
-                                        Spacer()
-                                        Text("\(productionManager.availableLEDWalls.count)")
-                                            .foregroundColor(.blue)
-                                    }
-                                    
-                                    Button("Sync from Virtual Studio") {
-                                        productionManager.syncVirtualToLive()
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .frame(maxWidth: .infinity)
-                                }
-                            }
-                        }
+                HStack {
+                    Text("LED Walls:")
+                    Spacer()
+                    Text("\(productionManager.availableLEDWalls.count)")
+                        .foregroundColor(.blue)
+                }
+                
+                Button("Sync from Virtual Studio") {
+                    productionManager.syncVirtualToLive()
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+struct StreamingControlsView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Binding var rtmpURL: String
+    @Binding var streamKey: String
+    @Binding var selectedPlatform: String
+    
+    var body: some View {
+        GroupBox("Live Streaming") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Platform:")
+                        .frame(width: 70, alignment: .leading)
+                    Picker("Platform", selection: $selectedPlatform) {
+                        Text("YouTube").tag("YouTube")
+                        Text("Twitch").tag("Twitch")
+                        Text("Facebook").tag("Facebook")
+                        Text("Custom").tag("Custom")
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .onChange(of: selectedPlatform) { _, platform in
+                        updateRTMPURL(for: platform)
+                    }
+                }
+                
+                HStack {
+                    Text("Server:")
+                        .frame(width: 70, alignment: .leading)
+                    TextField("rtmp://server", text: $rtmpURL)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                }
+                
+                HStack {
+                    Text("Key:")
+                        .frame(width: 70, alignment: .leading)
+                    VStack(spacing: 4) {
+                        SecureField("Get from platform", text: $streamKey)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
                         
-                        // Streaming Section
-                        GroupBox("Live Streaming") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("Platform:")
-                                        .frame(width: 70, alignment: .leading)
-                                    Picker("Platform", selection: $selectedPlatform) {
-                                        Text("YouTube").tag("YouTube")
-                                        Text("Twitch").tag("Twitch")
-                                        Text("Facebook").tag("Facebook")
-                                        Text("Custom").tag("Custom")
-                                    }
-                                    .pickerStyle(MenuPickerStyle())
-                                    .onChange(of: selectedPlatform) { platform in
-                                        updateRTMPURL(for: platform)
-                                    }
-                                }
-                                
-                                HStack {
-                                    Text("Server:")
-                                        .frame(width: 70, alignment: .leading)
-                                    TextField("rtmp://server", text: $rtmpURL)
-                                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                                }
-                                
-                                HStack {
-                                    Text("Key:")
-                                        .frame(width: 70, alignment: .leading)
-                                    VStack(spacing: 4) {
-                                        SecureField("Get from platform", text: $streamKey)
-                                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                                        
-                                        if selectedPlatform == "Twitch" && streamKey.isEmpty {
-                                            Button("Open Twitch Dashboard") {
-                                                if let url = URL(string: "https://dashboard.twitch.tv/settings/stream") {
-                                                    #if os(macOS)
-                                                    NSWorkspace.shared.open(url)
-                                                    #else
-                                                    UIApplication.shared.open(url)
-                                                    #endif
-                                                }
-                                            }
-                                            .font(.caption)
-                                            .foregroundColor(.blue)
-                                        }
-                                    }
-                                }
-                                
-                                // Connection Status
-                                HStack {
-                                    Circle()
-                                        .fill(productionManager.streamingViewModel.isPublishing ? Color.green : (productionManager.streamingViewModel.cameraSetup ? Color.orange : Color.red))
-                                        .frame(width: 8, height: 8)
-                                    Text(productionManager.streamingViewModel.isPublishing ? "LIVE" : (productionManager.streamingViewModel.cameraSetup ? "Ready" : "Not Ready"))
-                                        .font(.caption)
-                                        .foregroundColor(productionManager.streamingViewModel.isPublishing ? .green : .secondary)
-                                }
-                                
-                                Button(action: {
-                                    Task {
-                                        await toggleStreaming()
-                                    }
-                                }) {
-                                    HStack {
-                                        Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
-                                        Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                                    .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(8)
-                                }
-                                .disabled(!productionManager.streamingViewModel.cameraSetup)
-                            }
-                        }
-                        
-                        // Recording Section
-                        GroupBox("Recording") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("Format:")
-                                        .frame(width: 70, alignment: .leading)
-                                    Picker("Format", selection: .constant("MP4")) {
-                                        Text("MP4").tag("MP4")
-                                        Text("MOV").tag("MOV")
-                                        Text("AVI").tag("AVI")
-                                    }
-                                    .pickerStyle(MenuPickerStyle())
-                                }
-                                
-                                HStack {
-                                    Text("Quality:")
-                                        .frame(width: 70, alignment: .leading)
-                                    Picker("Quality", selection: .constant("High")) {
-                                        Text("Low").tag("Low")
-                                        Text("Medium").tag("Medium")
-                                        Text("High").tag("High")
-                                        Text("Ultra").tag("Ultra")
-                                    }
-                                    .pickerStyle(MenuPickerStyle())
-                                }
-                                
-                                Button(action: {
-                                    // TODO: Recording functionality
-                                }) {
-                                    HStack {
-                                        Image(systemName: "record.circle")
-                                        Text("Start Recording")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                                    .background(Color.red.opacity(0.8))
-                                    .foregroundColor(.white)
-                                    .cornerRadius(8)
-                                }
-                            }
-                        }
-                        
-                        // Audio Controls
-                        GroupBox("Audio") {
-                            VStack(spacing: 12) {
-                                HStack {
-                                    Text("Master")
-                                    Spacer()
-                                    Slider(value: .constant(0.8), in: 0...1)
-                                        .frame(width: 100)
-                                    Text("80%")
-                                        .font(.caption)
-                                        .frame(width: 30)
-                                }
-                                
-                                HStack {
-                                    Text("Mic")
-                                    Spacer()
-                                    Slider(value: .constant(0.6), in: 0...1)
-                                        .frame(width: 100)
-                                    Text("60%")
-                                        .font(.caption)
-                                        .frame(width: 30)
-                                }
-                                
-                                HStack {
-                                    Text("System")
-                                    Spacer()
-                                    Slider(value: .constant(0.4), in: 0...1)
-                                        .frame(width: 100)
-                                    Text("40%")
-                                        .font(.caption)
-                                        .frame(width: 30)
-                                }
-                            }
-                        }
-                        
-                        // Statistics
-                        GroupBox("Statistics") {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("FPS:")
-                                    Spacer()
-                                    Text("30")
-                                        .foregroundColor(.green)
-                                }
-                                HStack {
-                                    Text("Bitrate:")
-                                    Spacer()
-                                    Text("2.5 Mbps")
-                                        .foregroundColor(.green)
-                                }
-                                HStack {
-                                    Text("Dropped:")
-                                    Spacer()
-                                    Text("0 frames")
-                                        .foregroundColor(.green)
-                                }
-                                HStack {
-                                    Text("Duration:")
-                                    Spacer()
-                                    Text(productionManager.streamingViewModel.isPublishing ? "00:05:23" : "00:00:00")
+                        if selectedPlatform == "Twitch" && streamKey.isEmpty {
+                            Button("Open Twitch Dashboard") {
+                                if let url = URL(string: "https://dashboard.twitch.tv/settings/stream") {
+                                    #if os(macOS)
+                                    NSWorkspace.shared.open(url)
+                                    #else
+                                    UIApplication.shared.open(url)
+                                    #endif
                                 }
                             }
                             .font(.caption)
+                            .foregroundColor(.blue)
                         }
                     }
-                    .padding()
                 }
+                
+                // Connection Status
+                HStack {
+                    Circle()
+                        .fill(productionManager.streamingViewModel.isPublishing ? Color.green : (productionManager.streamingViewModel.cameraSetup ? Color.orange : Color.red))
+                        .frame(width: 8, height: 8)
+                    Text(productionManager.streamingViewModel.isPublishing ? "LIVE" : (productionManager.streamingViewModel.cameraSetup ? "Ready" : "Not Ready"))
+                        .font(.caption)
+                        .foregroundColor(productionManager.streamingViewModel.isPublishing ? .green : .secondary)
+                }
+                
+                Button(action: {
+                    Task {
+                        await toggleStreaming()
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
+                        Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .disabled(!productionManager.streamingViewModel.cameraSetup)
             }
-            .frame(minWidth: 280, maxWidth: 350)
-            .background(Color.gray.opacity(0.05))
         }
     }
     
@@ -591,6 +584,124 @@ struct EnhancedLiveProductionView: View {
             } catch {
                 print("Setup error:", error)
             }
+        }
+    }
+}
+
+struct RecordingControlsView: View {
+    var body: some View {
+        GroupBox("Recording") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Format:")
+                        .frame(width: 70, alignment: .leading)
+                    Picker("Format", selection: .constant("MP4")) {
+                        Text("MP4").tag("MP4")
+                        Text("MOV").tag("MOV")
+                        Text("AVI").tag("AVI")
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                }
+                
+                HStack {
+                    Text("Quality:")
+                        .frame(width: 70, alignment: .leading)
+                    Picker("Quality", selection: .constant("High")) {
+                        Text("Low").tag("Low")
+                        Text("Medium").tag("Medium")
+                        Text("High").tag("High")
+                        Text("Ultra").tag("Ultra")
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                }
+                
+                Button(action: {
+                    // TODO: Recording functionality
+                }) {
+                    HStack {
+                        Image(systemName: "record.circle")
+                        Text("Start Recording")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.8))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+            }
+        }
+    }
+}
+
+struct AudioControlsView: View {
+    var body: some View {
+        GroupBox("Audio") {
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Master")
+                    Spacer()
+                    Slider(value: .constant(0.8), in: 0...1)
+                        .frame(width: 100)
+                    Text("80%")
+                        .font(.caption)
+                        .frame(width: 30)
+                }
+                
+                HStack {
+                    Text("Mic")
+                    Spacer()
+                    Slider(value: .constant(0.6), in: 0...1)
+                        .frame(width: 100)
+                    Text("60%")
+                        .font(.caption)
+                        .frame(width: 30)
+                }
+                
+                HStack {
+                    Text("System")
+                    Spacer()
+                    Slider(value: .constant(0.4), in: 0...1)
+                        .frame(width: 100)
+                    Text("40%")
+                        .font(.caption)
+                        .frame(width: 30)
+                }
+            }
+        }
+    }
+}
+
+struct StatisticsView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    
+    var body: some View {
+        GroupBox("Statistics") {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("FPS:")
+                    Spacer()
+                    Text("30")
+                        .foregroundColor(.green)
+                }
+                HStack {
+                    Text("Bitrate:")
+                    Spacer()
+                    Text("2.5 Mbps")
+                        .foregroundColor(.green)
+                }
+                HStack {
+                    Text("Dropped:")
+                    Spacer()
+                    Text("0 frames")
+                        .foregroundColor(.green)
+                }
+                HStack {
+                    Text("Duration:")
+                    Spacer()
+                    Text(productionManager.streamingViewModel.isPublishing ? "00:05:23" : "00:00:00")
+                }
+            }
+            .font(.caption)
         }
     }
 }

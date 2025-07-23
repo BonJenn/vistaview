@@ -1,468 +1,278 @@
+//
+//  VirtualStudioManager.swift
+//  Vistaview
+//
+
 import Foundation
 import SceneKit
 import SwiftUI
+import simd
+
+#if os(macOS)
+import AppKit
+typealias UXColor = NSColor
+#else
+import UIKit
+typealias UXColor = UIColor
+#endif
 
 @MainActor
-class VirtualStudioManager: ObservableObject {
-    let scene = SCNScene()
-    
+final class VirtualStudioManager: ObservableObject {
+    // MARK: - Published State
     @Published var studioObjects: [StudioObject] = []
     @Published var virtualCameras: [VirtualCamera] = []
     @Published var selectedCamera: VirtualCamera?
     
-    private var floorNode: SCNNode = SCNNode() // Initialize with empty node
-    private var lightNodes: [SCNNode] = []
+    // MARK: - Scene
+    let scene = SCNScene()
+    private let rootNode: SCNNode
+    private let floorNode: SCNNode
     
+    // MARK: - Init
     init() {
-        // Create floor after initialization
-        setupScene()
-    }
-    
-    // MARK: - Scene Setup
-    
-    private func setupScene() {
-        // Create floor
-        floorNode = createFloor()
-        scene.rootNode.addChildNode(floorNode)
+        rootNode = scene.rootNode
         
-        // Add default lighting
+        floorNode = Self.makeFloor()
+        rootNode.addChildNode(floorNode)
+        Self.addGrid(on: floorNode)
+        
         setupDefaultLighting()
-        
-        // Add default camera
         addDefaultCamera()
-        
-        // Create sample studio setup
-        createDefaultStudio()
     }
     
-    private func createFloor() -> SCNNode {
-        let floor = SCNFloor()
-        floor.reflectivity = 0.1
-        floor.reflectionFalloffEnd = 50
+    // MARK: - Floor & Grid
+    private static func makeFloor() -> SCNNode {
+        let plane = SCNPlane(width: 200, height: 200)
+        let mat = SCNMaterial()
+        mat.diffuse.contents = UXColor.darkGray
+        plane.materials = [mat]
         
-        let floorMaterial = SCNMaterial()
-        floorMaterial.diffuse.contents = NSColor.darkGray
-        floorMaterial.specular.contents = NSColor.white
-        floor.materials = [floorMaterial]
-        
-        let floorNode = SCNNode(geometry: floor)
-        floorNode.name = "Floor"
-        
-        // Add grid pattern
-        addGridToFloor(floorNode)
-        
-        return floorNode
+        let node = SCNNode(geometry: plane)
+        node.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
+        node.name = "Floor"
+        return node
     }
     
-    private func addGridToFloor(_ floorNode: SCNNode) {
-        let gridSize: Float = 100
-        let gridSpacing: Float = 1
+    private static func addGrid(on floor: SCNNode) {
+        let size: Float = 50.0
+        let step: Float = 1.0
         
-        for i in stride(from: -gridSize, through: gridSize, by: gridSpacing) {
-            // X lines
-            let xLine = createLine(
-                from: SCNVector3(i, 0.001, -gridSize),
-                to: SCNVector3(i, 0.001, gridSize),
-                color: .gray
-            )
-            floorNode.addChildNode(xLine)
-            
-            // Z lines
-            let zLine = createLine(
-                from: SCNVector3(-gridSize, 0.001, i),
-                to: SCNVector3(gridSize, 0.001, i),
-                color: .gray
-            )
-            floorNode.addChildNode(zLine)
+        for i in stride(from: -size, through: size, by: step) {
+            floor.addChildNode(line(from: SCNVector3(CGFloat(i), 0.001, CGFloat(-size)),
+                                    to:   SCNVector3(CGFloat(i), 0.001,  CGFloat(size))))
+            floor.addChildNode(line(from: SCNVector3(CGFloat(-size), 0.001, CGFloat(i)),
+                                    to:   SCNVector3( CGFloat(size), 0.001, CGFloat(i))))
         }
-        
-        // Add major axis lines
-        let xAxis = createLine(
-            from: SCNVector3(-gridSize, 0.002, 0),
-            to: SCNVector3(gridSize, 0.002, 0),
-            color: .red
-        )
-        floorNode.addChildNode(xAxis)
-        
-        let zAxis = createLine(
-            from: SCNVector3(0, 0.002, -gridSize),
-            to: SCNVector3(0, 0.002, gridSize),
-            color: .blue
-        )
-        floorNode.addChildNode(zAxis)
     }
     
-    private func createLine(from start: SCNVector3, to end: SCNVector3, color: NSColor) -> SCNNode {
-        let line = SCNGeometry()
-        let material = SCNMaterial()
-        material.diffuse.contents = color
-        material.lightingModel = .constant
-        line.materials = [material]
+    private static func line(from a: SCNVector3, to b: SCNVector3, color: UXColor = .lightGray) -> SCNNode {
+        let diff = simd_float3(Float(b.x - a.x), Float(b.y - a.y), Float(b.z - a.z))
+        let len  = CGFloat(simd_length(diff))
         
-        let lineNode = SCNNode(geometry: line)
+        let box = SCNBox(width: 0.02, height: 0.02, length: len, chamferRadius: 0)
+        let mat = SCNMaterial()
+        mat.diffuse.contents = color
+        box.materials = [mat]
         
-        // Create line geometry using SCNBox (simple approach)
-        let distance = sqrt(pow(end.x - start.x, 2) + pow(end.y - start.y, 2) + pow(end.z - start.z, 2))
-        let box = SCNBox(width: 0.01, height: 0.01, length: CGFloat(distance), chamferRadius: 0)
-        box.materials = [material]
-        
-        lineNode.geometry = box
-        lineNode.position = SCNVector3(
-            (start.x + end.x) / 2,
-            (start.y + end.y) / 2,
-            (start.z + end.z) / 2
+        let node = SCNNode(geometry: box)
+        // midpoint (no operator overloads)
+        node.position = SCNVector3(
+            (a.x + b.x) * CGFloat(0.5),
+            (a.y + b.y) * CGFloat(0.5),
+            (a.z + b.z) * CGFloat(0.5)
         )
-        
-        return lineNode
+        node.look(at: b, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, 1))
+        return node
     }
     
+    // MARK: - Default Lighting & Camera
     private func setupDefaultLighting() {
-        // Ambient light
-        let ambientLight = SCNLight()
-        ambientLight.type = .ambient
-        ambientLight.intensity = 300
-        let ambientNode = SCNNode()
-        ambientNode.light = ambientLight
-        scene.rootNode.addChildNode(ambientNode)
+        let light = SCNLight()
+        light.type = .ambient
+        light.intensity = 400.0 // This should be CGFloat by default
+        light.color = UXColor.white
         
-        // Key light
-        let keyLight = SCNLight()
-        keyLight.type = .directional
-        keyLight.intensity = 1000
-        keyLight.castsShadow = true
-        let keyLightNode = SCNNode()
-        keyLightNode.light = keyLight
-        keyLightNode.position = SCNVector3(10, 15, 10)
-        keyLightNode.look(at: SCNVector3(0, 0, 0))
-        scene.rootNode.addChildNode(keyLightNode)
-        lightNodes.append(keyLightNode)
+        let node = SCNNode()
+        node.light = light
+        rootNode.addChildNode(node)
     }
     
     private func addDefaultCamera() {
-        let defaultCamera = VirtualCamera(
-            name: "Overview",
-            position: SCNVector3(0, 5, 10),
-            target: SCNVector3(0, 0, 0)
-        )
-        virtualCameras.append(defaultCamera)
-        selectedCamera = defaultCamera
-        
-        // Set scene camera
-        scene.rootNode.addChildNode(defaultCamera.node)
+        // No assumption about your assets; create a basic one
+        let cam = VirtualCamera(name: "Default Cam", position: SCNVector3(0, 2, 5))
+        virtualCameras.append(cam)
+        rootNode.addChildNode(cam.node)
+        selectedCamera = cam
     }
     
-    private func createDefaultStudio() {
-        // Add a sample LED wall
-        let ledWall = LEDWallAsset.predefinedWalls[0]
-        addLEDWall(from: ledWall)
-        
-        // Add a sample camera
-        let camera = CameraAsset.predefinedCameras[0]
-        addCamera(from: camera)
-    }
+    // MARK: - Public Stubs
+    func exportScene()  { NSLog("[VSM] exportScene stub")  }
+    func importScene()  { NSLog("[VSM] importScene stub")  }
+    func renderPreview(){ NSLog("[VSM] renderPreview stub") }
+    func resetView()    { selectedCamera = nil }
     
-    // MARK: - Object Management
-    
-    func addLEDWall(from asset: LEDWallAsset) {
-        let ledWall = StudioObject(
-            id: UUID(),
-            name: asset.name,
-            type: .ledWall,
-            position: SCNVector3(0, asset.height/2, -5),
-            rotation: SCNVector3(0, 0, 0),
-            scale: SCNVector3(1, 1, 1)
-        )
-        
-        let geometry = SCNBox(
-            width: CGFloat(asset.width),
-            height: CGFloat(asset.height),
-            length: 0.1,
-            chamferRadius: 0
-        )
-        
-        let material = SCNMaterial()
-        material.diffuse.contents = NSColor.black
-        material.emission.contents = NSColor.blue.withAlphaComponent(0.3)
-        geometry.materials = [material]
-        
-        ledWall.node.geometry = geometry
-        ledWall.node.name = "LEDWall_\(ledWall.id)"
-        
-        scene.rootNode.addChildNode(ledWall.node)
-        studioObjects.append(ledWall)
-    }
-    
-    func addCamera(from asset: CameraAsset) {
-        let cameraObj = StudioObject(
-            id: UUID(),
-            name: asset.name,
-            type: .camera,
-            position: SCNVector3(0, 1.5, 5),
-            rotation: SCNVector3(0, 180, 0),
-            scale: SCNVector3(1, 1, 1)
-        )
-        
-        // Create camera representation
-        let cameraGeometry = SCNBox(width: 0.3, height: 0.2, length: 0.5, chamferRadius: 0.02)
-        let material = SCNMaterial()
-        material.diffuse.contents = NSColor.darkGray
-        cameraGeometry.materials = [material]
-        
-        cameraObj.node.geometry = cameraGeometry
-        cameraObj.node.name = "Camera_\(cameraObj.id)"
-        
-        // Add camera cone to show field of view
-        let cone = SCNPyramid(width: 2, height: 2, length: 3)
-        let coneMaterial = SCNMaterial()
-        coneMaterial.diffuse.contents = NSColor.yellow.withAlphaComponent(0.2)
-        coneMaterial.isDoubleSided = true
-        cone.materials = [coneMaterial]
-        
-        let coneNode = SCNNode(geometry: cone)
-        coneNode.position = SCNVector3(0, 0, -1.5)
-        coneNode.eulerAngles = SCNVector3(0, 0, Float.pi)
-        cameraObj.node.addChildNode(coneNode)
-        
-        scene.rootNode.addChildNode(cameraObj.node)
-        studioObjects.append(cameraObj)
-        
-        // Add to virtual cameras
-        let virtualCam = VirtualCamera(
-            name: asset.name,
-            position: cameraObj.position,
-            target: SCNVector3(0, 0, 0)
-        )
-        virtualCameras.append(virtualCam)
-    }
-    
-    func addSetPiece(from asset: SetPieceAsset) {
-        let setPiece = StudioObject(
-            id: UUID(),
-            name: asset.name,
-            type: .setPiece,
-            position: SCNVector3(Float.random(in: -3...3), 0.5, Float.random(in: -3...3)),
-            rotation: SCNVector3(0, Float.random(in: 0...360), 0),
-            scale: SCNVector3(1, 1, 1)
-        )
-        
-        let geometry = SCNBox(width: 1, height: 1, length: 1, chamferRadius: 0.1)
-        let material = SCNMaterial()
-        material.diffuse.contents = asset.color
-        geometry.materials = [material]
-        
-        setPiece.node.geometry = geometry
-        setPiece.node.name = "SetPiece_\(setPiece.id)"
-        
-        scene.rootNode.addChildNode(setPiece.node)
-        studioObjects.append(setPiece)
-    }
-    
-    func addCamera() {
-        let newCamera = VirtualCamera(
-            name: "Camera \(virtualCameras.count + 1)",
-            position: SCNVector3(0, 2, 8),
-            target: SCNVector3(0, 0, 0)
-        )
-        
-        virtualCameras.append(newCamera)
-        scene.rootNode.addChildNode(newCamera.node)
-    }
-    
-    func addObject(type: StudioTool, at position: SCNVector3) {
+    // MARK: - Object Ops
+    func addObject(type: StudioTool, at pos: SCNVector3) {
         switch type {
         case .ledWall:
-            let asset = LEDWallAsset.predefinedWalls.randomElement()!
-            addLEDWall(from: asset)
+            if let asset = LEDWallAsset.predefinedWalls.first {
+                addLEDWall(from: asset, at: pos)
+            }
         case .camera:
-            let asset = CameraAsset.predefinedCameras.randomElement()!
-            addCamera(from: asset)
+            if let asset = CameraAsset.predefinedCameras.first {
+                addCamera(from: asset, at: pos)
+            }
         case .setPiece:
-            let asset = SetPieceAsset.predefinedPieces.randomElement()!
-            addSetPiece(from: asset)
-        default:
+            if let asset = SetPieceAsset.predefinedPieces.first {
+                addSetPiece(from: asset, at: pos)
+            }
+        case .light:
+            if let asset = LightAsset.predefinedLights.first {
+                addLight(from: asset, at: pos)
+            }
+        case .select:
             break
         }
     }
     
-    func deleteObject(_ object: StudioObject) {
-        object.node.removeFromParentNode()
-        studioObjects.removeAll { $0.id == object.id }
+    func deleteObject(_ obj: StudioObject) {
+        obj.node.removeFromParentNode()
+        studioObjects.removeAll { $0.id == obj.id }
     }
+    
+    func node(for obj: StudioObject) -> SCNNode { obj.node }
     
     func getObject(from node: SCNNode) -> StudioObject? {
-        return studioObjects.first { $0.node == node }
+        studioObjects.first { isNode(node, descendantOf: $0.node) }
     }
     
-    func selectCamera(_ camera: VirtualCamera) {
-        selectedCamera = camera
+    func updateObjectTransform(_ obj: StudioObject, from node: SCNNode) {
+        guard let idx = studioObjects.firstIndex(where: { $0.id == obj.id }) else { return }
+        studioObjects[idx].position = node.position
+        studioObjects[idx].rotation = node.eulerAngles
+        studioObjects[idx].scale    = node.scale
+    }
+    
+    // MARK: - Specific Adds
+    func addLEDWall(from asset: LEDWallAsset, at pos: SCNVector3) {
+        let plane = SCNPlane(width: CGFloat(asset.width), height: CGFloat(asset.height))
+        let mat = SCNMaterial()
+        mat.diffuse.contents = UXColor.black
+        plane.materials = [mat]
         
-        // Update all cameras' active state
-        for cam in virtualCameras {
-            cam.isActive = (cam.id == camera.id)
+        let obj = StudioObject(name: asset.name, type: .ledWall, position: pos)
+        obj.node.geometry = plane
+        obj.node.name = asset.name
+        
+        studioObjects.append(obj)
+        rootNode.addChildNode(obj.node)
+    }
+    
+    func addSetPiece(from asset: SetPieceAsset, at pos: SCNVector3) {
+        let box = SCNBox(width: CGFloat(asset.size.x),
+                         height: CGFloat(asset.size.y),
+                         length: CGFloat(asset.size.z),
+                         chamferRadius: 0)
+        let mat = SCNMaterial()
+        mat.diffuse.contents = asset.color
+        box.materials = [mat]
+        
+        let obj = StudioObject(name: asset.name, type: .setPiece, position: pos)
+        obj.node.geometry = box
+        obj.node.name = asset.name
+        
+        studioObjects.append(obj)
+        rootNode.addChildNode(obj.node)
+    }
+    
+    func addLight(from asset: LightAsset, at pos: SCNVector3) {
+        let scnLight = SCNLight()
+        switch asset.lightType.lowercased() {
+        case "directional": scnLight.type = .directional
+        case "spot":        scnLight.type = .spot
+        case "omni":        scnLight.type = .omni
+        default:            scnLight.type = .omni
         }
+        scnLight.intensity = CGFloat(asset.intensity)
+        scnLight.color = asset.color
+        
+        let obj = StudioObject(name: asset.name, type: .light, position: pos)
+        obj.node.light = scnLight
+        obj.node.name = asset.name
+        
+        studioObjects.append(obj)
+        rootNode.addChildNode(obj.node)
     }
     
-    // MARK: - Utility Functions
+    func addCamera(from asset: CameraAsset, at pos: SCNVector3) {
+        let vcam = VirtualCamera(name: asset.name, position: pos)
+        if let c = vcam.node.camera {
+            c.focalLength = CGFloat(asset.focalLength)
+        }
+        virtualCameras.append(vcam)
+        rootNode.addChildNode(vcam.node)
+    }
     
-    func worldPosition(from screenPoint: CGPoint, in sceneView: SCNView) -> SCNVector3 {
-        let results = sceneView.hitTest(screenPoint, options: [
-            SCNHitTestOption.searchMode: SCNHitTestSearchMode.all.rawValue
-        ])
+    func selectCamera(_ cam: VirtualCamera) {
+        for i in virtualCameras.indices {
+            virtualCameras[i].isActive = (virtualCameras[i].id == cam.id)
+        }
+        selectedCamera = cam
+    }
+    
+    func addSetPieceFromAsset(_ asset: SetPieceAsset, at position: SCNVector3) {
+        // Create geometry based on asset
+        let geometry: SCNGeometry
         
-        if let hit = results.first(where: { $0.node == floorNode }) {
-            return hit.worldCoordinates
+        switch asset.subcategory {
+        case .ledWalls:
+            geometry = SCNPlane(width: CGFloat(asset.size.x), height: CGFloat(asset.size.y))
+        case .furniture, .props:
+            geometry = SCNBox(width: CGFloat(asset.size.x), 
+                            height: CGFloat(asset.size.y), 
+                            length: CGFloat(asset.size.z), 
+                            chamferRadius: 0.05)
+        case .lighting:
+            geometry = SCNSphere(radius: CGFloat(max(asset.size.x, asset.size.y, asset.size.z)) / 4)
         }
         
-        // Fallback: project to floor plane
-        return SCNVector3(0, 0, 0)
-    }
-    
-    func resetView() {
-        // Reset to default camera position
-        if let defaultCam = virtualCameras.first {
-            selectedCamera = defaultCam
+        // Create material
+        let material = SCNMaterial()
+        material.diffuse.contents = asset.color
+        geometry.materials = [material]
+        
+        // Create studio object
+        let obj = StudioObject(name: asset.name, type: .setPiece, position: position)
+        obj.node.geometry = geometry
+        obj.node.name = asset.name
+        
+        // Special positioning for LED walls (vertical)
+        if asset.subcategory == .ledWalls {
+            obj.node.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
         }
-    }
-    
-    func exportScene() {
-        // TODO: Export scene to file
-        print("Exporting scene...")
-    }
-    
-    func importScene() {
-        // TODO: Import scene from file
-        print("Importing scene...")
-    }
-    
-    func renderPreview() {
-        // TODO: Render high-quality preview
-        print("Rendering preview...")
-    }
-}
-
-// MARK: - Data Models
-
-class StudioObject: ObservableObject, Identifiable {
-    let id: UUID
-    @Published var name: String
-    let type: StudioObjectType
-    @Published var position: SCNVector3
-    @Published var rotation: SCNVector3
-    @Published var scale: SCNVector3
-    
-    let node: SCNNode
-    
-    init(id: UUID = UUID(), name: String, type: StudioObjectType, position: SCNVector3, rotation: SCNVector3, scale: SCNVector3) {
-        self.id = id
-        self.name = name
-        self.type = type
-        self.position = position
-        self.rotation = rotation
-        self.scale = scale
-        self.node = SCNNode()
         
-        updateNodeTransform()
+        studioObjects.append(obj)
+        scene.rootNode.addChildNode(obj.node)
     }
     
-    private func updateNodeTransform() {
-        node.position = position
-        node.eulerAngles = rotation
-        node.scale = scale
+    // MARK: - Screen → World
+    func worldPosition(from screenPoint: CGPoint, in view: SCNView) -> SCNVector3 {
+        let near = view.unprojectPoint(SCNVector3(Float(screenPoint.x), Float(screenPoint.y), 0))
+        let far  = view.unprojectPoint(SCNVector3(Float(screenPoint.x), Float(screenPoint.y), 1))
+        let dir  = simd_normalize(simd_float3(Float(far.x - near.x), Float(far.y - near.y), Float(far.z - near.z)))
+        let origin = simd_float3(Float(near.x), Float(near.y), Float(near.z))
+        let t = -origin.y / dir.y
+        let hit = origin + dir * t
+        return SCNVector3(CGFloat(hit.x), CGFloat(hit.y), CGFloat(hit.z))
     }
-}
-
-enum StudioObjectType {
-    case ledWall, camera, setPiece, light
-}
-
-class VirtualCamera: ObservableObject, Identifiable {
-    let id = UUID()
-    @Published var name: String
-    @Published var position: SCNVector3
-    @Published var target: SCNVector3
-    @Published var isActive: Bool = false
     
-    let node: SCNNode
-    let camera: SCNCamera
-    
-    init(name: String, position: SCNVector3, target: SCNVector3) {
-        self.name = name
-        self.position = position
-        self.target = target
-        
-        self.camera = SCNCamera()
-        self.node = SCNNode()
-        
-        camera.fieldOfView = 60
-        camera.zNear = 0.1
-        camera.zFar = 1000
-        
-        node.camera = camera
-        node.position = position
-        node.look(at: target)
-    }
-}
-
-// MARK: - Asset Definitions
-
-struct LEDWallAsset: StudioAsset {
-    let id = UUID()
-    let name: String
-    let width: Float
-    let height: Float
-    let pixelPitch: Float
-    let resolution: CGSize
-    
-    var icon: String { "tv" }
-    var color: Color { .blue }
-    
-    static let predefinedWalls = [
-        LEDWallAsset(name: "Standard 4x3", width: 4, height: 3, pixelPitch: 2.6, resolution: CGSize(width: 1920, height: 1080)),
-        LEDWallAsset(name: "Wide 6x3", width: 6, height: 3, pixelPitch: 2.6, resolution: CGSize(width: 2880, height: 1080)),
-        LEDWallAsset(name: "Tall 4x5", width: 4, height: 5, pixelPitch: 2.6, resolution: CGSize(width: 1920, height: 1600)),
-        LEDWallAsset(name: "Massive 8x4", width: 8, height: 4, pixelPitch: 3.9, resolution: CGSize(width: 3840, height: 1920))
-    ]
-}
-
-struct CameraAsset: StudioAsset {
-    let id = UUID()
-    let name: String
-    let type: String
-    let focalLength: Float
-    
-    var icon: String { "video" }
-    var color: Color { .orange }
-    
-    static let predefinedCameras = [
-        CameraAsset(name: "Camera 1", type: "Broadcast", focalLength: 24),
-        CameraAsset(name: "Camera 2", type: "Cinema", focalLength: 35),
-        CameraAsset(name: "Camera 3", type: "Wide", focalLength: 16),
-        CameraAsset(name: "Camera 4", type: "Telephoto", focalLength: 85)
-    ]
-}
-
-struct SetPieceAsset: StudioAsset {
-    let id = UUID()
-    let name: String
-    let category: String
-    let size: SCNVector3
-    
-    var icon: String { "cube.box" }
-    var color: Color {
-        switch category {
-        case "Furniture": return .brown
-        case "Props": return .green
-        case "Staging": return .purple
-        default: return .gray
+    // MARK: - Local helpers (avoid global extensions)
+    private func isNode(_ node: SCNNode, descendantOf candidate: SCNNode) -> Bool {
+        var cur = node.parent
+        while let n = cur {
+            if n === candidate { return true }
+            cur = n.parent
         }
+        return false
     }
-    
-    static let predefinedPieces = [
-        SetPieceAsset(name: "Desk", category: "Furniture", size: SCNVector3(2, 0.8, 1)),
-        SetPieceAsset(name: "Chair", category: "Furniture", size: SCNVector3(0.6, 1.2, 0.6)),
-        SetPieceAsset(name: "Plant", category: "Props", size: SCNVector3(0.5, 1.5, 0.5)),
-        SetPieceAsset(name: "Podium", category: "Staging", size: SCNVector3(1, 1.2, 0.8)),
-        SetPieceAsset(name: "Backdrop", category: "Staging", size: SCNVector3(4, 3, 0.1)),
-        SetPieceAsset(name: "Truss", category: "Staging", size: SCNVector3(6, 0.3, 0.3))
-    ]
 }
