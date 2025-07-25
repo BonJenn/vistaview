@@ -38,6 +38,31 @@ final class VirtualStudioManager: ObservableObject {
         
         setupDefaultLighting()
         addDefaultCamera()
+        
+        // Add a test cube for debugging selection
+        addTestCube()
+    }
+    
+    private func addTestCube() {
+        // Create a large, obvious test cube
+        let box = SCNBox(width: 3, height: 3, length: 3, chamferRadius: 0.1)
+        let material = SCNMaterial()
+        material.diffuse.contents = UXColor.systemRed // Bright red
+        material.emission.contents = UXColor.systemRed.withAlphaComponent(0.2) // Slight glow
+        box.materials = [material]
+        
+        let obj = StudioObject(name: "DEBUG_CUBE", type: .setPiece, position: SCNVector3(0, 1.5, 0))
+        obj.node.geometry = box
+        obj.node.name = "DEBUG_CUBE"
+        obj.setupHighlightAfterGeometry()
+        
+        studioObjects.append(obj)
+        scene.rootNode.addChildNode(obj.node)
+        
+        print("🧪 Added large red DEBUG_CUBE at (0, 1.5, 0)")
+        print("   Cube node: \(obj.node)")
+        print("   Cube geometry: \(obj.node.geometry != nil)")
+        print("   Total objects in scene: \(studioObjects.count)")
     }
     
     // MARK: - Floor & Grid
@@ -143,7 +168,24 @@ final class VirtualStudioManager: ObservableObject {
     func node(for obj: StudioObject) -> SCNNode { obj.node }
     
     func getObject(from node: SCNNode) -> StudioObject? {
-        studioObjects.first { isNode(node, descendantOf: $0.node) }
+        print("🔍 Looking for object from node: \(node.name ?? "unnamed")")
+        print("   Node geometry: \(node.geometry != nil)")
+        print("   Checking \(studioObjects.count) studio objects...")
+        
+        for obj in studioObjects {
+            print("   - Checking object: \(obj.name)")
+            if isNode(node, descendantOf: obj.node) {
+                print("   ✅ Found match: \(obj.name)")
+                return obj
+            }
+            if node === obj.node {
+                print("   ✅ Direct node match: \(obj.name)")
+                return obj
+            }
+        }
+        
+        print("   ❌ No studio object found for node")
+        return nil
     }
     
     func updateObjectTransform(_ obj: StudioObject, from node: SCNNode) {
@@ -163,9 +205,12 @@ final class VirtualStudioManager: ObservableObject {
         let obj = StudioObject(name: asset.name, type: .ledWall, position: pos)
         obj.node.geometry = plane
         obj.node.name = asset.name
+        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
+        
+        print("➕ Added LED Wall: \(asset.name) at \(pos)")
     }
     
     func addSetPiece(from asset: SetPieceAsset, at pos: SCNVector3) {
@@ -180,9 +225,12 @@ final class VirtualStudioManager: ObservableObject {
         let obj = StudioObject(name: asset.name, type: .setPiece, position: pos)
         obj.node.geometry = box
         obj.node.name = asset.name
+        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
+        
+        print("➕ Added Set Piece: \(asset.name) at \(pos)")
     }
     
     func addLight(from asset: LightAsset, at pos: SCNVector3) {
@@ -196,12 +244,23 @@ final class VirtualStudioManager: ObservableObject {
         scnLight.intensity = CGFloat(asset.intensity)
         scnLight.color = asset.color
         
+        // Create a small visual representation for lights
+        let sphere = SCNSphere(radius: 0.2)
+        let mat = SCNMaterial()
+        mat.diffuse.contents = asset.color
+        mat.emission.contents = asset.color.withAlphaComponent(0.5)
+        sphere.materials = [mat]
+        
         let obj = StudioObject(name: asset.name, type: .light, position: pos)
+        obj.node.geometry = sphere // Add geometry so it can be selected
         obj.node.light = scnLight
         obj.node.name = asset.name
+        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
+        
+        print("➕ Added Light: \(asset.name) at \(pos)")
     }
     
     func addCamera(from asset: CameraAsset, at pos: SCNVector3) {
@@ -245,6 +304,7 @@ final class VirtualStudioManager: ObservableObject {
         let obj = StudioObject(name: asset.name, type: .setPiece, position: position)
         obj.node.geometry = geometry
         obj.node.name = asset.name
+        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
         
         // Special positioning for LED walls (vertical)
         if asset.subcategory == .ledWalls {
@@ -253,6 +313,8 @@ final class VirtualStudioManager: ObservableObject {
         
         studioObjects.append(obj)
         scene.rootNode.addChildNode(obj.node)
+        
+        print("➕ Added Set Piece from Asset: \(asset.name) at \(position)")
     }
     
     // MARK: - Screen → World

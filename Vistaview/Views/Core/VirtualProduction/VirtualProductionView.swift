@@ -100,6 +100,27 @@ struct VirtualProductionView: View {
             cancelTransform()
             return .handled
         }
+        .onKeyPress("t") {
+            // Test key - manually select the debug cube
+            if let testCube = studioManager.studioObjects.first(where: { $0.name == "DEBUG_CUBE" }) {
+                print("🧪 Manually selecting DEBUG_CUBE via 't' key")
+                
+                // Clear other selections
+                for obj in studioManager.studioObjects {
+                    obj.setSelected(false)
+                }
+                
+                // Select test cube
+                selectedObject = testCube
+                testCube.setSelected(true)
+                selectedObjects = [testCube.id]
+                
+                print("✅ Test cube selected: \(testCube.isSelected)")
+            } else {
+                print("❌ No DEBUG_CUBE found")
+            }
+            return .handled
+        }
         .onChange(of: selectedTool) { _, newValue in
             if newValue == .select { selectedObject = nil }
         }
@@ -605,7 +626,11 @@ struct VirtualProductionView: View {
         guard !objects.isEmpty else { return }
         
         selectedTool = .select // Ensure we're in select mode
-        transformController.startTransform(.move, objects: objects, startPoint: .zero)
+        // Start in free mode, user can then press X/Y/Z to constrain
+        transformController.startTransform(.move, objects: objects, startPoint: .zero, scene: studioManager.scene)
+        
+        // Set initial axis to free so user sees no constraint line initially
+        transformController.setAxis(.free)
     }
     
     private func startRotateMode() {
@@ -613,7 +638,8 @@ struct VirtualProductionView: View {
         guard !objects.isEmpty else { return }
         
         selectedTool = .select
-        transformController.startTransform(.rotate, objects: objects, startPoint: .zero)
+        transformController.startTransform(.rotate, objects: objects, startPoint: .zero, scene: studioManager.scene)
+        transformController.setAxis(.free)
     }
     
     private func startScaleMode() {
@@ -621,11 +647,26 @@ struct VirtualProductionView: View {
         guard !objects.isEmpty else { return }
         
         selectedTool = .select
-        transformController.startTransform(.scale, objects: objects, startPoint: .zero)
+        transformController.startTransform(.scale, objects: objects, startPoint: .zero, scene: studioManager.scene)
+        transformController.setAxis(.free)
     }
     
     private func setTransformAxis(_ axis: TransformController.TransformAxis) {
-        guard transformController.isActive else { return }
+        let objects = getSelectedStudioObjects()
+        guard !objects.isEmpty else { 
+            // No objects selected, but user pressed axis key - start grab mode on any selected object
+            if let selectedObj = selectedObject {
+                startGrabMode()
+                transformController.setAxis(axis)
+            }
+            return 
+        }
+        
+        if !transformController.isActive {
+            // Start grab mode if not already active
+            startGrabMode()
+        }
+        
         transformController.setAxis(axis)
     }
     
@@ -634,8 +675,7 @@ struct VirtualProductionView: View {
     }
     
     private func cancelTransform() {
-        let objects = getSelectedStudioObjects()
-        transformController.cancelTransform(objects: objects)
+        transformController.cancelTransform()
     }
     
     private func getSelectedStudioObjects() -> [StudioObject] {
@@ -685,94 +725,384 @@ struct VirtualStudioSceneView: NSViewRepresentable {
     @ObservedObject var transformController: TransformController
     @Binding var selectedObjects: Set<UUID>
     
-    func makeNSView(context: Context) -> SCNView {
-        let scnView = SCNView()
+    func makeNSView(context: Context) -> CustomSCNView {
+        let scnView = CustomSCNView()
         scnView.scene = studioManager.scene
         
-        // Enable built-in camera controls for multitouch support
-        scnView.allowsCameraControl = true
+        // Disable built-in camera controls so we can implement Y-axis rotation
+        scnView.allowsCameraControl = false
         scnView.backgroundColor = .black
         scnView.autoenablesDefaultLighting = true
         scnView.showsStatistics = false
         
-        // Setup default camera if needed
-        if scnView.pointOfView == nil {
-            let cameraNode = SCNNode()
-            let camera = SCNCamera()
-            camera.fieldOfView = 60
-            camera.zNear = 0.1
-            camera.zFar = 1000
-            cameraNode.camera = camera
-            cameraNode.position = SCNVector3(10, 10, 10)
-            cameraNode.look(at: SCNVector3(0, 0, 0))
-            
-            studioManager.scene.rootNode.addChildNode(cameraNode)
-            scnView.pointOfView = cameraNode
+        // Enable first responder to receive scroll events
+        scnView.wantsLayer = true
+        DispatchQueue.main.async {
+            _ = scnView.becomeFirstResponder()
         }
         
-        // Add minimal click gesture for object selection/placement
-        let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
-        scnView.addGestureRecognizer(clickGesture)
+        // Setup camera controller
+        context.coordinator.setupCamera(in: scnView)
+        context.coordinator.setupGestures(for: scnView)
+        
+        // Set the coordinator as the custom view's gesture handler
+        scnView.gestureHandler = context.coordinator
         
         return scnView
     }
     
-    func updateNSView(_ nsView: SCNView, context: Context) {
-        // Keep camera controls enabled
-        nsView.allowsCameraControl = true
+    func updateNSView(_ nsView: CustomSCNView, context: Context) {
+        // Keep camera controls disabled since we're handling it ourselves
+        nsView.allowsCameraControl = false
     }
     
     func makeCoordinator() -> Coordinator {
         Coordinator(self, studioManager: studioManager)
     }
     
-    final class Coordinator: NSObject {
+    // Custom SCNView that handles trackpad scroll events
+    class CustomSCNView: SCNView {
+        weak var gestureHandler: Coordinator?
+        
+        override var acceptsFirstResponder: Bool {
+            return true
+        }
+        
+        override func becomeFirstResponder() -> Bool {
+            return true
+        }
+        
+        override func awakeFromNib() {
+            super.awakeFromNib()
+            // Ensure we can receive scroll events
+            self.wantsLayer = true
+        }
+        
+        override func scrollWheel(with event: NSEvent) {
+            // Always handle trackpad gestures, regardless of phase
+            let deltaX = Float(event.scrollingDeltaX)
+            let deltaY = Float(event.scrollingDeltaY)
+            
+            // Check if there's actual movement
+            if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
+                gestureHandler?.handleTrackpadScroll(deltaX: deltaX, deltaY: deltaY)
+            } else {
+                // Pass through if no movement
+                super.scrollWheel(with: event)
+            }
+        }
+    }
+    
+    @MainActor
+    final class Coordinator: NSObject, NSGestureRecognizerDelegate {
         let parent: VirtualStudioSceneView
         let studioManager: VirtualStudioManager
+        
+        // Camera control properties
+        private var cameraNode: SCNNode!
+        private var cameraDistance: Float = 15.0
+        private var cameraAzimuth: Float = 0.0      // Y-axis rotation (horizontal)
+        private var cameraElevation: Float = 0.3    // X-axis rotation (vertical)
+        private var focusPoint = SCNVector3(0, 1, 0)
         
         init(_ parent: VirtualStudioSceneView, studioManager: VirtualStudioManager) {
             self.parent = parent
             self.studioManager = studioManager
         }
         
+        func setupCamera(in scnView: SCNView) {
+            // Remove any existing camera
+            studioManager.scene.rootNode.childNode(withName: "viewport_camera", recursively: true)?.removeFromParentNode()
+            
+            let camera = SCNCamera()
+            camera.fieldOfView = 60
+            camera.zNear = 0.1
+            camera.zFar = 1000
+            camera.automaticallyAdjustsZRange = true
+            
+            cameraNode = SCNNode()
+            cameraNode.camera = camera
+            cameraNode.name = "viewport_camera"
+            
+            studioManager.scene.rootNode.addChildNode(cameraNode)
+            scnView.pointOfView = cameraNode
+            
+            updateCameraPosition()
+        }
+        
+        func setupGestures(for view: SCNView) {
+            print("🎮 Setting up gestures for SCNView...")
+            
+            // Magnify gesture for zooming (this already works)
+            let magnifyGesture = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnify(_:)))
+            magnifyGesture.delegate = self
+            view.addGestureRecognizer(magnifyGesture)
+            print("   ✅ Added magnify gesture")
+            
+            // Click gesture for selection - MAKE SURE THIS IS ADDED
+            let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
+            clickGesture.delegate = self
+            clickGesture.numberOfClicksRequired = 1
+            clickGesture.buttonMask = 0x1 // Left mouse button only
+            view.addGestureRecognizer(clickGesture)
+            print("   ✅ Added click gesture")
+            
+            // Pan gesture for when user drags (shift to pan focus point)
+            let panGesture = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+            panGesture.delegate = self
+            view.addGestureRecognizer(panGesture)
+            print("   ✅ Added pan gesture")
+            
+            print("   🎮 Total gestures on view: \(view.gestureRecognizers.count)")
+        }
+        
+        func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool {
+            print("🤝 Gesture recognition: \(type(of: gestureRecognizer)) with \(type(of: otherGestureRecognizer))")
+            return true
+        }
+        
+        // Handle trackpad scroll for orbiting
+        func handleTrackpadScroll(deltaX: Float, deltaY: Float) {
+            let sensitivity: Float = 0.01
+            let deltaAzimuth = deltaX * sensitivity     // Horizontal = Y-axis rotation
+            let deltaElevation = deltaY * sensitivity   // Vertical = X-axis rotation
+            
+            cameraAzimuth += deltaAzimuth
+            cameraElevation += deltaElevation
+            
+            // Clamp elevation to prevent flipping
+            let maxElevation: Float = Float.pi / 2 - 0.1
+            cameraElevation = max(-maxElevation, min(maxElevation, cameraElevation))
+            
+            updateCameraPosition()
+        }
+        
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
-            guard let scnView = gesture.view as? SCNView else { return }
-            let point = gesture.location(in: scnView)
+            guard let view = gesture.view as? SCNView else { 
+                print("❌ No SCNView in click gesture")
+                return 
+            }
+            let point = gesture.location(in: view)
+            
+            print("🖱️ Click detected at: \(point)")
+            print("🎮 Current tool: \(parent.selectedTool)")
+            print("🏠 Scene has \(studioManager.studioObjects.count) objects")
             
             Task { @MainActor in
+                // Always do hit testing regardless of tool
+                let hits = view.hitTest(point, options: [
+                    SCNHitTestOption.boundingBoxOnly: false,
+                    SCNHitTestOption.firstFoundOnly: false,
+                    SCNHitTestOption.ignoreHiddenNodes: true
+                ])
+                print("🎯 Hit test results: \(hits.count) hits")
+                
+                for (index, hit) in hits.enumerated() {
+                    print("  Hit \(index): node=\(hit.node.name ?? "unnamed"), geometry=\(hit.node.geometry != nil)")
+                }
+                
+                // Check if we're confirming a transform
                 if self.parent.transformController.isActive {
+                    print("✅ Confirming active transform")
                     self.parent.transformController.confirmTransform()
                     return
                 }
                 
                 switch self.parent.selectedTool {
                 case .select:
-                    let hits = scnView.hitTest(point, options: nil)
-                    if let hit = hits.first, let obj = self.studioManager.getObject(from: hit.node) {
-                        self.parent.selectedObject = obj
+                    if let hit = hits.first {
+                        print("🔍 Processing hit on node: \(hit.node.name ?? "unnamed")")
                         
-                        if NSEvent.modifierFlags.contains(.command) {
-                            if self.parent.selectedObjects.contains(obj.id) {
-                                self.parent.selectedObjects.remove(obj.id)
+                        // Try to find the studio object
+                        if let obj = self.studioManager.getObject(from: hit.node) {
+                            print("✅ Found studio object: \(obj.name) (ID: \(obj.id))")
+                            
+                            // Check if transform controller wants to handle this click
+                            if self.parent.transformController.handleMouseDown(at: point, on: obj) {
+                                print("🎮 Transform controller handling click")
+                                return
+                            }
+                            
+                            // Clear all previous selections
+                            for otherObj in self.studioManager.studioObjects {
+                                if otherObj.id != obj.id {
+                                    otherObj.setSelected(false)
+                                    print("🔄 Cleared selection for: \(otherObj.name)")
+                                }
+                            }
+                            
+                            // Select the clicked object
+                            self.parent.selectedObject = obj
+                            obj.setSelected(true)
+                            print("🎯 Selected object: \(obj.name)")
+                            
+                            // Focus camera on selected object
+                            self.focusPoint = obj.position
+                            self.updateCameraPosition()
+                            
+                            // Update selection set
+                            if NSEvent.modifierFlags.contains(.command) {
+                                if self.parent.selectedObjects.contains(obj.id) {
+                                    self.parent.selectedObjects.remove(obj.id)
+                                    obj.setSelected(false)
+                                    print("➖ Removed from selection: \(obj.name)")
+                                } else {
+                                    self.parent.selectedObjects.insert(obj.id)
+                                    obj.setSelected(true)
+                                    print("➕ Added to selection: \(obj.name)")
+                                }
                             } else {
-                                self.parent.selectedObjects.insert(obj.id)
+                                self.parent.selectedObjects = [obj.id]
+                                print("🔄 Set single selection: \(obj.name)")
                             }
                         } else {
-                            self.parent.selectedObjects = [obj.id]
+                            print("❌ Hit node but no studio object found")
+                            print("   Node name: \(hit.node.name ?? "unnamed")")
+                            print("   Node has geometry: \(hit.node.geometry != nil)")
+                            print("   Node parent: \(hit.node.parent?.name ?? "no parent")")
                         }
                     } else {
+                        print("❌ No hits - clearing selection")
+                        // Clicked on empty space - clear selection
                         self.parent.selectedObject = nil
-                        if !NSEvent.modifierFlags.contains(.command) {
-                            self.parent.selectedObjects.removeAll()
+                        self.parent.selectedObjects.removeAll()
+                        
+                        // Clear all object selections
+                        for obj in self.studioManager.studioObjects {
+                            obj.setSelected(false)
                         }
                     }
                     
                 case .ledWall, .camera, .setPiece, .light:
-                    let worldPos = self.studioManager.worldPosition(from: point, in: scnView)
+                    let worldPos = self.studioManager.worldPosition(from: point, in: view)
                     self.parent.lastWorldPos = worldPos
                     self.studioManager.addObject(type: self.parent.selectedTool, at: worldPos)
+                    print("➕ Added object of type: \(self.parent.selectedTool) at \(worldPos)")
                 }
             }
+        }
+        
+        @objc func handlePan(_ gesture: NSPanGestureRecognizer) {
+            guard let view = gesture.view as? SCNView else { return }
+            
+            let translation = gesture.translation(in: view)
+            let velocity = gesture.velocity(in: view)
+            let currentPoint = gesture.location(in: view)
+            
+            // Handle transform controller drag first
+            if gesture.state == .began {
+                // Check if starting a drag on a selected object
+                let hits = view.hitTest(currentPoint, options: nil)
+                if let hit = hits.first, let obj = studioManager.getObject(from: hit.node) {
+                    if parent.transformController.handleMouseDown(at: currentPoint, on: obj) {
+                        return // Transform controller is handling this
+                    }
+                }
+            }
+            
+            if gesture.state == .changed {
+                // Check if transform controller is handling drag
+                if parent.transformController.axis != .free {
+                    parent.transformController.handleMouseDrag(to: currentPoint)
+                    if parent.transformController.isDragging {
+                        return // Transform controller is handling this
+                    }
+                }
+            }
+            
+            if gesture.state == .ended || gesture.state == .cancelled {
+                parent.transformController.handleMouseUp()
+                if parent.transformController.isDragging {
+                    return // Transform controller handled this
+                }
+            }
+            
+            // Check if we're in transform mode (keyboard initiated)
+            if parent.transformController.isActive && !parent.transformController.isDragging {
+                // Update transform with mouse movement (keyboard-initiated transform)
+                parent.transformController.updateTransformWithMouse(mousePos: currentPoint)
+                gesture.setTranslation(.zero, in: view)
+                return
+            }
+            
+            // Regular camera controls
+            if abs(velocity.x) > 50 || abs(velocity.y) > 50 {
+                // This looks like a scroll gesture - use for orbiting
+                let sensitivity: Float = 0.005
+                let deltaAzimuth = Float(translation.x) * sensitivity     // Horizontal = Y-axis rotation
+                let deltaElevation = -Float(translation.y) * sensitivity  // Vertical = X-axis rotation
+                
+                cameraAzimuth += deltaAzimuth
+                cameraElevation += deltaElevation
+                
+                // Clamp elevation
+                let maxElevation: Float = Float.pi / 2 - 0.1
+                cameraElevation = max(-maxElevation, min(maxElevation, cameraElevation))
+                
+                updateCameraPosition()
+                gesture.setTranslation(.zero, in: view)
+            } else if NSEvent.modifierFlags.contains(.shift) {
+                // Slow movement with Shift = pan focus point
+                handleCameraPan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            }
+        }
+        
+        @objc func handleMagnify(_ gesture: NSMagnificationGestureRecognizer) {
+            let zoomFactor = 1.0 + gesture.magnification
+            let newDistance = cameraDistance / Float(zoomFactor)
+            
+            cameraDistance = max(1.0, min(100.0, newDistance))
+            updateCameraPosition()
+            gesture.magnification = 0
+        }
+        
+        private func handleCameraPan(deltaX: Float, deltaY: Float) {
+            // Calculate right and up vectors from camera transform
+            let cameraTransform = cameraNode.worldTransform
+            let rightVector = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13)
+            let upVector = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23)
+            
+            let panScale = cameraDistance * 0.001
+            let panX = deltaX * panScale
+            let panY = deltaY * panScale
+            
+            // Break up the complex expression with proper type conversion
+            let rightMovement = SCNVector3(
+                -Float(rightVector.x) * panX,
+                -Float(rightVector.y) * panX,
+                -Float(rightVector.z) * panX
+            )
+            let upMovement = SCNVector3(
+                -Float(upVector.x) * panY,
+                -Float(upVector.y) * panY,
+                -Float(upVector.z) * panY
+            )
+            
+            focusPoint = SCNVector3(
+                focusPoint.x + CGFloat(rightMovement.x + upMovement.x),
+                focusPoint.y + CGFloat(rightMovement.y + upMovement.y),
+                focusPoint.z + CGFloat(rightMovement.z + upMovement.z)
+            )
+            
+            updateCameraPosition()
+        }
+        
+        private func updateCameraPosition() {
+            // Spherical to Cartesian conversion
+            // Azimuth rotates around Y-axis (horizontal movement)
+            // Elevation rotates around X-axis (vertical movement)
+            let x = cameraDistance * cos(cameraElevation) * sin(cameraAzimuth)
+            let y = cameraDistance * sin(cameraElevation)
+            let z = cameraDistance * cos(cameraElevation) * cos(cameraAzimuth)
+            
+            cameraNode.position = SCNVector3(
+                focusPoint.x + CGFloat(x),
+                focusPoint.y + CGFloat(y),
+                focusPoint.z + CGFloat(z)
+            )
+            
+            cameraNode.look(at: focusPoint, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
         }
     }
 }

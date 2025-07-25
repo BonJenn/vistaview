@@ -345,6 +345,10 @@ final class StudioObject: Identifiable, ObservableObject {
         self.node = SCNNode()
         
         updateNodeTransform()
+        // Don't setup highlight here - it will be called after geometry is set
+    }
+    
+    func setupHighlightAfterGeometry() {
         setupHighlightNode()
     }
     
@@ -375,22 +379,52 @@ final class StudioObject: Identifiable, ObservableObject {
         updateHighlight()
     }
     
-    private func updateHighlight() {
-        highlightNode?.isHidden = !isSelected && !isHighlighted
-    }
-    
     private func setupHighlightNode() {
-        // Create a wireframe highlight around the object
-        let highlightGeometry = SCNBox(width: 1.1, height: 1.1, length: 1.1, chamferRadius: 0)
+        // Try to get actual geometry bounds, fallback to default size
+        var highlightSize = SCNVector3(1.2, 1.2, 1.2) // Default size
+        
+        if let geometry = node.geometry {
+            let boundingBox = geometry.boundingBox
+            let size = SCNVector3(
+                boundingBox.max.x - boundingBox.min.x,
+                boundingBox.max.y - boundingBox.min.y,
+                boundingBox.max.z - boundingBox.min.z
+            )
+            
+            // Use actual object size + padding for highlight
+            let padding: Float = 0.3
+            highlightSize = SCNVector3(
+                max(1.0, Float(size.x) + padding),
+                max(1.0, Float(size.y) + padding),
+                max(1.0, Float(size.z) + padding)
+            )
+        }
+        
+        // Create a more prominent selection outline
+        let highlightGeometry = SCNBox(
+            width: CGFloat(highlightSize.x),
+            height: CGFloat(highlightSize.y),
+            length: CGFloat(highlightSize.z),
+            chamferRadius: 0
+        )
         let highlightMaterial = SCNMaterial()
         highlightMaterial.fillMode = .lines
-        highlightMaterial.diffuse.contents = PlatformColor.systemBlue
-        highlightMaterial.emission.contents = PlatformColor.systemBlue.withAlphaComponent(0.3)
+        highlightMaterial.diffuse.contents = PlatformColor.systemOrange // Orange for selection
+        highlightMaterial.emission.contents = PlatformColor.systemOrange.withAlphaComponent(0.8)
+        highlightMaterial.isDoubleSided = true
         highlightGeometry.materials = [highlightMaterial]
         
         highlightNode = SCNNode(geometry: highlightGeometry)
         highlightNode?.isHidden = true
         node.addChildNode(highlightNode!)
+        
+        print("🔧 Setup highlight node with size: \(highlightSize)")
+    }
+    
+    private func updateHighlight() {
+        let shouldShow = isSelected || isHighlighted
+        highlightNode?.isHidden = !shouldShow
+        print("👁️ Highlight visibility for \(name): \(shouldShow) (selected: \(isSelected), highlighted: \(isHighlighted))")
     }
 }
 
