@@ -9,23 +9,32 @@ import SceneKit
 #if os(macOS)
 struct Viewport3DView: NSViewRepresentable {
     let studioManager: VirtualStudioManager
-    @Binding var selectedTool: StudioToolType
-    @Binding var transformMode: TransformMode
-    @Binding var viewMode: ViewMode
+    @Binding var selectedTool: StudioTool
+    @Binding var transformMode: TransformController.TransformMode
+    @Binding var viewMode: ViewportViewMode
     @Binding var selectedObjects: Set<UUID>
     @Binding var snapToGrid: Bool
     @Binding var gridSize: Float
+    
+    // Add missing enum
+    enum ViewportViewMode {
+        case wireframe, solid, material
+    }
     
     func makeNSView(context: Context) -> SCNView {
         let scnView = SCNView()
         scnView.scene = studioManager.scene
         scnView.backgroundColor = NSColor.black
+        
+        // Enable built-in camera controls for multitouch support
         scnView.allowsCameraControl = true
         scnView.autoenablesDefaultLighting = false
         scnView.showsStatistics = false
-        scnView.delegate = context.coordinator
         
-        // Add gesture recognizers
+        // Setup default camera
+        setupDefaultCamera(scnView)
+        
+        // Add simple click gesture for object interaction
         let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
         scnView.addGestureRecognizer(clickGesture)
         
@@ -36,13 +45,13 @@ struct Viewport3DView: NSViewRepresentable {
         // Enable drag and drop
         scnView.registerForDraggedTypes([.string])
         
-        // Setup default camera
-        setupDefaultCamera(scnView)
-        
         return scnView
     }
     
     func updateNSView(_ nsView: SCNView, context: Context) {
+        // Keep camera controls enabled
+        nsView.allowsCameraControl = true
+        
         // Update view mode
         switch viewMode {
         case .wireframe:
@@ -78,10 +87,10 @@ struct Viewport3DView: NSViewRepresentable {
         scnView.pointOfView = cameraNode
     }
     
-    final class Coordinator: NSObject, SCNSceneRendererDelegate, NSDraggingDestination {
+    final class Coordinator: NSObject, NSDraggingDestination {
         let parent: Viewport3DView
-        var selectedTool: StudioToolType = .select
-        var transformMode: TransformMode = .move
+        var selectedTool: StudioTool = .select
+        var transformMode: TransformController.TransformMode = .move
         var selectedObjects: Set<UUID> = []
         var snapToGrid: Bool = true
         var gridSize: Float = 1.0
@@ -224,26 +233,16 @@ struct Viewport3DView: NSViewRepresentable {
             // Snap to grid if enabled
             let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
             
-            // Convert StudioToolType to StudioTool
-            let studioTool: StudioTool
-            switch selectedTool {
-            case .select: studioTool = .select
-            case .ledWall: studioTool = .ledWall
-            case .camera: studioTool = .camera
-            case .setPiece: studioTool = .setPiece
-            case .light: studioTool = .light
-            }
-            
-            // Place the object
-            parent.studioManager.addObject(type: studioTool, at: finalPos)
+            // Use StudioTool directly - no conversion needed
+            parent.studioManager.addObject(type: selectedTool, at: finalPos)
         }
         
         private func snapToGridPosition(_ position: SCNVector3) -> SCNVector3 {
-            let gridStep = CGFloat(gridSize)
+            let gridStep = Float(gridSize)
             return SCNVector3(
-                round(position.x / gridStep) * gridStep,
-                position.y, // Don't snap Y to allow vertical positioning
-                round(position.z / gridStep) * gridStep
+                Float(round(position.x / CGFloat(gridStep)) * CGFloat(gridStep)),
+                Float(position.y), // Don't snap Y to allow vertical positioning
+                Float(round(position.z / CGFloat(gridStep)) * CGFloat(gridStep))
             )
         }
     }

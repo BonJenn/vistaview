@@ -137,7 +137,7 @@ struct ContentView: View {
             Group {
                 switch productionMode {
                 case .virtual:
-                    BlenderStudioView()
+                    VirtualProductionView()
                         .environmentObject(productionManager.studioManager)
                 case .live:
                     EnhancedLiveProductionView(

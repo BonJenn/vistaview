@@ -325,8 +325,10 @@ final class StudioObject: Identifiable, ObservableObject {
     @Published var scale: SCNVector3
     @Published var isVisible: Bool = true
     @Published var isSelected: Bool = false
+    @Published var isHighlighted: Bool = false
     
     let node: SCNNode
+    private var highlightNode: SCNNode?
     
     init(id: UUID = UUID(),
          name: String,
@@ -343,6 +345,7 @@ final class StudioObject: Identifiable, ObservableObject {
         self.node = SCNNode()
         
         updateNodeTransform()
+        setupHighlightNode()
     }
     
     func updateNodeTransform() {
@@ -350,6 +353,9 @@ final class StudioObject: Identifiable, ObservableObject {
         node.eulerAngles = rotation
         node.scale = scale
         node.isHidden = !isVisible
+        
+        // Update highlight visibility
+        updateHighlight()
     }
     
     func updateFromNode() {
@@ -357,6 +363,34 @@ final class StudioObject: Identifiable, ObservableObject {
         rotation = node.eulerAngles
         scale = node.scale
         isVisible = !node.isHidden
+    }
+    
+    func setSelected(_ selected: Bool) {
+        isSelected = selected
+        updateHighlight()
+    }
+    
+    func setHighlighted(_ highlighted: Bool) {
+        isHighlighted = highlighted
+        updateHighlight()
+    }
+    
+    private func updateHighlight() {
+        highlightNode?.isHidden = !isSelected && !isHighlighted
+    }
+    
+    private func setupHighlightNode() {
+        // Create a wireframe highlight around the object
+        let highlightGeometry = SCNBox(width: 1.1, height: 1.1, length: 1.1, chamferRadius: 0)
+        let highlightMaterial = SCNMaterial()
+        highlightMaterial.fillMode = .lines
+        highlightMaterial.diffuse.contents = PlatformColor.systemBlue
+        highlightMaterial.emission.contents = PlatformColor.systemBlue.withAlphaComponent(0.3)
+        highlightGeometry.materials = [highlightMaterial]
+        
+        highlightNode = SCNNode(geometry: highlightGeometry)
+        highlightNode?.isHidden = true
+        node.addChildNode(highlightNode!)
     }
 }
 

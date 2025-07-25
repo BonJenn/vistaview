@@ -22,6 +22,14 @@ class TransformController: ObservableObject {
     enum TransformMode {
         case move, rotate, scale
         
+        var rawValue: String {
+            switch self {
+            case .move: return "move"
+            case .rotate: return "rotate"
+            case .scale: return "scale"
+            }
+        }
+        
         var instruction: String {
             switch self {
             case .move: return "Move: Mouse to position, X/Y/Z to constrain, Enter to confirm, Esc to cancel"
