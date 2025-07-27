@@ -73,18 +73,57 @@ struct DraggableResizableWindow<Content: View>: View {
                             Spacer()
                             HStack {
                                 Spacer()
-                                Rectangle()
-                                    .fill(.white.opacity(0.3))
-                                    .frame(width: 20, height: 20)
-                                    .background(.blue.opacity(0.5))
-                                    .gesture(
-                                        DragGesture()
-                                            .onChanged { value in
-                                                let newWidth = max(250, windowSize.width + value.translation.width)
-                                                let newHeight = max(200, windowSize.height + value.translation.height)
-                                                windowSize = CGSize(width: newWidth, height: newHeight)
-                                            }
-                                    )
+                                ZStack {
+                                    // Resize corner with diagonal lines
+                                    VStack(spacing: 2) {
+                                        HStack(spacing: 2) {
+                                            Spacer()
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                        }
+                                        HStack(spacing: 2) {
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                        }
+                                        HStack(spacing: 2) {
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                            Rectangle()
+                                                .fill(.white.opacity(0.4))
+                                                .frame(width: 1, height: 1)
+                                        }
+                                    }
+                                }
+                                .frame(width: 12, height: 12)
+                                .background(.clear)
+                                .contentShape(Rectangle().size(width: 20, height: 20)) // Larger hit area
+                                .onHover { hovering in
+                                    DispatchQueue.main.async {
+                                        if hovering {
+                                            NSCursor.resizeUpDown.set()
+                                        } else {
+                                            NSCursor.arrow.set()
+                                        }
+                                    }
+                                }
+                                .gesture(
+                                    DragGesture()
+                                        .onChanged { value in
+                                            let newWidth = max(250, windowSize.width + value.translation.width)
+                                            let newHeight = max(200, windowSize.height + value.translation.height)
+                                            windowSize = CGSize(width: newWidth, height: newHeight)
+                                        }
+                                )
+                                .padding(4) // Add some padding from the edge
                             }
                         }
                     }

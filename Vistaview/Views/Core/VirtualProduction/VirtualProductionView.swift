@@ -186,6 +186,7 @@ struct VirtualProductionView: View {
             if showingObjectBrowser {
                 DraggableResizableWindow(title: "Studio Objects") {
                     VisibleObjectBrowser()
+                        .environmentObject(studioManager) // Pass the studio manager
                 }
             }
             

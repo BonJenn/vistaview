@@ -50,8 +50,12 @@ struct Viewport3DView: NSViewRepresentable {
         // Set the coordinator as the custom view's gesture handler
         scnView.gestureHandler = context.coordinator
         
-        // Enable drag and drop
+        // IMPORTANT: Set the coordinator as the drag destination
+        context.coordinator.currentSCNView = scnView
+        
+        // Enable drag and drop - do this AFTER setting up the coordinator
         scnView.registerForDraggedTypes([.string])
+        print("🎯 Viewport3DView registered SCNView for drag types")
         
         return scnView
     }
@@ -117,6 +121,7 @@ struct Viewport3DView: NSViewRepresentable {
         
         init(_ parent: Viewport3DView) {
             self.parent = parent
+            super.init()
         }
         
         func setupCamera(in scnView: SCNView) {
@@ -374,12 +379,12 @@ struct Viewport3DView: NSViewRepresentable {
             guard let scnView = gesture.view as? SCNView else { return }
             let location = gesture.location(in: scnView)
             
-            Task { @MainActor in
-                switch selectedTool {
+            DispatchQueue.main.async {
+                switch self.selectedTool {
                 case .select:
-                    handleSelection(at: location, in: scnView)
+                    self.handleSelection(at: location, in: scnView)
                 case .ledWall, .camera, .setPiece, .light:
-                    handleObjectPlacement(at: location, in: scnView)
+                    self.handleObjectPlacement(at: location, in: scnView)
                 }
             }
         }
@@ -388,12 +393,11 @@ struct Viewport3DView: NSViewRepresentable {
             guard let scnView = gesture.view as? SCNView else { return }
             let location = gesture.location(in: scnView)
             
-            Task { @MainActor in
-                showContextMenu(at: location, in: scnView)
+            DispatchQueue.main.async {
+                self.showContextMenu(at: location, in: scnView)
             }
         }
         
-        @MainActor
         private func showContextMenu(at point: CGPoint, in scnView: SCNView) {
             let menu = NSMenu()
             
@@ -430,15 +434,30 @@ struct Viewport3DView: NSViewRepresentable {
         // MARK: - NSDraggingDestination
         
         func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            return .copy
+            print("🎯 COORDINATOR: Drag session entered 3D viewport")
+            
+            // Check if we have string data (asset ID)
+            if sender.draggingPasteboard.canReadObject(forClasses: [NSString.self], options: nil) {
+                print("🎯 COORDINATOR: Valid drag data detected")
+                return .copy
+            }
+            
+            print("🎯 COORDINATOR: No valid drag data found")
+            return []
         }
         
         func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-            return .copy
+            // Continue to accept the drag as long as we have valid data
+            if sender.draggingPasteboard.canReadObject(forClasses: [NSString.self], options: nil) {
+                return .copy
+            }
+            return []
         }
         
         func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
             let location = sender.draggingLocation
+            
+            print("🎯 COORDINATOR: Performing drag operation at location: \(location)")
             
             // Use the stored SCNView reference
             guard let scnView = currentSCNView else {
@@ -446,41 +465,91 @@ struct Viewport3DView: NSViewRepresentable {
                 return false 
             }
             
-            // Check if dragging an asset ID
+            // Try multiple methods to get the asset ID
+            var assetIDString: String?
+            
+            // Method 1: Try to get string directly
             if let data = sender.draggingPasteboard.data(forType: .string),
-               let assetID = String(data: data, encoding: .utf8) {
-                
-                Task { @MainActor in
-                    // Convert drop location to 3D world position
-                    let worldPos = parent.studioManager.worldPosition(from: location, in: scnView)
-                    let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
-                    
-                    // Find and add the appropriate asset
-                    if let ledWallAsset = LEDWallAsset.predefinedWalls.first(where: { $0.id.uuidString == assetID }) {
-                        parent.studioManager.addLEDWall(from: ledWallAsset, at: finalPos)
-                        print("🖱️ Dropped LED Wall: \(ledWallAsset.name) at \(finalPos)")
-                        
-                    } else if let cameraAsset = CameraAsset.predefinedCameras.first(where: { $0.id.uuidString == assetID }) {
-                        let camera = VirtualCamera(name: cameraAsset.name, position: finalPos)
-                        camera.focalLength = Float(cameraAsset.focalLength)
-                        parent.studioManager.virtualCameras.append(camera)
-                        parent.studioManager.scene.rootNode.addChildNode(camera.node)
-                        print("🖱️ Dropped Camera: \(cameraAsset.name) at \(finalPos)")
-                        
-                    } else if let lightAsset = LightAsset.predefinedLights.first(where: { $0.id.uuidString == assetID }) {
-                        parent.studioManager.addLight(from: lightAsset, at: finalPos)
-                        print("🖱️ Dropped Light: \(lightAsset.name) at \(finalPos)")
-                        
-                    } else if let setPieceAsset = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == assetID }) {
-                        parent.studioManager.addSetPiece(from: setPieceAsset, at: finalPos)
-                        print("🖱️ Dropped Set Piece: \(setPieceAsset.name) at \(finalPos)")
-                    }
-                }
-                
-                return true
+               let string = String(data: data, encoding: .utf8) {
+                assetIDString = string
+                print("🎯 COORDINATOR: Found asset ID via .string type: \(string)")
             }
             
-            return false
+            // Method 2: Try to read as NSString object
+            if assetIDString == nil,
+               let objects = sender.draggingPasteboard.readObjects(forClasses: [NSString.self], options: nil),
+               let string = objects.first as? String {
+                assetIDString = string
+                print("🎯 COORDINATOR: Found asset ID via NSString: \(string)")
+            }
+            
+            // Method 3: Debug all available data
+            if assetIDString == nil {
+                print("⚠️ No asset ID found in drag operation")
+                if let types = sender.draggingPasteboard.types {
+                    print("   Available pasteboard types: \(types)")
+                    for type in types {
+                        if let data = sender.draggingPasteboard.data(forType: type) {
+                            print("   Type \(type): data length \(data.count)")
+                            if let string = String(data: data, encoding: .utf8) {
+                                print("   String representation: '\(string)'")
+                                if assetIDString == nil {
+                                    assetIDString = string
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            guard let finalAssetID = assetIDString else {
+                print("⚠️ Could not extract asset ID from drag operation")
+                return false
+            }
+            
+            print("🎯 COORDINATOR: Processing asset ID: \(finalAssetID)")
+            
+            // Perform the actual drop operation on the main thread
+            DispatchQueue.main.async {
+                // Convert drop location to 3D world position
+                let worldPos = self.parent.studioManager.worldPosition(from: location, in: scnView)
+                let finalPos = self.snapToGrid ? self.snapToGridPosition(worldPos) : worldPos
+                
+                print("🎯 COORDINATOR: World position: \(worldPos) -> Final: \(finalPos)")
+                
+                // Find and add the appropriate asset
+                var assetFound = false
+                
+                if let ledWallAsset = LEDWallAsset.predefinedWalls.first(where: { $0.id.uuidString == finalAssetID }) {
+                    self.parent.studioManager.addLEDWall(from: ledWallAsset, at: finalPos)
+                    print("🖱️ Successfully dropped LED Wall: \(ledWallAsset.name) at \(finalPos)")
+                    assetFound = true
+                    
+                } else if let cameraAsset = CameraAsset.predefinedCameras.first(where: { $0.id.uuidString == finalAssetID }) {
+                    let camera = VirtualCamera(name: cameraAsset.name, position: finalPos)
+                    camera.focalLength = Float(cameraAsset.focalLength)
+                    self.parent.studioManager.virtualCameras.append(camera)
+                    self.parent.studioManager.scene.rootNode.addChildNode(camera.node)
+                    print("🖱️ Successfully dropped Camera: \(cameraAsset.name) at \(finalPos)")
+                    assetFound = true
+                    
+                } else if let lightAsset = LightAsset.predefinedLights.first(where: { $0.id.uuidString == finalAssetID }) {
+                    self.parent.studioManager.addLight(from: lightAsset, at: finalPos)
+                    print("🖱️ Successfully dropped Light: \(lightAsset.name) at \(finalPos)")
+                    assetFound = true
+                    
+                } else if let setPieceAsset = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == finalAssetID }) {
+                    self.parent.studioManager.addSetPiece(from: setPieceAsset, at: finalPos)
+                    print("🖱️ Successfully dropped Set Piece: \(setPieceAsset.name) at \(finalPos)")
+                    assetFound = true
+                }
+                
+                if !assetFound {
+                    print("⚠️ No matching asset found for ID: \(finalAssetID)")
+                }
+            }
+            
+            return true
         }
         
         // Context menu actions
@@ -497,7 +566,6 @@ struct Viewport3DView: NSViewRepresentable {
         @objc private func deselectAll() { /* Implement */ }
         
         // Enhanced selection handling with better visual feedback
-        @MainActor
         private func handleSelection(at point: CGPoint, in scnView: SCNView) {
             let hitResults = scnView.hitTest(point, options: [
                 .searchMode: SCNHitTestSearchMode.all.rawValue,
@@ -561,7 +629,6 @@ struct Viewport3DView: NSViewRepresentable {
             }
         }
         
-        @MainActor
         private func handleObjectPlacement(at point: CGPoint, in scnView: SCNView) {
             // Convert screen point to world position
             let worldPos = parent.studioManager.worldPosition(from: point, in: scnView)
@@ -583,7 +650,7 @@ struct Viewport3DView: NSViewRepresentable {
         }
     }
     
-    // Custom SCNView that handles trackpad scroll events
+    // Custom SCNView that handles trackpad scroll events AND drag operations
     class CustomSCNView: SCNView {
         weak var gestureHandler: Coordinator?
         
@@ -597,8 +664,15 @@ struct Viewport3DView: NSViewRepresentable {
         
         override func awakeFromNib() {
             super.awakeFromNib()
-            // Ensure we can receive scroll events
+            // Ensure we can receive scroll events and drag operations
             self.wantsLayer = true
+        }
+        
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Ensure drag registration happens when view is in window
+            registerForDraggedTypes([.string])
+            print("🎯 CustomSCNView registered for drag types: [.string]")
         }
         
         override func scrollWheel(with event: NSEvent) {
@@ -613,6 +687,34 @@ struct Viewport3DView: NSViewRepresentable {
                 // Pass through if no movement  
                 super.scrollWheel(with: event)
             }
+        }
+        
+        // MARK: - NSDraggingDestination Implementation
+        
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            print("🎯 CustomSCNView: Drag entered 3D viewport")
+            print("   Available types: \(sender.draggingPasteboard.types ?? [])")
+            return gestureHandler?.draggingEntered(sender) ?? []
+        }
+        
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            // Don't spam the log with updated messages, but return the right operation
+            return gestureHandler?.draggingUpdated(sender) ?? []
+        }
+        
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            print("🎯 CustomSCNView: Drag exited 3D viewport")
+        }
+        
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            print("🎯 CustomSCNView: Performing drag operation")
+            let result = gestureHandler?.performDragOperation(sender) ?? false
+            print("🎯 CustomSCNView: Drag operation result: \(result)")
+            return result
+        }
+        
+        override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+            print("🎯 CustomSCNView: Concluded drag operation")
         }
     }
 }

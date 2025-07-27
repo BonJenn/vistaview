@@ -8,6 +8,7 @@ import SceneKit
 
 struct VisibleObjectBrowser: View {
     @State private var selectedCategory: ObjectCategory = .all
+    @EnvironmentObject var studioManager: VirtualStudioManager // Add this to get access to studio manager
     
     enum ObjectCategory: String, CaseIterable {
         case all = "All"
@@ -50,6 +51,15 @@ struct VisibleObjectBrowser: View {
                     .foregroundColor(.white)
                 
                 Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Click to add")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                    Text("Drag to position")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.7))
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -77,7 +87,7 @@ struct VisibleObjectBrowser: View {
                     GridItem(.adaptive(minimum: 80, maximum: 120), spacing: 12)
                 ], spacing: 12) {
                     ForEach(assetsForCategory, id: \.id) { asset in
-                        ObjectCard(asset: asset)
+                        ObjectCard(asset: asset, studioManager: studioManager)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -146,9 +156,11 @@ struct CategoryButton: View {
 
 struct ObjectCard: View {
     let asset: any StudioAsset
+    let studioManager: VirtualStudioManager
     
     @State private var isDragging = false
     @State private var isHovered = false
+    @State private var isPressed = false
     
     var body: some View {
         VStack(spacing: 12) {
@@ -188,6 +200,20 @@ struct ObjectCard: View {
                     Spacer()
                 }
                 .padding(8)
+                
+                // Add + button overlay when hovered (but not when dragging)
+                if isHovered && !isDragging {
+                    ZStack {
+                        Circle()
+                            .fill(.black.opacity(0.8))
+                            .frame(width: 32, height: 32)
+                        
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
@@ -203,30 +229,52 @@ struct ObjectCard: View {
                 .frame(height: 32)
         }
         .frame(width: 100)
-        .scaleEffect(isDragging ? 1.1 : (isHovered ? 1.05 : 1.0))
+        .scaleEffect(isPressed ? 0.95 : (isHovered && !isDragging ? 1.05 : (isDragging ? 1.1 : 1.0)))
         .opacity(isDragging ? 0.8 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
         .onHover { hovering in
-            isHovered = hovering
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovered = hovering
+            }
+        }
+        .onTapGesture {
+            // Only handle tap if not dragging
+            guard !isDragging else { return }
+            
+            // Visual feedback
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isPressed = true
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.easeInOut(duration: 0.1)) {
+                    isPressed = false
+                }
+            }
+            
+            // Add object to scene
+            addObjectToScene()
         }
         .draggable(asset.id.uuidString) {
-            // Drag preview
+            // Enhanced drag preview
             VStack(spacing: 8) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(asset.color).opacity(0.2))
-                        .frame(width: 50, height: 50)
+                        .fill(Color(asset.color).opacity(0.9))
+                        .frame(width: 60, height: 60)
                     
                     Image(systemName: asset.icon)
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(Color(asset.color))
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundColor(.white)
                 }
                 
                 Text(asset.name)
                     .font(.caption.weight(.medium))
                     .foregroundColor(.white)
                     .lineLimit(1)
+                    .padding(.horizontal, 8)
             }
             .padding(12)
             .background(.black.opacity(0.9))
@@ -239,20 +287,49 @@ struct ObjectCard: View {
             .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
         }
         .onDrag {
+            print("🎯 Starting drag for: \(asset.name) with ID: \(asset.id.uuidString)")
             isDragging = true
+            
+            // Use the simple NSItemProvider with NSString
             return NSItemProvider(object: asset.id.uuidString as NSString)
         }
-        .simultaneousGesture(
-            DragGesture()
-                .onChanged { _ in
-                    if !isDragging {
-                        isDragging = true
-                    }
-                }
-                .onEnded { _ in
+        .onChange(of: isDragging) { _, newValue in
+            // Reset drag state after a delay when drag ends
+            if !newValue {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     isDragging = false
                 }
-        )
+            }
+        }
+    }
+    
+    private func addObjectToScene() {
+        // Generate a semi-random position in front of the camera
+        let randomOffset = Float.random(in: -2...2)
+        let position = SCNVector3(randomOffset, 0, -5)
+        
+        print("🎯 Adding \(asset.name) to scene at \(position)")
+        
+        // Add the appropriate object type
+        switch asset {
+        case let ledWallAsset as LEDWallAsset:
+            studioManager.addLEDWall(from: ledWallAsset, at: position)
+            
+        case let cameraAsset as CameraAsset:
+            let camera = VirtualCamera(name: cameraAsset.name, position: position)
+            camera.focalLength = Float(cameraAsset.focalLength)
+            studioManager.virtualCameras.append(camera)
+            studioManager.scene.rootNode.addChildNode(camera.node)
+            
+        case let lightAsset as LightAsset:
+            studioManager.addLight(from: lightAsset, at: position)
+            
+        case let setPieceAsset as SetPieceAsset:
+            studioManager.addSetPiece(from: setPieceAsset, at: position)
+            
+        default:
+            print("⚠️ Unknown asset type: \(type(of: asset))")
+        }
     }
 }
 

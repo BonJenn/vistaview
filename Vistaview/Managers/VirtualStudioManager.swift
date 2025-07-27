@@ -197,86 +197,643 @@ final class VirtualStudioManager: ObservableObject {
     
     // MARK: - Specific Adds
     func addLEDWall(from asset: LEDWallAsset, at pos: SCNVector3) {
+        // Create the main LED wall plane
         let plane = SCNPlane(width: CGFloat(asset.width), height: CGFloat(asset.height))
-        let mat = SCNMaterial()
         
-        // Set up the material properly for video content
-        mat.diffuse.contents = UXColor.darkGray // Default content
-        mat.lightingModel = .physicallyBased // Will be changed to .constant for camera feeds
-        mat.isDoubleSided = true
+        // Enhanced material for LED wall
+        let screenMaterial = SCNMaterial()
+        screenMaterial.diffuse.contents = UXColor.black // Default black screen
+        screenMaterial.lightingModel = .physicallyBased
+        screenMaterial.isDoubleSided = false
+        screenMaterial.diffuse.magnificationFilter = .linear
+        screenMaterial.diffuse.minificationFilter = .linear
+        screenMaterial.diffuse.wrapS = .clamp
+        screenMaterial.diffuse.wrapT = .clamp
         
-        // Configure texture properties for smooth video
-        mat.diffuse.magnificationFilter = .linear
-        mat.diffuse.minificationFilter = .linear
-        mat.diffuse.wrapS = .clamp
-        mat.diffuse.wrapT = .clamp
+        // Add subtle screen texture/reflection
+        screenMaterial.metalness.contents = 0.1
+        screenMaterial.roughness.contents = 0.2
+        screenMaterial.emission.intensity = 0.1
         
-        plane.materials = [mat]
+        plane.materials = [screenMaterial]
         
+        // Create LED wall assembly with frame and support structure
+        let ledWallGroup = SCNNode()
+        ledWallGroup.name = asset.name
+        
+        // Main screen
+        let screenNode = SCNNode(geometry: plane)
+        screenNode.name = "screen"
+        ledWallGroup.addChildNode(screenNode)
+        
+        // Create realistic frame around the screen
+        let frameThickness: CGFloat = 0.1
+        let frameDepth: CGFloat = 0.05
+        
+        // Frame material
+        let frameMaterial = SCNMaterial()
+        frameMaterial.diffuse.contents = UXColor.darkGray
+        frameMaterial.metalness.contents = 0.8
+        frameMaterial.roughness.contents = 0.3
+        
+        // Top frame
+        let topFrame = SCNBox(width: CGFloat(asset.width) + frameThickness * 2, 
+                             height: frameThickness, 
+                             length: frameDepth, 
+                             chamferRadius: 0.02)
+        topFrame.materials = [frameMaterial]
+        let topFrameNode = SCNNode(geometry: topFrame)
+        topFrameNode.position = SCNVector3(0, CGFloat(asset.height/2) + frameThickness/2, frameDepth/2)
+        ledWallGroup.addChildNode(topFrameNode)
+        
+        // Bottom frame
+        let bottomFrame = SCNBox(width: CGFloat(asset.width) + frameThickness * 2, 
+                                height: frameThickness, 
+                                length: frameDepth, 
+                                chamferRadius: 0.02)
+        bottomFrame.materials = [frameMaterial]
+        let bottomFrameNode = SCNNode(geometry: bottomFrame)
+        bottomFrameNode.position = SCNVector3(0, -CGFloat(asset.height/2) - frameThickness/2, frameDepth/2)
+        ledWallGroup.addChildNode(bottomFrameNode)
+        
+        // Left frame
+        let leftFrame = SCNBox(width: frameThickness, 
+                              height: CGFloat(asset.height), 
+                              length: frameDepth, 
+                              chamferRadius: 0.02)
+        leftFrame.materials = [frameMaterial]
+        let leftFrameNode = SCNNode(geometry: leftFrame)
+        leftFrameNode.position = SCNVector3(-CGFloat(asset.width/2) - frameThickness/2, 0, frameDepth/2)
+        ledWallGroup.addChildNode(leftFrameNode)
+        
+        // Right frame
+        let rightFrame = SCNBox(width: frameThickness, 
+                               height: CGFloat(asset.height), 
+                               length: frameDepth, 
+                               chamferRadius: 0.02)
+        rightFrame.materials = [frameMaterial]
+        let rightFrameNode = SCNNode(geometry: rightFrame)
+        rightFrameNode.position = SCNVector3(CGFloat(asset.width/2) + frameThickness/2, 0, frameDepth/2)
+        ledWallGroup.addChildNode(rightFrameNode)
+        
+        // Add support legs for larger LED walls
+        if asset.width > 8 || asset.height > 6 {
+            let legMaterial = SCNMaterial()
+            legMaterial.diffuse.contents = UXColor.systemGray
+            legMaterial.metalness.contents = 0.9
+            legMaterial.roughness.contents = 0.1
+            
+            // Left support leg
+            let leftLeg = SCNCylinder(radius: 0.05, height: CGFloat(asset.height) + 2)
+            leftLeg.materials = [legMaterial]
+            let leftLegNode = SCNNode(geometry: leftLeg)
+            leftLegNode.position = SCNVector3(-CGFloat(asset.width/2) - 0.5, -1, -0.3)
+            ledWallGroup.addChildNode(leftLegNode)
+            
+            // Right support leg
+            let rightLeg = SCNCylinder(radius: 0.05, height: CGFloat(asset.height) + 2)
+            rightLeg.materials = [legMaterial]
+            let rightLegNode = SCNNode(geometry: rightLeg)
+            rightLegNode.position = SCNVector3(CGFloat(asset.width/2) + 0.5, -1, -0.3)
+            ledWallGroup.addChildNode(rightLegNode)
+        }
+        
+        // Create the studio object
         let obj = StudioObject(name: asset.name, type: .ledWall, position: pos)
-        obj.node.geometry = plane
-        obj.node.name = asset.name
+        obj.node.addChildNode(ledWallGroup)
         
-        // Optimize the LED wall for video display
+        // Store reference to screen node for content updates
+        obj.node.name = asset.name + "_ledwall"
+        screenNode.name = "screen" // Important for finding the screen later
+        
         obj.optimizeLEDWallForVideo()
-        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
+        obj.setupHighlightAfterGeometry()
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
         
-        print("➕ Added LED Wall: \(asset.name) at \(pos)")
-        print("   - Optimized for video content")
-        print("   - Material configured for camera feeds")
+        print("➕ Added Enhanced LED Wall: \(asset.name) at \(pos)")
+        print("   - Size: \(asset.width)x\(asset.height)m")
+        print("   - With realistic frame and support structure")
     }
     
     func addSetPiece(from asset: SetPieceAsset, at pos: SCNVector3) {
+        let setPieceGroup = SCNNode()
+        setPieceGroup.name = asset.name
+        
+        // Create different geometries based on the asset type
+        switch asset.name.lowercased() {
+        case let name where name.contains("desk"):
+            createDeskGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("chair"):
+            createChairGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("sofa"):
+            createSofaGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("table"):
+            createTableGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("stage") || name.contains("platform"):
+            createStageGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("speaker"):
+            createSpeakerGeometry(asset: asset, group: setPieceGroup)
+        case let name where name.contains("bookshelf"):
+            createBookshelfGeometry(asset: asset, group: setPieceGroup)
+        default:
+            // Default box geometry with enhanced materials
+            createDefaultSetPieceGeometry(asset: asset, group: setPieceGroup)
+        }
+        
+        let obj = StudioObject(name: asset.name, type: .setPiece, position: pos)
+        obj.node.addChildNode(setPieceGroup)
+        obj.setupHighlightAfterGeometry()
+        
+        studioObjects.append(obj)
+        rootNode.addChildNode(obj.node)
+        
+        print("➕ Added Enhanced Set Piece: \(asset.name) at \(pos)")
+    }
+    
+    private func createDeskGeometry(asset: SetPieceAsset, group: SCNNode) {
+        // Desktop
+        let desktop = SCNBox(width: CGFloat(asset.size.x), 
+                            height: 0.05, 
+                            length: CGFloat(asset.size.z), 
+                            chamferRadius: 0.02)
+        let deskMaterial = SCNMaterial()
+        deskMaterial.diffuse.contents = UXColor.systemBrown
+        deskMaterial.roughness.contents = 0.3
+        deskMaterial.metalness.contents = 0.1
+        desktop.materials = [deskMaterial]
+        
+        let desktopNode = SCNNode(geometry: desktop)
+        desktopNode.position = SCNVector3(0, CGFloat(asset.size.y) - 0.025, 0)
+        group.addChildNode(desktopNode)
+        
+        // Legs
+        let legRadius: CGFloat = 0.03
+        let legHeight = CGFloat(asset.size.y) - 0.05
+        
+        let legMaterial = SCNMaterial()
+        legMaterial.diffuse.contents = UXColor.darkGray
+        legMaterial.metalness.contents = 0.8
+        legMaterial.roughness.contents = 0.2
+        
+        let positions: [SCNVector3] = [
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, legHeight/2, CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, legHeight/2, CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, legHeight/2, -CGFloat(asset.size.z/2) + 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, legHeight/2, -CGFloat(asset.size.z/2) + 0.1)
+        ]
+        
+        for position in positions {
+            let leg = SCNCylinder(radius: legRadius, height: legHeight)
+            leg.materials = [legMaterial]
+            let legNode = SCNNode(geometry: leg)
+            legNode.position = position
+            group.addChildNode(legNode)
+        }
+    }
+    
+    private func createChairGeometry(asset: SetPieceAsset, group: SCNNode) {
+        let chairMaterial = SCNMaterial()
+        chairMaterial.diffuse.contents = asset.color
+        chairMaterial.roughness.contents = 0.6
+        
+        // Seat
+        let seat = SCNBox(width: CGFloat(asset.size.x), 
+                         height: 0.05, 
+                         length: CGFloat(asset.size.z), 
+                         chamferRadius: 0.02)
+        seat.materials = [chairMaterial]
+        let seatNode = SCNNode(geometry: seat)
+        seatNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.4, 0)
+        group.addChildNode(seatNode)
+        
+        // Backrest
+        let backrest = SCNBox(width: CGFloat(asset.size.x), 
+                             height: CGFloat(asset.size.y) * 0.5, 
+                             length: 0.05, 
+                             chamferRadius: 0.02)
+        backrest.materials = [chairMaterial]
+        let backrestNode = SCNNode(geometry: backrest)
+        backrestNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.65, -CGFloat(asset.size.z/2) + 0.025)
+        group.addChildNode(backrestNode)
+        
+        // Chair legs
+        let legMaterial = SCNMaterial()
+        legMaterial.diffuse.contents = UXColor.darkGray
+        legMaterial.metalness.contents = 0.8
+        
+        let legHeight = CGFloat(asset.size.y) * 0.4
+        let legPositions: [SCNVector3] = [
+            SCNVector3(CGFloat(asset.size.x/2) - 0.05, legHeight/2, CGFloat(asset.size.z/2) - 0.05),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.05, legHeight/2, CGFloat(asset.size.z/2) - 0.05),
+            SCNVector3(CGFloat(asset.size.x/2) - 0.05, legHeight/2, -CGFloat(asset.size.z/2) + 0.05),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.05, legHeight/2, -CGFloat(asset.size.z/2) + 0.05)
+        ]
+        
+        for position in legPositions {
+            let leg = SCNCylinder(radius: 0.02, height: legHeight)
+            leg.materials = [legMaterial]
+            let legNode = SCNNode(geometry: leg)
+            legNode.position = position
+            group.addChildNode(legNode)
+        }
+    }
+    
+    private func createSofaGeometry(asset: SetPieceAsset, group: SCNNode) {
+        let sofaMaterial = SCNMaterial()
+        sofaMaterial.diffuse.contents = asset.color
+        sofaMaterial.roughness.contents = 0.8
+        
+        // Main body
+        let body = SCNBox(width: CGFloat(asset.size.x), 
+                         height: CGFloat(asset.size.y) * 0.6, 
+                         length: CGFloat(asset.size.z), 
+                         chamferRadius: 0.05)
+        body.materials = [sofaMaterial]
+        let bodyNode = SCNNode(geometry: body)
+        bodyNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.3, 0)
+        group.addChildNode(bodyNode)
+        
+        // Backrest
+        let backrest = SCNBox(width: CGFloat(asset.size.x), 
+                             height: CGFloat(asset.size.y) * 0.7, 
+                             length: 0.2, 
+                             chamferRadius: 0.05)
+        backrest.materials = [sofaMaterial]
+        let backrestNode = SCNNode(geometry: backrest)
+        backrestNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.5, -CGFloat(asset.size.z/2) + 0.1)
+        group.addChildNode(backrestNode)
+        
+        // Armrests
+        let armrest = SCNBox(width: 0.2, 
+                            height: CGFloat(asset.size.y) * 0.4, 
+                            length: CGFloat(asset.size.z) * 0.8, 
+                            chamferRadius: 0.05)
+        armrest.materials = [sofaMaterial]
+        
+        let leftArmrestNode = SCNNode(geometry: armrest)
+        leftArmrestNode.position = SCNVector3(-CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y) * 0.4, 0)
+        group.addChildNode(leftArmrestNode)
+        
+        let rightArmrestNode = SCNNode(geometry: armrest)
+        rightArmrestNode.position = SCNVector3(CGFloat(asset.size.x/2) - 0.1, CGFloat(asset.size.y) * 0.4, 0)
+        group.addChildNode(rightArmrestNode)
+    }
+    
+    private func createTableGeometry(asset: SetPieceAsset, group: SCNNode) {
+        // Table top
+        let tabletop = SCNBox(width: CGFloat(asset.size.x), 
+                             height: 0.05, 
+                             length: CGFloat(asset.size.z), 
+                             chamferRadius: 0.02)
+        let tableMaterial = SCNMaterial()
+        tableMaterial.diffuse.contents = asset.color
+        tableMaterial.roughness.contents = 0.2
+        tableMaterial.metalness.contents = 0.1
+        tabletop.materials = [tableMaterial]
+        
+        let tabletopNode = SCNNode(geometry: tabletop)
+        tabletopNode.position = SCNVector3(0, CGFloat(asset.size.y) - 0.025, 0)
+        group.addChildNode(tabletopNode)
+        
+        // Single center pedestal for round table, four legs for rectangular
+        if asset.name.lowercased().contains("round") {
+            let pedestal = SCNCylinder(radius: 0.1, height: CGFloat(asset.size.y) - 0.05)
+            let pedestalMaterial = SCNMaterial()
+            pedestalMaterial.diffuse.contents = UXColor.darkGray
+            pedestalMaterial.metalness.contents = 0.8
+            pedestal.materials = [pedestalMaterial]
+            
+            let pedestalNode = SCNNode(geometry: pedestal)
+            pedestalNode.position = SCNVector3(0, (CGFloat(asset.size.y) - 0.05) / 2, 0)
+            group.addChildNode(pedestalNode)
+        } else {
+            // Four legs for rectangular table (reuse desk leg logic)
+            createDeskGeometry(asset: asset, group: group)
+            return // Don't add another tabletop
+        }
+    }
+    
+    private func createStageGeometry(asset: SetPieceAsset, group: SCNNode) {
+        // Main platform
+        let platform = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.02)
+        let stageMaterial = SCNMaterial()
+        stageMaterial.diffuse.contents = UXColor.black
+        stageMaterial.roughness.contents = 0.1
+        stageMaterial.metalness.contents = 0.2
+        platform.materials = [stageMaterial]
+        
+        let platformNode = SCNNode(geometry: platform)
+        platformNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(platformNode)
+        
+        // Add edge trim
+        let trimMaterial = SCNMaterial()
+        trimMaterial.diffuse.contents = UXColor.systemGray
+        trimMaterial.metalness.contents = 0.8
+        
+        // Front trim
+        let frontTrim = SCNBox(width: CGFloat(asset.size.x), height: 0.05, length: 0.05, chamferRadius: 0.01)
+        frontTrim.materials = [trimMaterial]
+        let frontTrimNode = SCNNode(geometry: frontTrim)
+        frontTrimNode.position = SCNVector3(0, CGFloat(asset.size.y) + 0.025, CGFloat(asset.size.z/2) + 0.025)
+        group.addChildNode(frontTrimNode)
+    }
+    
+    private func createSpeakerGeometry(asset: SetPieceAsset, group: SCNNode) {
+        // Main speaker box
+        let speakerBox = SCNBox(width: CGFloat(asset.size.x), 
+                               height: CGFloat(asset.size.y), 
+                               length: CGFloat(asset.size.z), 
+                               chamferRadius: 0.05)
+        let speakerMaterial = SCNMaterial()
+        speakerMaterial.diffuse.contents = UXColor.black
+        speakerMaterial.roughness.contents = 0.8
+        speakerBox.materials = [speakerMaterial]
+        
+        let speakerBoxNode = SCNNode(geometry: speakerBox)
+        speakerBoxNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(speakerBoxNode)
+        
+        // Speaker drivers (circles on the front)
+        let driverMaterial = SCNMaterial()
+        driverMaterial.diffuse.contents = UXColor.darkGray
+        driverMaterial.metalness.contents = 0.3
+        
+        let largeSpeaker = SCNCylinder(radius: CGFloat(asset.size.x) * 0.25, height: 0.02)
+        largeSpeaker.materials = [driverMaterial]
+        let largeSpeakerNode = SCNNode(geometry: largeSpeaker)
+        largeSpeakerNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.6, CGFloat(asset.size.z/2) + 0.01)
+        largeSpeakerNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(largeSpeakerNode)
+        
+        let smallSpeaker = SCNCylinder(radius: CGFloat(asset.size.x) * 0.15, height: 0.02)
+        smallSpeaker.materials = [driverMaterial]
+        let smallSpeakerNode = SCNNode(geometry: smallSpeaker)
+        smallSpeakerNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.3, CGFloat(asset.size.z/2) + 0.01)
+        smallSpeakerNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(smallSpeakerNode)
+    }
+    
+    private func createBookshelfGeometry(asset: SetPieceAsset, group: SCNNode) {
+        let shelfMaterial = SCNMaterial()
+        shelfMaterial.diffuse.contents = UXColor.systemBrown
+        shelfMaterial.roughness.contents = 0.6
+        
+        // Back panel
+        let backPanel = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: 0.02, 
+                              chamferRadius: 0.01)
+        backPanel.materials = [shelfMaterial]
+        let backPanelNode = SCNNode(geometry: backPanel)
+        backPanelNode.position = SCNVector3(0, CGFloat(asset.size.y/2), -CGFloat(asset.size.z/2) + 0.01)
+        group.addChildNode(backPanelNode)
+        
+        // Side panels
+        let sidePanel = SCNBox(width: 0.02, 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.01)
+        sidePanel.materials = [shelfMaterial]
+        
+        let leftSideNode = SCNNode(geometry: sidePanel)
+        leftSideNode.position = SCNVector3(-CGFloat(asset.size.x/2) + 0.01, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(leftSideNode)
+        
+        let rightSideNode = SCNNode(geometry: sidePanel)  
+        rightSideNode.position = SCNVector3(CGFloat(asset.size.x/2) - 0.01, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(rightSideNode)
+        
+        // Shelves
+        let shelfThickness: CGFloat = 0.03
+        let numShelves = Int(asset.size.y / 0.4) // One shelf every 40cm
+        
+        for i in 0...numShelves {
+            let shelf = SCNBox(width: CGFloat(asset.size.x) - 0.04, 
+                              height: shelfThickness, 
+                              length: CGFloat(asset.size.z) - 0.02, 
+                              chamferRadius: 0.01)
+            shelf.materials = [shelfMaterial]
+            let shelfNode = SCNNode(geometry: shelf)
+            let shelfY = (CGFloat(i) * CGFloat(asset.size.y) / CGFloat(numShelves))
+            shelfNode.position = SCNVector3(0, shelfY, 0)
+            group.addChildNode(shelfNode)
+        }
+    }
+    
+    private func createDefaultSetPieceGeometry(asset: SetPieceAsset, group: SCNNode) {
         let box = SCNBox(width: CGFloat(asset.size.x),
                          height: CGFloat(asset.size.y),
                          length: CGFloat(asset.size.z),
-                         chamferRadius: 0)
+                         chamferRadius: 0.02)
         let mat = SCNMaterial()
         mat.diffuse.contents = asset.color
+        mat.roughness.contents = 0.5
+        mat.metalness.contents = 0.1
         box.materials = [mat]
         
-        let obj = StudioObject(name: asset.name, type: .setPiece, position: pos)
-        obj.node.geometry = box
-        obj.node.name = asset.name
-        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
-        
-        studioObjects.append(obj)
-        rootNode.addChildNode(obj.node)
-        
-        print("➕ Added Set Piece: \(asset.name) at \(pos)")
+        let boxNode = SCNNode(geometry: box)
+        boxNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(boxNode)
     }
     
     func addLight(from asset: LightAsset, at pos: SCNVector3) {
+        let lightGroup = SCNNode()
+        lightGroup.name = asset.name
+        
+        // Create the actual SceneKit light
         let scnLight = SCNLight()
         switch asset.lightType.lowercased() {
-        case "directional": scnLight.type = .directional
-        case "spot":        scnLight.type = .spot
-        case "omni":        scnLight.type = .omni
-        default:            scnLight.type = .omni
+        case "directional": 
+            scnLight.type = .directional
+            createDirectionalLightGeometry(asset: asset, group: lightGroup, light: scnLight)
+        case "spot":        
+            scnLight.type = .spot
+            scnLight.spotInnerAngle = CGFloat(asset.beamAngle ?? 30) * 0.7
+            scnLight.spotOuterAngle = CGFloat(asset.beamAngle ?? 30)
+            createSpotLightGeometry(asset: asset, group: lightGroup, light: scnLight)
+        case "omni":        
+            scnLight.type = .omni
+            createOmniLightGeometry(asset: asset, group: lightGroup, light: scnLight)
+        default:            
+            scnLight.type = .omni
+            createOmniLightGeometry(asset: asset, group: lightGroup, light: scnLight)
         }
+        
         scnLight.intensity = CGFloat(asset.intensity)
         scnLight.color = asset.color
+        scnLight.castsShadow = true
+        scnLight.shadowMode = .deferred
+        scnLight.shadowMapSize = CGSize(width: 1024, height: 1024)
+        scnLight.shadowSampleCount = 16
         
-        // Create a small visual representation for lights
-        let sphere = SCNSphere(radius: 0.2)
-        let mat = SCNMaterial()
-        mat.diffuse.contents = asset.color
-        mat.emission.contents = asset.color.withAlphaComponent(0.5)
-        sphere.materials = [mat]
+        // Add the light to the group
+        let lightNode = SCNNode()
+        lightNode.light = scnLight
+        lightGroup.addChildNode(lightNode)
         
         let obj = StudioObject(name: asset.name, type: .light, position: pos)
-        obj.node.geometry = sphere // Add geometry so it can be selected
-        obj.node.light = scnLight
-        obj.node.name = asset.name
-        obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
+        obj.node.addChildNode(lightGroup)
+        obj.setupHighlightAfterGeometry()
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
         
-        print("➕ Added Light: \(asset.name) at \(pos)")
+        print("➕ Added Enhanced Light: \(asset.name) (\(asset.lightType)) at \(pos)")
+    }
+    
+    private func createDirectionalLightGeometry(asset: LightAsset, group: SCNNode, light: SCNLight) {
+        // Create LED panel light fixture
+        let panelWidth: CGFloat = 1.5
+        let panelHeight: CGFloat = 1.0
+        let panelDepth: CGFloat = 0.1
+        
+        // Main light panel
+        let panel = SCNBox(width: panelWidth, height: panelHeight, length: panelDepth, chamferRadius: 0.02)
+        let panelMaterial = SCNMaterial()
+        panelMaterial.diffuse.contents = UXColor.white
+        panelMaterial.emission.contents = asset.color
+        panelMaterial.emission.intensity = 0.8
+        panel.materials = [panelMaterial]
+        
+        let panelNode = SCNNode(geometry: panel)
+        group.addChildNode(panelNode)
+        
+        // Frame around the panel
+        let frameMaterial = SCNMaterial()
+        frameMaterial.diffuse.contents = UXColor.black
+        frameMaterial.metalness.contents = 0.8
+        frameMaterial.roughness.contents = 0.2
+        
+        let frameThickness: CGFloat = 0.05
+        let frames = [
+            (SCNBox(width: panelWidth + frameThickness*2, height: frameThickness, length: panelDepth + 0.02, chamferRadius: 0.01), 
+             SCNVector3(0, panelHeight/2 + frameThickness/2, 0)),
+            (SCNBox(width: panelWidth + frameThickness*2, height: frameThickness, length: panelDepth + 0.02, chamferRadius: 0.01), 
+             SCNVector3(0, -panelHeight/2 - frameThickness/2, 0)),
+            (SCNBox(width: frameThickness, height: panelHeight, length: panelDepth + 0.02, chamferRadius: 0.01), 
+             SCNVector3(-panelWidth/2 - frameThickness/2, 0, 0)),
+            (SCNBox(width: frameThickness, height: panelHeight, length: panelDepth + 0.02, chamferRadius: 0.01), 
+             SCNVector3(panelWidth/2 + frameThickness/2, 0, 0))
+        ]
+        
+        for (frameGeometry, position) in frames {
+            frameGeometry.materials = [frameMaterial]
+            let frameNode = SCNNode(geometry: frameGeometry)
+            frameNode.position = position
+            group.addChildNode(frameNode)
+        }
+        
+        // Mounting bracket
+        let bracket = SCNCylinder(radius: 0.03, height: 0.5)
+        bracket.materials = [frameMaterial]
+        let bracketNode = SCNNode(geometry: bracket)
+        bracketNode.position = SCNVector3(0, 0, -panelDepth/2 - 0.25)
+        bracketNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(bracketNode)
+    }
+    
+    private func createSpotLightGeometry(asset: LightAsset, group: SCNNode, light: SCNLight) {
+        // Create traditional spotlight fixture
+        let bodyRadius: CGFloat = 0.15
+        let bodyLength: CGFloat = 0.4
+        
+        // Main spotlight body
+        let body = SCNCylinder(radius: bodyRadius, height: bodyLength)
+        let bodyMaterial = SCNMaterial()
+        bodyMaterial.diffuse.contents = UXColor.black
+        bodyMaterial.metalness.contents = 0.8
+        bodyMaterial.roughness.contents = 0.3
+        body.materials = [bodyMaterial]
+        
+        let bodyNode = SCNNode(geometry: body)
+        bodyNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0) // Point forward
+        group.addChildNode(bodyNode)
+        
+        // Lens at the front
+        let lens = SCNCylinder(radius: bodyRadius - 0.02, height: 0.02)
+        let lensMaterial = SCNMaterial()
+        lensMaterial.diffuse.contents = UXColor.white
+        lensMaterial.emission.contents = asset.color
+        lensMaterial.emission.intensity = 1.0
+        lensMaterial.transparency = 0.9
+        lens.materials = [lensMaterial]
+        
+        let lensNode = SCNNode(geometry: lens)
+        lensNode.position = SCNVector3(0, 0, bodyLength/2 + 0.01)
+        lensNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(lensNode)
+        
+        // Mounting yoke
+        let yoke = SCNTorus(ringRadius: bodyRadius + 0.05, pipeRadius: 0.02)
+        yoke.materials = [bodyMaterial]
+        let yokeNode = SCNNode(geometry: yoke)
+        yokeNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+        group.addChildNode(yokeNode)
+        
+        // Base stand
+        let base = SCNCylinder(radius: 0.1, height: 0.8)
+        base.materials = [bodyMaterial]
+        let baseNode = SCNNode(geometry: base)
+        baseNode.position = SCNVector3(0, -0.4, 0)
+        group.addChildNode(baseNode)
+    }
+    
+    private func createOmniLightGeometry(asset: LightAsset, group: SCNNode, light: SCNLight) {
+        // Create a bulb-style light
+        let bulbRadius: CGFloat = 0.1
+        
+        // Glass bulb
+        let bulb = SCNSphere(radius: bulbRadius)
+        let bulbMaterial = SCNMaterial()
+        bulbMaterial.diffuse.contents = UXColor.white
+        bulbMaterial.emission.contents = asset.color
+        bulbMaterial.emission.intensity = 1.0
+        bulbMaterial.transparency = 0.8
+        bulb.materials = [bulbMaterial]
+        
+        let bulbNode = SCNNode(geometry: bulb)
+        group.addChildNode(bulbNode)
+        
+        // Socket/base
+        let socket = SCNCylinder(radius: bulbRadius * 0.7, height: 0.15)
+        let socketMaterial = SCNMaterial()
+        socketMaterial.diffuse.contents = UXColor.systemGray
+        socketMaterial.metalness.contents = 0.8
+        socket.materials = [socketMaterial]
+        
+        let socketNode = SCNNode(geometry: socket)
+        socketNode.position = SCNVector3(0, -bulbRadius - 0.075, 0)
+        group.addChildNode(socketNode)
+        
+        // Light fixture housing
+        let housing = SCNCone(topRadius: 0, bottomRadius: bulbRadius * 2, height: 0.3)
+        let housingMaterial = SCNMaterial()
+        housingMaterial.diffuse.contents = UXColor.darkGray
+        housingMaterial.metalness.contents = 0.6
+        housingMaterial.roughness.contents = 0.4
+        housing.materials = [housingMaterial]
+        
+        let housingNode = SCNNode(geometry: housing)
+        housingNode.position = SCNVector3(0, bulbRadius + 0.15, 0)
+        group.addChildNode(housingNode)
+        
+        // Hanging cord for ceiling lights
+        if asset.name.lowercased().contains("ambient") || asset.name.lowercased().contains("room") {
+            let cord = SCNCylinder(radius: 0.005, height: 1.0)
+            let cordMaterial = SCNMaterial()
+            cordMaterial.diffuse.contents = UXColor.black
+            cord.materials = [cordMaterial]
+            
+            let cordNode = SCNNode(geometry: cord)
+            cordNode.position = SCNVector3(0, 0.5 + bulbRadius + 0.3, 0)
+            group.addChildNode(cordNode)
+        }
     }
     
     func addCamera(from asset: CameraAsset, at pos: SCNVector3) {
