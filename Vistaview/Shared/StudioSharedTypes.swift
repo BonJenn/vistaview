@@ -1,6 +1,7 @@
 import Foundation
 import SceneKit
 import SwiftUI
+import VideoToolbox
 
 #if os(macOS)
 import AppKit
@@ -72,6 +73,31 @@ enum SetPieceSubcategory: String, CaseIterable {
         case .furniture: return "chair"
         case .lighting: return "lightbulb"
         case .props: return "cube"
+        }
+    }
+}
+
+// MARK: - LED Wall Content Types
+enum LEDWallContentType: String, CaseIterable {
+    case none = "None"
+    case cameraFeed = "Camera Feed"
+    case staticImage = "Static Image"
+    case videoFile = "Video File"
+    case colorPattern = "Color Pattern"
+    case testPattern = "Test Pattern"
+    
+    var displayName: String {
+        return self.rawValue
+    }
+    
+    var icon: String {
+        switch self {
+        case .none: return "tv.slash"
+        case .cameraFeed: return "camera.tv"
+        case .staticImage: return "photo.tv"
+        case .videoFile: return "video.tv"
+        case .colorPattern: return "paintpalette.tv"
+        case .testPattern: return "checkerboard.rectangle"
         }
     }
 }
@@ -327,8 +353,17 @@ final class StudioObject: Identifiable, ObservableObject {
     @Published var isSelected: Bool = false
     @Published var isHighlighted: Bool = false
     
+    // LED Wall specific properties
+    @Published var ledWallContentType: LEDWallContentType = .none
+    @Published var connectedCameraFeedID: UUID?
+    
     let node: SCNNode
     private var highlightNode: SCNNode?
+    
+    // Computed property for convenience
+    var isDisplayingCameraFeed: Bool {
+        return ledWallContentType == .cameraFeed && connectedCameraFeedID != nil
+    }
     
     init(id: UUID = UUID(),
          name: String,
@@ -379,6 +414,81 @@ final class StudioObject: Identifiable, ObservableObject {
         updateHighlight()
     }
     
+    // MARK: - LED Wall Content Management
+    
+    /// Connect a camera feed to this LED wall
+    func connectCameraFeed(_ feedID: UUID) {
+        guard type == .ledWall else {
+            print("⚠️ Attempted to connect camera feed to non-LED wall object: \(name)")
+            return
+        }
+        
+        connectedCameraFeedID = feedID
+        ledWallContentType = .cameraFeed
+        print("✅ Connected camera feed \(feedID) to LED wall: \(name)")
+    }
+    
+    /// Disconnect the current camera feed
+    func disconnectCameraFeed() {
+        guard type == .ledWall else { return }
+        
+        connectedCameraFeedID = nil
+        ledWallContentType = .none
+        print("🔌 Disconnected camera feed from LED wall: \(name)")
+        
+        // Clear the material content
+        if let geometry = node.geometry,
+           let material = geometry.materials.first {
+            material.diffuse.contents = PlatformColor.darkGray
+            material.emission.contents = nil
+            material.emission.intensity = 0
+        }
+    }
+    
+    /// Set static content on the LED wall
+    func setLEDWallContent(type: LEDWallContentType, content: Any? = nil) {
+        guard self.type == .ledWall else {
+            print("⚠️ Attempted to set content on non-LED wall object: \(name)")
+            return
+        }
+        
+        ledWallContentType = type
+        
+        // Clear camera feed connection if switching to other content
+        if type != .cameraFeed {
+            connectedCameraFeedID = nil
+        }
+        
+        // Apply content to material if provided
+        if let content = content,
+           let geometry = node.geometry,
+           let material = geometry.materials.first {
+            
+            switch type {
+            case .staticImage, .videoFile:
+                material.diffuse.contents = content
+                material.emission.contents = content
+                material.emission.intensity = 0.3
+                
+            case .colorPattern, .testPattern:
+                material.diffuse.contents = content
+                material.emission.contents = content
+                material.emission.intensity = 0.5
+                
+            case .none:
+                material.diffuse.contents = PlatformColor.darkGray
+                material.emission.contents = nil
+                material.emission.intensity = 0
+                
+            case .cameraFeed:
+                // Camera feed content is handled separately by the feed manager
+                break
+            }
+        }
+        
+        print("🎬 Set LED wall content type to \(type.displayName) for: \(name)")
+    }
+    
     private func setupHighlightNode() {
         // Try to get actual geometry bounds, fallback to default size
         var highlightSize = SCNVector3(1.2, 1.2, 1.2) // Default size
@@ -392,7 +502,7 @@ final class StudioObject: Identifiable, ObservableObject {
             )
             
             // Use actual object size + padding for highlight
-            let padding: Float = 0.3
+            let padding: Float = 0.5 // Increased padding for more visible outline
             highlightSize = SCNVector3(
                 max(1.0, Float(size.x) + padding),
                 max(1.0, Float(size.y) + padding),
@@ -400,31 +510,115 @@ final class StudioObject: Identifiable, ObservableObject {
             )
         }
         
-        // Create a more prominent selection outline
+        // Create a MUCH more prominent selection outline with thick, bright lines
         let highlightGeometry = SCNBox(
             width: CGFloat(highlightSize.x),
             height: CGFloat(highlightSize.y),
             length: CGFloat(highlightSize.z),
-            chamferRadius: 0
+            chamferRadius: 0.1 // Add slight chamfer for better visibility
         )
+        
         let highlightMaterial = SCNMaterial()
-        highlightMaterial.fillMode = .lines
-        highlightMaterial.diffuse.contents = PlatformColor.systemOrange // Orange for selection
-        highlightMaterial.emission.contents = PlatformColor.systemOrange.withAlphaComponent(0.8)
+        highlightMaterial.fillMode = .lines // Wireframe outline
+        
+        // Use MUCH brighter, more saturated colors based on object type
+        let highlightColor = colorForObjectType()
+        highlightMaterial.diffuse.contents = highlightColor
+        highlightMaterial.emission.contents = highlightColor // Make it glow!
+        highlightMaterial.emission.intensity = 2.0 // Very bright emission
+        highlightMaterial.transparency = 1.0 // Fully opaque
         highlightMaterial.isDoubleSided = true
+        
+        // Add much stronger glow effect
+        highlightMaterial.multiply.contents = highlightColor
+        highlightMaterial.multiply.intensity = 1.5
+        
         highlightGeometry.materials = [highlightMaterial]
         
         highlightNode = SCNNode(geometry: highlightGeometry)
         highlightNode?.isHidden = true
+        
+        // Add MUCH more dramatic pulsing animation
+        let pulseAnimation = CABasicAnimation(keyPath: "emission.intensity")
+        pulseAnimation.fromValue = 1.5
+        pulseAnimation.toValue = 3.0 // Much brighter pulse
+        pulseAnimation.duration = 0.8
+        pulseAnimation.autoreverses = true
+        pulseAnimation.repeatCount = .infinity
+        pulseAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        
+        highlightNode?.addAnimation(pulseAnimation, forKey: "pulseAnimation")
+        
         node.addChildNode(highlightNode!)
         
-        print("🔧 Setup highlight node with size: \(highlightSize)")
+        print("🔧 Setup ENHANCED highlight node with size: \(highlightSize) and BRIGHT color: \(highlightColor)")
+    }
+    
+    private func colorForObjectType() -> PlatformColor {
+        switch type {
+        case .ledWall:
+            return .systemBlue.withAlphaComponent(1.0) // Bright blue
+        case .camera:
+            return .systemOrange.withAlphaComponent(1.0) // Bright orange
+        case .light:
+            return .systemYellow.withAlphaComponent(1.0) // Bright yellow
+        case .setPiece:
+            return .systemGreen.withAlphaComponent(1.0) // Bright green
+        case .select:
+            return .systemPurple.withAlphaComponent(1.0) // Bright purple
+        }
     }
     
     private func updateHighlight() {
         let shouldShow = isSelected || isHighlighted
         highlightNode?.isHidden = !shouldShow
-        print("👁️ Highlight visibility for \(name): \(shouldShow) (selected: \(isSelected), highlighted: \(isHighlighted))")
+        
+        // Update animation state with MUCH more dramatic effects
+        if shouldShow && isSelected {
+            // VERY bright pulsing for selected objects
+            highlightNode?.removeAnimation(forKey: "pulseAnimation")
+            
+            let pulseAnimation = CABasicAnimation(keyPath: "emission.intensity")
+            pulseAnimation.fromValue = 2.0
+            pulseAnimation.toValue = 4.0 // VERY bright
+            pulseAnimation.duration = 0.6
+            pulseAnimation.autoreverses = true
+            pulseAnimation.repeatCount = .infinity
+            pulseAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            
+            highlightNode?.addAnimation(pulseAnimation, forKey: "pulseAnimation")
+            
+            // Add scale pulsing too for extra visibility
+            let scaleAnimation = CABasicAnimation(keyPath: "transform.scale")
+            scaleAnimation.fromValue = 1.0
+            scaleAnimation.toValue = 1.02
+            scaleAnimation.duration = 0.6
+            scaleAnimation.autoreverses = true
+            scaleAnimation.repeatCount = .infinity
+            scaleAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            
+            highlightNode?.addAnimation(scaleAnimation, forKey: "scaleAnimation")
+            
+        } else if shouldShow && isHighlighted {
+            // Bright steady glow for highlighted (hovered) objects
+            highlightNode?.removeAnimation(forKey: "pulseAnimation")
+            highlightNode?.removeAnimation(forKey: "scaleAnimation")
+            
+            let glowAnimation = CABasicAnimation(keyPath: "emission.intensity")
+            glowAnimation.fromValue = 1.0
+            glowAnimation.toValue = 2.5
+            glowAnimation.duration = 0.3
+            glowAnimation.autoreverses = true
+            glowAnimation.repeatCount = .infinity
+            glowAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            
+            highlightNode?.addAnimation(glowAnimation, forKey: "glowAnimation")
+        } else {
+            // Remove all animations when not selected/highlighted
+            highlightNode?.removeAllAnimations()
+        }
+        
+        print("👁️ ENHANCED highlight visibility for \(name): \(shouldShow) (selected: \(isSelected), highlighted: \(isHighlighted))")
     }
 }
 

@@ -199,18 +199,34 @@ final class VirtualStudioManager: ObservableObject {
     func addLEDWall(from asset: LEDWallAsset, at pos: SCNVector3) {
         let plane = SCNPlane(width: CGFloat(asset.width), height: CGFloat(asset.height))
         let mat = SCNMaterial()
-        mat.diffuse.contents = UXColor.black
+        
+        // Set up the material properly for video content
+        mat.diffuse.contents = UXColor.darkGray // Default content
+        mat.lightingModel = .physicallyBased // Will be changed to .constant for camera feeds
+        mat.isDoubleSided = true
+        
+        // Configure texture properties for smooth video
+        mat.diffuse.magnificationFilter = .linear
+        mat.diffuse.minificationFilter = .linear
+        mat.diffuse.wrapS = .clamp
+        mat.diffuse.wrapT = .clamp
+        
         plane.materials = [mat]
         
         let obj = StudioObject(name: asset.name, type: .ledWall, position: pos)
         obj.node.geometry = plane
         obj.node.name = asset.name
+        
+        // Optimize the LED wall for video display
+        obj.optimizeLEDWallForVideo()
         obj.setupHighlightAfterGeometry() // Add highlight after geometry is set
         
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
         
         print("➕ Added LED Wall: \(asset.name) at \(pos)")
+        print("   - Optimized for video content")
+        print("   - Material configured for camera feeds")
     }
     
     func addSetPiece(from asset: SetPieceAsset, at pos: SCNVector3) {

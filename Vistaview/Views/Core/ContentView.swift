@@ -894,71 +894,217 @@ struct StudioSelectorSheet: View {
 struct CameraSourceView: View {
     let viewModel: StreamingViewModel
     
+    // Add camera feed manager integration
+    @StateObject private var cameraDeviceManager = CameraDeviceManager()
+    @StateObject private var cameraFeedManager: CameraFeedManager
+    
+    init(viewModel: StreamingViewModel) {
+        self.viewModel = viewModel
+        let deviceManager = CameraDeviceManager()
+        let feedManager = CameraFeedManager(cameraDeviceManager: deviceManager)
+        self._cameraDeviceManager = StateObject(wrappedValue: deviceManager)
+        self._cameraFeedManager = StateObject(wrappedValue: feedManager)
+    }
+    
     var body: some View {
         VStack(spacing: 12) {
-            // Camera thumbnails
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 8) {
-                ForEach(0..<4) { index in
-                    Button(action: {
-                        // Switch camera
-                    }) {
-                        VStack {
-                            Rectangle()
-                                .fill(index == 0 ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2))
-                                .frame(height: 60)
-                                .overlay(
-                                    VStack {
-                                        Image(systemName: "camera.fill")
-                                        Text("Camera \(index + 1)")
-                                            .font(.caption2)
-                                    }
-                                    .foregroundColor(index == 0 ? .blue : .secondary)
-                                )
-                                .cornerRadius(6)
-                        }
+            HStack {
+                Text("Camera Sources")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("Refresh") {
+                    refreshCameras()
+                }
+                .font(.caption2)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.blue.opacity(0.2))
+                .foregroundColor(.blue)
+                .cornerRadius(4)
+            }
+            
+            // Available camera devices
+            if cameraFeedManager.availableDevices.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "camera.slash")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No Cameras Found")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button("Detect Cameras") {
+                        refreshCameras()
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+            } else {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 8) {
+                    ForEach(cameraFeedManager.availableDevices, id: \.id) { device in
+                        cameraDeviceButton(device)
+                    }
                 }
             }
             
-            Divider()
-            
-            // Camera controls
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Camera Settings")
+            // Active camera feeds
+            if !cameraFeedManager.activeFeeds.isEmpty {
+                Divider()
+                
+                Text("Active Feeds")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 
-                HStack {
-                    Text("Position:")
-                    Spacer()
-                    Picker("Position", selection: .constant("Front")) {
-                        Text("Front").tag("Front")
-                        Text("Back").tag("Back")
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 8) {
+                    ForEach(cameraFeedManager.activeFeeds) { feed in
+                        activeFeedButton(feed)
                     }
-                    .pickerStyle(MenuPickerStyle())
-                    .frame(width: 80)
-                }
-                
-                HStack {
-                    Text("Resolution:")
-                    Spacer()
-                    Picker("Resolution", selection: .constant("720p")) {
-                        Text("480p").tag("480p")
-                        Text("720p").tag("720p")
-                        Text("1080p").tag("1080p")
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                    .frame(width: 80)
                 }
             }
             
             Spacer()
         }
         .padding()
+        .onAppear {
+            Task {
+                await discoverAndStartCameras()
+            }
+        }
+    }
+    
+    private func cameraDeviceButton(_ device: CameraDevice) -> some View {
+        let hasActiveFeed = cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
+        
+        return Button(action: {
+            if hasActiveFeed {
+                // Stop the feed
+                if let feed = cameraFeedManager.activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
+                    cameraFeedManager.stopFeed(feed)
+                }
+            } else {
+                // Start the feed
+                Task {
+                    await cameraFeedManager.startFeed(for: device)
+                }
+            }
+        }) {
+            VStack(spacing: 4) {
+                Rectangle()
+                    .fill(hasActiveFeed ? Color.green.opacity(0.3) : (device.isAvailable ? Color.blue.opacity(0.2) : Color.gray.opacity(0.2)))
+                    .frame(height: 60)
+                    .overlay(
+                        VStack(spacing: 2) {
+                            Image(systemName: device.icon)
+                                .font(.title2)
+                            Text(hasActiveFeed ? "ACTIVE" : (device.isAvailable ? "START" : "BUSY"))
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
+                    )
+                    .cornerRadius(6)
+                
+                Text(device.displayName)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.primary)
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(!device.isAvailable && !hasActiveFeed)
+    }
+    
+    private func activeFeedButton(_ feed: CameraFeed) -> some View {
+        Button(action: {
+            // Select this feed for live production
+            Task {
+                await cameraFeedManager.selectFeedForLiveProduction(feed)
+                print("📺 Selected feed for live production: \(feed.device.displayName)")
+            }
+        }) {
+            VStack(spacing: 4) {
+                Group {
+                    if let previewImage = feed.previewImage {
+                        Image(decorative: previewImage, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(16/9, contentMode: .fill)
+                            .frame(height: 60)
+                            .clipped()
+                            .overlay(
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Circle()
+                                            .fill(feed.connectionStatus.color)
+                                            .frame(width: 6, height: 6)
+                                        Text("LIVE")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                    }
+                                    .padding(4)
+                                    .background(Color.black.opacity(0.7))
+                                }
+                            )
+                    } else {
+                        Rectangle()
+                            .fill(Color.black)
+                            .frame(height: 60)
+                            .overlay(
+                                VStack(spacing: 2) {
+                                    Image(systemName: "camera.fill")
+                                    Text("STARTING...")
+                                        .font(.caption2)
+                                }
+                                .foregroundColor(.white)
+                            )
+                    }
+                }
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(cameraFeedManager.selectedFeedForLiveProduction?.id == feed.id ? Color.green : Color.clear, lineWidth: 2)
+                )
+                
+                Text(feed.device.displayName)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundColor(.primary)
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private func refreshCameras() {
+        Task {
+            await cameraFeedManager.forceRefreshDevices()
+        }
+    }
+    
+    private func discoverAndStartCameras() async {
+        // Auto-discover cameras and start feeds
+        let devices = await cameraFeedManager.getAvailableDevices()
+        print("📹 Live Production: Found \(devices.count) camera devices")
+        
+        // Auto-start the first available camera
+        if let firstCamera = devices.first(where: { $0.isAvailable }) {
+            print("🎥 Auto-starting first camera: \(firstCamera.displayName)")
+            if let feed = await cameraFeedManager.startFeed(for: firstCamera) {
+                await cameraFeedManager.selectFeedForLiveProduction(feed)
+                print("✅ Auto-selected first camera for live production")
+            }
+        }
     }
 }
 

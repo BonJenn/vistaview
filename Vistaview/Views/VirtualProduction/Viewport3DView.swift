@@ -17,6 +17,11 @@ struct Viewport3DView: NSViewRepresentable {
     @Binding var gridSize: Float
     @ObservedObject var transformController: TransformController  // Add this parameter
     
+    // Camera orientation bindings for compass
+    @Binding var cameraAzimuth: Float
+    @Binding var cameraElevation: Float
+    @Binding var cameraRoll: Float
+    
     // Add missing enum
     enum ViewportViewMode {
         case wireframe, solid, material
@@ -70,6 +75,18 @@ struct Viewport3DView: NSViewRepresentable {
         context.coordinator.selectedObjects = selectedObjects
         context.coordinator.snapToGrid = snapToGrid
         context.coordinator.gridSize = gridSize
+        
+        // Update camera orientation bindings
+        let (azimuth, elevation, roll) = context.coordinator.getCameraOrientation()
+        if cameraAzimuth != azimuth {
+            cameraAzimuth = azimuth
+        }
+        if cameraElevation != elevation {
+            cameraElevation = elevation
+        }
+        if cameraRoll != roll {
+            cameraRoll = roll
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -85,6 +102,9 @@ struct Viewport3DView: NSViewRepresentable {
         var snapToGrid: Bool = true
         var gridSize: Float = 1.0
         
+        // Store reference to current SCNView for drag operations
+        weak var currentSCNView: SCNView?
+        
         // Camera control properties
         private var cameraNode: SCNNode!
         private var cameraDistance: Float = 15.0
@@ -92,11 +112,17 @@ struct Viewport3DView: NSViewRepresentable {
         private var cameraElevation: Float = 0.3    // X-axis rotation (vertical)
         private var focusPoint = SCNVector3(0, 1, 0)
         
+        // Add new property for Z-axis rotation
+        private var cameraRoll: Float = 0.0 // Z-axis rotation
+        
         init(_ parent: Viewport3DView) {
             self.parent = parent
         }
         
         func setupCamera(in scnView: SCNView) {
+            // Store the SCNView reference
+            currentSCNView = scnView
+            
             // Remove any existing camera
             parent.studioManager.scene.rootNode.childNode(withName: "viewport_camera", recursively: true)?.removeFromParentNode()
             
@@ -139,14 +165,26 @@ struct Viewport3DView: NSViewRepresentable {
             panGesture.buttonMask = 0 // Accept all buttons/touches
             view.addGestureRecognizer(panGesture)
             
-            // Try rotation gesture for trackpad rotate
+            // Enhanced rotation gesture for trackpad rotate (Z-axis rotation)
             let rotationGesture = NSRotationGestureRecognizer(target: self, action: #selector(handleRotation(_:)))
             rotationGesture.delegate = self
             view.addGestureRecognizer(rotationGesture)
         }
         
         func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool {
-            return true
+            // Allow rotation gesture to work simultaneously with pan for proper multitouch
+            if (gestureRecognizer is NSRotationGestureRecognizer && otherGestureRecognizer is NSPanGestureRecognizer) ||
+               (gestureRecognizer is NSPanGestureRecognizer && otherGestureRecognizer is NSRotationGestureRecognizer) {
+                return true
+            }
+            
+            // Allow magnify to work with pan for zoom + orbit
+            if (gestureRecognizer is NSMagnificationGestureRecognizer && otherGestureRecognizer is NSPanGestureRecognizer) ||
+               (gestureRecognizer is NSPanGestureRecognizer && otherGestureRecognizer is NSMagnificationGestureRecognizer) {
+                return true
+            }
+            
+            return true // Allow all gestures to work together for better multitouch support
         }
         
         // Handle trackpad scroll for orbiting
@@ -180,9 +218,13 @@ struct Viewport3DView: NSViewRepresentable {
                 return
             }
             
-            // Check if this is likely a trackpad scroll gesture (high velocity, smooth movement)
-            if abs(velocity.x) > 50 || abs(velocity.y) > 50 {
-                // This looks like a scroll gesture - use for orbiting
+            // Improved gesture detection for better multitouch support
+            let isHighVelocityScroll = abs(velocity.x) > 50 || abs(velocity.y) > 50
+            let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
+            let isCommandPressed = NSEvent.modifierFlags.contains(.command)
+            
+            if isHighVelocityScroll || (!isShiftPressed && !isCommandPressed) {
+                // This looks like a scroll gesture or normal orbit - use for orbiting
                 let sensitivity: Float = 0.005
                 let deltaAzimuth = Float(translation.x) * sensitivity     // Horizontal = Y-axis rotation
                 let deltaElevation = -Float(translation.y) * sensitivity  // Vertical = X-axis rotation
@@ -196,19 +238,47 @@ struct Viewport3DView: NSViewRepresentable {
                 
                 updateCameraPosition()
                 gesture.setTranslation(.zero, in: view)
-            } else if NSEvent.modifierFlags.contains(.shift) {
-                // Slow movement with Shift = pan focus point
+            } else if isShiftPressed {
+                // Shift + drag = pan focus point
                 handleCameraPan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            } else if isCommandPressed {
+                // Command + drag = alternative orbit mode
+                let sensitivity: Float = 0.01
+                let deltaAzimuth = Float(translation.x) * sensitivity
+                let deltaElevation = -Float(translation.y) * sensitivity
+                
+                cameraAzimuth += deltaAzimuth
+                cameraElevation += deltaElevation
+                
+                let maxElevation: Float = Float.pi / 2 - 0.1
+                cameraElevation = max(-maxElevation, min(maxElevation, cameraElevation))
+                
+                updateCameraPosition()
                 gesture.setTranslation(.zero, in: view)
             }
         }
         
         @objc func handleRotation(_ gesture: NSRotationGestureRecognizer) {
-            // Handle trackpad rotation gesture
-            let rotationSensitivity: Float = 1.0
+            // Handle trackpad rotation gesture for Z-axis rotation (roll)
+            let rotationSensitivity: Float = 0.5
             let deltaRotation = Float(gesture.rotation) * rotationSensitivity
             
-            cameraAzimuth += deltaRotation
+            // Apply Z-axis rotation (roll)
+            cameraRoll += deltaRotation
+            
+            // Keep roll within reasonable bounds
+            if cameraRoll > Float.pi * 2 {
+                cameraRoll -= Float.pi * 2
+            } else if cameraRoll < -Float.pi * 2 {
+                cameraRoll += Float.pi * 2
+            }
+            
+            // Debug output for multitouch rotation
+            if abs(deltaRotation) > 0.01 {
+                print("🌀 Z-axis rotation: \(cameraRoll * 180 / Float.pi)°")
+            }
+            
             updateCameraPosition()
             gesture.rotation = 0
         }
@@ -254,9 +324,10 @@ struct Viewport3DView: NSViewRepresentable {
         }
         
         private func updateCameraPosition() {
-            // Spherical to Cartesian conversion
+            // Spherical to Cartesian conversion with Z-axis rotation (roll)
             // Azimuth rotates around Y-axis (horizontal movement)
             // Elevation rotates around X-axis (vertical movement)
+            // Roll rotates around Z-axis (twist)
             let x = cameraDistance * cos(cameraElevation) * sin(cameraAzimuth)
             let y = cameraDistance * sin(cameraElevation)
             let z = cameraDistance * cos(cameraElevation) * cos(cameraAzimuth)
@@ -267,7 +338,36 @@ struct Viewport3DView: NSViewRepresentable {
                 focusPoint.z + CGFloat(z)
             )
             
+            // For now, use a simpler approach to roll that doesn't cause compilation issues
+            // Apply Z-axis rotation using Euler angles
             cameraNode.look(at: focusPoint, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
+            
+            // Apply roll rotation after look-at
+            let currentTransform = cameraNode.worldTransform
+            let rollTransform = SCNMatrix4MakeRotation(CGFloat(cameraRoll), 0, 0, 1)
+            cameraNode.transform = SCNMatrix4Mult(currentTransform, rollTransform)
+        }
+        
+        // Add helper functions for vector math
+        private func crossProduct(_ a: SCNVector3, _ b: SCNVector3) -> SCNVector3 {
+            return SCNVector3(
+                a.y * b.z - a.z * b.y,
+                a.z * b.x - a.x * b.z,
+                a.x * b.y - a.y * b.x
+            )
+        }
+        
+        private func normalize(_ vector: SCNVector3) -> SCNVector3 {
+            let length = sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+            if length > 0 {
+                return SCNVector3(vector.x / length, vector.y / length, vector.z / length)
+            }
+            return SCNVector3(0, 1, 0) // Default up
+        }
+        
+        // Add method to get current camera orientation for compass
+        func getCameraOrientation() -> (azimuth: Float, elevation: Float, roll: Float) {
+            return (cameraAzimuth, cameraElevation, cameraRoll)
         }
         
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
@@ -340,18 +440,41 @@ struct Viewport3DView: NSViewRepresentable {
         func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
             let location = sender.draggingLocation
             
-            // Check if dragging a set piece
+            // Use the stored SCNView reference
+            guard let scnView = currentSCNView else {
+                print("⚠️ No SCNView available for drag operation")
+                return false 
+            }
+            
+            // Check if dragging an asset ID
             if let data = sender.draggingPasteboard.data(forType: .string),
-               let setPieceID = String(data: data, encoding: .utf8),
-               let setPiece = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == setPieceID }) {
+               let assetID = String(data: data, encoding: .utf8) {
                 
-                Task { @MainActor in  
-                    // Convert drop location to world position - need to get the SCNView from elsewhere
-                    let worldPos = SCNVector3(Float.random(in: -5...5), 0, Float.random(in: -5...5))
+                Task { @MainActor in
+                    // Convert drop location to 3D world position
+                    let worldPos = parent.studioManager.worldPosition(from: location, in: scnView)
                     let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
                     
-                    // Add the set piece to the scene
-                    parent.studioManager.addSetPieceFromAsset(setPiece, at: finalPos)
+                    // Find and add the appropriate asset
+                    if let ledWallAsset = LEDWallAsset.predefinedWalls.first(where: { $0.id.uuidString == assetID }) {
+                        parent.studioManager.addLEDWall(from: ledWallAsset, at: finalPos)
+                        print("🖱️ Dropped LED Wall: \(ledWallAsset.name) at \(finalPos)")
+                        
+                    } else if let cameraAsset = CameraAsset.predefinedCameras.first(where: { $0.id.uuidString == assetID }) {
+                        let camera = VirtualCamera(name: cameraAsset.name, position: finalPos)
+                        camera.focalLength = Float(cameraAsset.focalLength)
+                        parent.studioManager.virtualCameras.append(camera)
+                        parent.studioManager.scene.rootNode.addChildNode(camera.node)
+                        print("🖱️ Dropped Camera: \(cameraAsset.name) at \(finalPos)")
+                        
+                    } else if let lightAsset = LightAsset.predefinedLights.first(where: { $0.id.uuidString == assetID }) {
+                        parent.studioManager.addLight(from: lightAsset, at: finalPos)
+                        print("🖱️ Dropped Light: \(lightAsset.name) at \(finalPos)")
+                        
+                    } else if let setPieceAsset = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == assetID }) {
+                        parent.studioManager.addSetPiece(from: setPieceAsset, at: finalPos)
+                        print("🖱️ Dropped Set Piece: \(setPieceAsset.name) at \(finalPos)")
+                    }
                 }
                 
                 return true
@@ -373,26 +496,68 @@ struct Viewport3DView: NSViewRepresentable {
         @objc private func selectAll() { /* Implement */ }
         @objc private func deselectAll() { /* Implement */ }
         
+        // Enhanced selection handling with better visual feedback
         @MainActor
         private func handleSelection(at point: CGPoint, in scnView: SCNView) {
-            let hitResults = scnView.hitTest(point, options: nil)
+            let hitResults = scnView.hitTest(point, options: [
+                .searchMode: SCNHitTestSearchMode.all.rawValue,
+                .ignoreChildNodes: false,
+                .ignoreHiddenNodes: true
+            ])
+            
+            // Clear all highlights first
+            for obj in parent.studioManager.studioObjects {
+                obj.setHighlighted(false)
+            }
             
             if let hitResult = hitResults.first {
                 let hitNode = hitResult.node
                 
                 // Find the studio object that contains this node
                 if let object = parent.studioManager.getObject(from: hitNode) {
-                    if selectedObjects.contains(object.id) {
-                        selectedObjects.remove(object.id)
+                    let wasSelected = selectedObjects.contains(object.id)
+                    let isMultiSelect = NSEvent.modifierFlags.contains(.shift) || NSEvent.modifierFlags.contains(.command)
+                    
+                    if isMultiSelect {
+                        // Multi-selection mode
+                        if wasSelected {
+                            selectedObjects.remove(object.id)
+                            object.setSelected(false)
+                        } else {
+                            selectedObjects.insert(object.id)
+                            object.setSelected(true)
+                        }
                     } else {
-                        // Clear previous selection if not holding modifier
+                        // Single selection mode - clear others first
+                        for obj in parent.studioManager.studioObjects {
+                            obj.setSelected(false)
+                        }
                         selectedObjects.removeAll()
+                        
+                        // Select the clicked object
                         selectedObjects.insert(object.id)
+                        object.setSelected(true)
                     }
+                    
+                    print("🎯 Selected object: \(object.name) (Total selected: \(selectedObjects.count))")
+                    
+                    // Provide haptic feedback on selection
+                    #if os(macOS)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                    #endif
+                    
+                } else {
+                    print("⚠️ Hit node \(hitNode.name ?? "unnamed") but couldn't find associated StudioObject")
                 }
             } else {
-                // Clicked on empty space, clear selection
-                selectedObjects.removeAll()
+                // Clicked on empty space, clear selection unless multi-selecting
+                if !NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.command) {
+                    for obj in parent.studioManager.studioObjects {
+                        obj.setSelected(false)
+                    }
+                    selectedObjects.removeAll()
+                    print("🎯 Cleared selection (clicked empty space)")
+                }
             }
         }
         
