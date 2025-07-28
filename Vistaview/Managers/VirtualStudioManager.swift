@@ -165,8 +165,20 @@ final class VirtualStudioManager: ObservableObject {
     }
     
     func deleteObject(_ obj: StudioObject) {
+        print("🗑️ Deleting object: \(obj.name)")
+        
+        // Remove from scene
         obj.node.removeFromParentNode()
+        
+        // Remove from our collections
         studioObjects.removeAll { $0.id == obj.id }
+        
+        // Also remove from virtual cameras if it's a camera
+        if obj.type == .camera {
+            virtualCameras.removeAll { $0.id == obj.id }
+        }
+        
+        print("✅ Object deleted. Remaining objects: \(studioObjects.count)")
     }
     
     func node(for obj: StudioObject) -> SCNNode { obj.node }
@@ -1043,5 +1055,15 @@ final class VirtualStudioManager: ObservableObject {
             obj.setupHighlightAfterGeometry()
         }
         print("✅ Reset highlights for \(studioObjects.count) objects")
+    }
+    
+    func deleteSelectedObjects() {
+        let selectedObjs = studioObjects.filter { $0.isSelected }
+        
+        for obj in selectedObjs {
+            deleteObject(obj)
+        }
+        
+        print("🗑️ Deleted \(selectedObjs.count) selected objects")
     }
 }

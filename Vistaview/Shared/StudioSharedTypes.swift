@@ -352,6 +352,7 @@ final class StudioObject: Identifiable, ObservableObject {
     @Published var isVisible: Bool = true
     @Published var isSelected: Bool = false
     @Published var isHighlighted: Bool = false
+    @Published var isLocked: Bool = false // NEW PROPERTY
     
     // LED Wall specific properties
     @Published var ledWallContentType: LEDWallContentType = .none

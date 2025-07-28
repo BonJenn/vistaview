@@ -251,6 +251,34 @@ struct VirtualProductionView: View {
                 }
                 return .ignored
             }
+            // Delete key support - ONLY DELETE KEY, NO BACKSPACE
+            .onKeyPress(.delete) {
+                let selectedObjs = getSelectedStudioObjects()
+                if !selectedObjs.isEmpty {
+                    // Check if any selected objects are locked
+                    let lockedObjects = selectedObjs.filter { $0.isLocked }
+                    let unlocked = selectedObjs.filter { !$0.isLocked }
+                    
+                    if !lockedObjects.isEmpty {
+                        keyboardFeedback.showFeedback("⚠️ Cannot delete \(lockedObjects.count) locked object(s)", color: .orange)
+                        print("🔒 Blocked deletion of locked objects: \(lockedObjects.map { $0.name })")
+                    }
+                    
+                    if !unlocked.isEmpty {
+                        for obj in unlocked {
+                            studioManager.deleteObject(obj)
+                            selectedObjects.remove(obj.id)
+                        }
+                        keyboardFeedback.showFeedback("🗑️ Deleted \(unlocked.count) object(s)", color: .red)
+                    }
+                } else {
+                    keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+                }
+                return .handled
+            }
+            .onChange(of: selectedTool) { _, newValue in
+                if newValue == .select { selectedObject = nil }
+            }
     }
     
     @ViewBuilder
@@ -320,6 +348,84 @@ struct VirtualProductionView: View {
                 ))
             }
         }
+    }
+    
+    // MARK: - Command Palette
+    
+    private var commandPalette: some View {
+        VStack(spacing: 16) {
+            // Header
+            HStack {
+                Image(systemName: "command")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.white)
+                
+                Text("Command Palette")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Button("✕") {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                        showingCommandPalette = false
+                    }
+                }
+                .foregroundColor(.white.opacity(0.7))
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            
+            // Search field
+            TextField("Search commands...", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 20)
+            
+            // Command list
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    CommandPaletteItem(title: "Add LED Wall", shortcut: "L", icon: "tv") {
+                        selectedTool = .ledWall
+                        showingCommandPalette = false
+                    }
+                    
+                    CommandPaletteItem(title: "Add Camera", shortcut: "C", icon: "video") {
+                        selectedTool = .camera
+                        showingCommandPalette = false
+                    }
+                    
+                    CommandPaletteItem(title: "Add Light", shortcut: "Shift+L", icon: "lightbulb") {
+                        selectedTool = .light
+                        showingCommandPalette = false
+                    }
+                    
+                    CommandPaletteItem(title: "Toggle Object Browser", shortcut: "B", icon: "cube.box") {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                            showingObjectBrowser.toggle()
+                        }
+                        showingCommandPalette = false
+                    }
+                    
+                    CommandPaletteItem(title: "Select Tool", shortcut: "V", icon: "cursorarrow") {
+                        selectedTool = .select
+                        showingCommandPalette = false
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            .frame(maxHeight: 300)
+            
+            Spacer()
+        }
+        .frame(width: 400, height: 450)
+        .background(.regularMaterial)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.white.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 20)
     }
     
     private func setupInitialCameras() {
@@ -764,36 +870,198 @@ struct VirtualProductionView: View {
     
     private var rightPanel: some View {
         VStack(spacing: 0) {
-            Text("Properties")
-                .font(.headline)
-                .padding()
+            // Object List Panel
+            ObjectListPanel(selectedObjects: $selectedObjects)
+                .environmentObject(studioManager)
             
-            if let obj = selectedObject {
-                Text("Selected: \(obj.name)")
-                    .font(.caption)
-                    .padding()
+            Spacer(minLength: 16)
+            
+            // Properties Panel (if object selected)
+            if !selectedObjects.isEmpty {
+                propertiesPanel
             }
-            
-            Spacer()
         }
-        .background(.regularMaterial)
     }
     
-    private var commandPalette: some View {
-        VStack {
-            Text("Command Palette")
-                .font(.title2)
-                .padding()
+    private var propertiesPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            propertiesPanelHeader
             
-            TextField("Search...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding()
+            Divider()
+                .background(.white.opacity(0.2))
+            
+            // Properties content
+            propertiesPanelContent
+        }
+        .background(.regularMaterial)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+    
+    private var propertiesPanelHeader: some View {
+        HStack {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.white)
+            
+            Text("Properties")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.white)
             
             Spacer()
         }
-        .frame(width: 400, height: 300)
-        .background(.regularMaterial)
-        .cornerRadius(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.black.opacity(0.8))
+    }
+    
+    private var propertiesPanelContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if let firstSelected = getSelectedStudioObjects().first {
+                    transformSection(for: firstSelected)
+                    objectInfoSection(for: firstSelected)
+                    
+                    if selectedObjects.count > 1 {
+                        multiSelectionSection
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .background(.black.opacity(0.4))
+    }
+    
+    private func transformSection(for object: StudioObject) -> some View {
+        PropertySection(title: "Transform") {
+            VStack(alignment: .leading, spacing: 8) {
+                // Position
+                HStack {
+                    Text("Position:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    let pos = object.position
+                    Text("(\(pos.x, specifier: "%.2f"), \(pos.y, specifier: "%.2f"), \(pos.z, specifier: "%.2f"))")
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Spacer()
+                }
+                
+                // Rotation
+                HStack {
+                    Text("Rotation:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    let rot = object.rotation
+                    let xDeg = Float(rot.x) * 180.0 / Float.pi
+                    let yDeg = Float(rot.y) * 180.0 / Float.pi
+                    let zDeg = Float(rot.z) * 180.0 / Float.pi
+                    Text("(\(xDeg, specifier: "%.1f")°, \(yDeg, specifier: "%.1f")°, \(zDeg, specifier: "%.1f")°)")
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Spacer()
+                }
+                
+                // Scale
+                HStack {
+                    Text("Scale:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    let scale = object.scale
+                    Text("(\(scale.x, specifier: "%.2f"), \(scale.y, specifier: "%.2f"), \(scale.z, specifier: "%.2f"))")
+                        .font(.caption.monospaced())
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    private func objectInfoSection(for object: StudioObject) -> some View {
+        PropertySection(title: "Object Info") {
+            VStack(alignment: .leading, spacing: 8) {
+                // Name
+                HStack {
+                    Text("Name:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    Text(object.name)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    Spacer()
+                }
+                
+                // Type
+                HStack {
+                    Text("Type:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    HStack(spacing: 4) {
+                        Image(systemName: object.type.icon)
+                            .foregroundColor(colorForObjectType(object.type))
+                        Text(object.type.name)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+                    
+                    Spacer()
+                }
+                
+                // Visibility
+                HStack {
+                    Text("Visible:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    Image(systemName: object.isVisible ? "eye" : "eye.slash")
+                        .foregroundColor(object.isVisible ? .green : .red)
+                        .font(.caption)
+                    
+                    Spacer()
+                }
+                
+                // Lock status
+                HStack {
+                    Text("Locked:")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 60, alignment: .leading)
+                    
+                    Image(systemName: object.isLocked ? "lock.fill" : "lock.open")
+                        .foregroundColor(object.isLocked ? .orange : .gray)
+                        .font(.caption)
+                    
+                    Spacer()
+                }
+            }
+        }
+    }
+    
+    private var multiSelectionSection: some View {
+        PropertySection(title: "Multi-Selection") {
+            Text("+ \(selectedObjects.count - 1) more objects")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.6))
+        }
     }
 }
 
@@ -801,3 +1069,95 @@ struct VirtualProductionView: View {
 
 enum CameraMode: String, CaseIterable, Hashable {
     case orbit, pan, fly}
+
+// Helper views for properties panel
+struct PropertySection<Content: View>: View {
+    let title: String
+    let content: Content
+    
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white.opacity(0.7))
+                .textCase(.uppercase)
+            
+            content
+        }
+    }
+}
+
+struct PropertyRow<Content: View>: View {
+    let label: String
+    let content: Content
+    
+    init(label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+    
+    var body: some View {
+        HStack {
+            Text(label + ":")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 60, alignment: .leading)
+            
+            content
+            
+            Spacer()
+        }
+    }
+}
+
+// Helper views for command palette
+struct CommandPaletteItem: View {
+    let title: String
+    let shortcut: String
+    let icon: String
+    let action: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 20)
+                
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Text(shortcut)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.white.opacity(0.1))
+                    .cornerRadius(4)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovered ? .white.opacity(0.1) : .clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
