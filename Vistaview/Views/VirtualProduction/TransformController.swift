@@ -14,6 +14,8 @@ class TransformController: ObservableObject {
     @Published var currentValues: TransformValues = TransformValues()
     @Published var selectedObjects: [StudioObject] = []
     @Published var isDragging = false
+    @Published var isSnapMode = false // Track when Shift is held for snapping
+    @Published var isDistanceScaling = false // Track cursor-based scaling mode
     
     private var originalPositions: [UUID: SCNVector3] = [:]
     private var originalRotations: [UUID: SCNVector3] = [:]
@@ -22,6 +24,11 @@ class TransformController: ObservableObject {
     private var lastMousePos: CGPoint = .zero
     private var accumulator: Float = 0.0
     
+    // Cursor-based scaling state
+    private var scaleStartMousePos: CGPoint = .zero
+    private var scaleReferenceDistance: CGFloat = 0.0
+    private var initialScaleFactors: [UUID: SCNVector3] = [:]
+    
     // Visual gizmo nodes for axis constraints
     private var axisGizmoNodes: [SCNNode] = []
     private weak var scene: SCNScene?
@@ -29,6 +36,10 @@ class TransformController: ObservableObject {
     // Mouse interaction state
     private var dragStartPoint: CGPoint = .zero
     private var minimumDragDistance: CGFloat = 5.0 // Pixels to start drag
+    
+    // Snap settings for Blender-like behavior
+    private let snapAngleIncrement: Float = 15.0 * Float.pi / 180.0 // 15 degrees in radians
+    private let fineSnapAngleIncrement: Float = 5.0 * Float.pi / 180.0 // 5 degrees for precise work
     
     enum TransformMode {
         case move, rotate, scale
@@ -43,9 +54,9 @@ class TransformController: ObservableObject {
         
         var instruction: String {
             switch self {
-            case .move: return "Move: Mouse to position, X/Y/Z to constrain, Enter to confirm, Esc to cancel"
-            case .rotate: return "Rotate: Mouse to rotate, X/Y/Z to constrain, Enter to confirm, Esc to cancel"
-            case .scale: return "Scale: Mouse to scale, X/Y/Z to constrain, Enter to confirm, Esc to cancel"
+            case .move: return "Move: Mouse to position, X/Y/Z to constrain, Shift for snap, Enter to confirm, Esc to cancel"
+            case .rotate: return "Rotate: Mouse to rotate, X/Y/Z to constrain, Shift for angle snap, Enter to confirm, Esc to cancel"
+            case .scale: return "Scale: Mouse to scale, X/Y/Z to constrain, Shift for increment snap, Enter to confirm, Esc to cancel"
             }
         }
     }
@@ -77,6 +88,7 @@ class TransformController: ObservableObject {
         var rotation = SCNVector3Zero
         var scale = SCNVector3(1, 1, 1)
         var delta = SCNVector3Zero
+        var snapAngle: Float? = nil // Current snap angle for rotation
     }
     
     func startTransform(_ newMode: TransformMode, objects: [StudioObject], startPoint: CGPoint, scene: SCNScene) {
@@ -108,6 +120,9 @@ class TransformController: ObservableObject {
     
     func updateTransformWithMouse(mousePos: CGPoint) {
         guard isActive else { return }
+        
+        // Check if Shift is currently pressed for snap mode
+        updateSnapMode()
         
         // Calculate delta from start position for more accurate transforms
         let totalDeltaX = Float(mousePos.x - startMousePos.x) * 0.01
@@ -190,7 +205,27 @@ class TransformController: ObservableObject {
     }
     
     private func updateRotateTransform(deltaX: Float, deltaY: Float, objects: [StudioObject]) {
-        let totalRotationDelta = Float(lastMousePos.x - startMousePos.x) * Float.pi / 180 * 0.25 // More sensitive (was 0.5)
+        let baseTotalRotationDelta = Float(lastMousePos.x - startMousePos.x) * Float.pi / 180 * 0.25 // Base rotation sensitivity
+        
+        var finalRotationDelta = baseTotalRotationDelta
+        
+        // Apply snapping if Shift is held
+        if isSnapMode {
+            // Snap rotation to increments
+            let snapIncrement = snapAngleIncrement
+            finalRotationDelta = round(baseTotalRotationDelta / snapIncrement) * snapIncrement
+            
+            // Store the current snap angle for UI feedback
+            currentValues.snapAngle = finalRotationDelta * 180 / Float.pi // Convert to degrees for display
+            
+            // Debug feedback for snapping
+            let snapDegrees = finalRotationDelta * 180 / Float.pi
+            if abs(finalRotationDelta - baseTotalRotationDelta) > 0.01 { // Only log when actually snapping
+                print("🔒 SNAP: \(baseTotalRotationDelta * 180 / Float.pi)° → \(snapDegrees)°")
+            }
+        } else {
+            currentValues.snapAngle = nil
+        }
         
         for obj in objects {
             guard let originalRot = originalRotations[obj.id] else { continue }
@@ -199,11 +234,11 @@ class TransformController: ObservableObject {
             
             switch axis {
             case .free, .y:
-                newRotation.y += CGFloat(totalRotationDelta)
+                newRotation.y += CGFloat(finalRotationDelta)
             case .x:
-                newRotation.x += CGFloat(totalRotationDelta)
+                newRotation.x += CGFloat(finalRotationDelta)
             case .z:
-                newRotation.z += CGFloat(totalRotationDelta)
+                newRotation.z += CGFloat(finalRotationDelta)
             }
             
             obj.rotation = newRotation
@@ -255,6 +290,8 @@ class TransformController: ObservableObject {
                 firstObj.position.z - originalPos.z
             )
         }
+        
+        // Note: snapAngle is set in the rotation methods, don't reset it here
     }
     
     private func clearStoredValues() {
@@ -494,7 +531,26 @@ class TransformController: ObservableObject {
     }
     
     private func updateMouseRotateTransform(deltaX: Float, deltaY: Float) {
-        let rotationAmount = deltaX * Float.pi / 2 // More sensitive rotation
+        let baseRotationAmount = deltaX * Float.pi / 2 // Base rotation sensitivity
+        
+        var finalRotationAmount = baseRotationAmount
+        
+        // Apply snapping if Shift is held
+        if isSnapMode {
+            let snapIncrement = snapAngleIncrement
+            finalRotationAmount = round(baseRotationAmount / snapIncrement) * snapIncrement
+            
+            // Store snap angle for UI feedback
+            currentValues.snapAngle = finalRotationAmount * 180 / Float.pi
+            
+            // Debug feedback
+            let snapDegrees = finalRotationAmount * 180 / Float.pi
+            if abs(finalRotationAmount - baseRotationAmount) > 0.01 {
+                print("🔒 MOUSE SNAP: \(baseRotationAmount * 180 / Float.pi)° → \(snapDegrees)°")
+            }
+        } else {
+            currentValues.snapAngle = nil
+        }
         
         for obj in selectedObjects {
             guard let originalRot = originalRotations[obj.id] else { continue }
@@ -503,13 +559,13 @@ class TransformController: ObservableObject {
             
             switch axis {
             case .x:
-                newRotation.x += CGFloat(rotationAmount)
+                newRotation.x += CGFloat(finalRotationAmount)
             case .y:
-                newRotation.y += CGFloat(rotationAmount)
+                newRotation.y += CGFloat(finalRotationAmount)
             case .z:
-                newRotation.z += CGFloat(rotationAmount)
+                newRotation.z += CGFloat(finalRotationAmount)
             case .free:
-                newRotation.y += CGFloat(rotationAmount)
+                newRotation.y += CGFloat(finalRotationAmount)
             }
             
             obj.rotation = newRotation
@@ -623,6 +679,142 @@ class TransformController: ObservableObject {
         print("✅ Nudge complete - gizmos updated")
     }
     
+    private func updateSnapMode() {
+        let wasSnapMode = isSnapMode
+        isSnapMode = NSEvent.modifierFlags.contains(.shift)
+        
+        // Provide feedback when entering/exiting snap mode
+        if isSnapMode != wasSnapMode {
+            if isSnapMode {
+                switch mode {
+                case .rotate:
+                    print("🔒 SNAP MODE: Rotation will snap to \(Int(snapAngleIncrement * 180 / Float.pi))° increments")
+                case .move:
+                    print("🔒 SNAP MODE: Movement will snap to grid")
+                case .scale:
+                    print("🔒 SNAP MODE: Scale will snap to increments")
+                }
+            } else {
+                print("🔓 FREE MODE: No snapping")
+            }
+        }
+    }
+    
+    func startDistanceBasedScaling(_ objects: [StudioObject], startPoint: CGPoint, scene: SCNScene) {
+        guard !objects.isEmpty else {
+            print("⚠️ No objects selected for distance-based scaling")
+            return
+        }
+        
+        mode = .scale
+        axis = .free
+        isActive = true
+        isDistanceScaling = true
+        selectedObjects = objects
+        self.scene = scene
+        scaleStartMousePos = startPoint
+        scaleReferenceDistance = 100.0 // Initial reference distance
+        
+        // Store original scale values
+        originalScales.removeAll()
+        initialScaleFactors.removeAll()
+        
+        for obj in objects {
+            originalScales[obj.id] = obj.scale
+            initialScaleFactors[obj.id] = obj.scale
+        }
+        
+        updateCurrentValues(from: objects)
+        updateAxisGizmos()
+        
+        print("📏 Started distance-based scaling for \(objects.count) objects")
+        print("   Reference distance: \(scaleReferenceDistance)px")
+    }
+    
+    func updateDistanceBasedScaling(currentMousePos: CGPoint) {
+        guard isActive && isDistanceScaling else { return }
+        
+        // Calculate distance from start point
+        let deltaX = currentMousePos.x - scaleStartMousePos.x
+        let deltaY = currentMousePos.y - scaleStartMousePos.y
+        let currentDistance = sqrt(deltaX * deltaX + deltaY * deltaY)
+        
+        // Calculate scale factor based on distance change
+        // Moving away from start = scale up
+        // Moving toward start = scale down
+        let distanceRatio = currentDistance / scaleReferenceDistance
+        let scaleFactor = max(0.1, distanceRatio) // Minimum 10% scale
+        
+        // Apply distance-based scaling
+        for obj in selectedObjects {
+            guard let originalScale = originalScales[obj.id] else { continue }
+            
+            var newScale = originalScale
+            
+            switch axis {
+            case .free:
+                newScale = SCNVector3(
+                    originalScale.x * CGFloat(scaleFactor),
+                    originalScale.y * CGFloat(scaleFactor),
+                    originalScale.z * CGFloat(scaleFactor)
+                )
+            case .x:
+                newScale.x = originalScale.x * CGFloat(scaleFactor)
+            case .y:
+                newScale.y = originalScale.y * CGFloat(scaleFactor)
+            case .z:
+                newScale.z = originalScale.z * CGFloat(scaleFactor)
+            }
+            
+            obj.scale = newScale
+            obj.updateNodeTransform()
+        }
+        
+        // Update UI values
+        updateCurrentValues(from: selectedObjects)
+        updateGizmoPositions()
+        
+        // Debug output (limit frequency)
+        if Int(currentDistance) % 10 == 0 {
+            print("📏 Distance scaling: \(String(format: "%.0f", currentDistance))px → \(String(format: "%.2f", scaleFactor))x")
+        }
+    }
+    
+    func confirmDistanceScaling() {
+        guard isDistanceScaling else { return }
+        
+        // Finalize the scaling
+        for obj in selectedObjects {
+            obj.updateNodeTransform() // Ensure the node reflects the current object state
+        }
+        
+        isActive = false
+        isDistanceScaling = false
+        clearAxisGizmos()
+        clearStoredValues()
+        
+        print("✅ Distance-based scaling confirmed")
+    }
+    
+    func cancelDistanceScaling() {
+        guard isDistanceScaling else { return }
+        
+        // Restore original scale values
+        for obj in selectedObjects {
+            if let originalScale = originalScales[obj.id] {
+                obj.scale = originalScale
+                obj.updateNodeTransform()
+            }
+        }
+        
+        isActive = false
+        isDistanceScaling = false
+        clearAxisGizmos()
+        clearStoredValues()
+        
+        print("❌ Distance-based scaling cancelled")
+    }
+    
     enum NudgeDirection {
         case up, down, left, right, forward, backward
         
@@ -659,9 +851,41 @@ struct TransformOverlay: View {
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(controller.axis.color.swiftUIColor)
                             
-                            Text(controller.mode.rawValue.capitalized)
+                            Text(modeDisplayName)
                                 .font(.headline)
                                 .foregroundColor(.white)
+                            
+                            // Distance scaling indicator
+                            if controller.isDistanceScaling {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                                        .font(.caption)
+                                        .foregroundColor(.cyan)
+                                    Text("DISTANCE")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundColor(.cyan)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.cyan.opacity(0.2))
+                                .cornerRadius(4)
+                            }
+                            
+                            // Snap mode indicator
+                            if controller.isSnapMode && !controller.isDistanceScaling {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "magnet.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.yellow)
+                                    Text("SNAP")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundColor(.yellow)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.yellow.opacity(0.2))
+                                .cornerRadius(4)
+                            }
                         }
                         
                         Spacer()
@@ -675,41 +899,88 @@ struct TransformOverlay: View {
                             .cornerRadius(4)
                     }
                     
-                    // Axis constraint indicator
-                    HStack {
-                        Text("Constraint:")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                        
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(controller.axis.color.swiftUIColor)
-                                .frame(width: 8, height: 8)
+                    // Axis constraint indicator (only show if not in distance scaling mode)
+                    if !controller.isDistanceScaling {
+                        HStack {
+                            Text("Constraint:")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
                             
-                            Text(controller.axis.label)
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(controller.axis.color.swiftUIColor)
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(controller.axis.color.swiftUIColor)
+                                    .frame(width: 8, height: 8)
+                                
+                                Text(controller.axis.label)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(controller.axis.color.swiftUIColor)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(controller.axis.color.swiftUIColor.opacity(0.2))
+                            .cornerRadius(4)
+                            
+                            Spacer()
+                            
+                            // Show snap angle for rotation
+                            if controller.mode == .rotate, 
+                               let snapAngle = controller.currentValues.snapAngle,
+                               controller.isSnapMode {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.caption)
+                                        .foregroundColor(.yellow)
+                                    Text("\(snapAngle, specifier: "%.0f")°")
+                                        .font(.caption.weight(.medium))
+                                        .foregroundColor(.yellow)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.yellow.opacity(0.2))
+                                .cornerRadius(4)
+                            }
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(controller.axis.color.swiftUIColor.opacity(0.2))
-                        .cornerRadius(4)
-                        
-                        Spacer()
                     }
                     
                     // Current values with beautiful formatting
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Position:")
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(.white.opacity(0.7))
+                        if controller.mode == .rotate {
+                            // Show rotation values in degrees for better readability
+                            let rotDegX = Float(controller.currentValues.rotation.x) * 180.0 / Float.pi
+                            let rotDegY = Float(controller.currentValues.rotation.y) * 180.0 / Float.pi
+                            let rotDegZ = Float(controller.currentValues.rotation.z) * 180.0 / Float.pi
                             
-                            Spacer()
-                            
-                            Text("(\(controller.currentValues.position.x, specifier: "%.2f"), \(controller.currentValues.position.y, specifier: "%.2f"), \(controller.currentValues.position.z, specifier: "%.2f"))")
-                                .font(.caption.monospaced())
-                                .foregroundColor(.white)
+                            HStack {
+                                Text("Rotation:")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(.white.opacity(0.7))
+                                
+                                Spacer()
+                                
+                                Text("(\(rotDegX, specifier: "%.1f")°, \(rotDegY, specifier: "%.1f")°, \(rotDegZ, specifier: "%.1f")°)")
+                                    .font(.caption.monospaced())
+                                    .foregroundColor(.white)
+                            }
+                        } else {
+                            HStack {
+                                Text(controller.mode == .scale ? "Scale:" : "Position:")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(.white.opacity(0.7))
+                                
+                                Spacer()
+                                
+                                if controller.mode == .scale {
+                                    let scale = controller.currentValues.scale
+                                    Text("(\(scale.x, specifier: "%.2f"), \(scale.y, specifier: "%.2f"), \(scale.z, specifier: "%.2f"))")
+                                        .font(.caption.monospaced())
+                                        .foregroundColor(.white)
+                                } else {
+                                    let pos = controller.currentValues.position
+                                    Text("(\(pos.x, specifier: "%.2f"), \(pos.y, specifier: "%.2f"), \(pos.z, specifier: "%.2f"))")
+                                        .font(.caption.monospaced())
+                                        .foregroundColor(.white)
+                                }
+                            }
                         }
                         
                         HStack {
@@ -725,14 +996,30 @@ struct TransformOverlay: View {
                         }
                     }
                     
-                    // Enhanced instructions
+                    // Enhanced instructions with distance scaling info
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Mouse: Click & drag to transform • Arrow keys: Nudge position")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.5))
-                        Text("X/Y/Z: Constrain axis • Enter: Confirm • Esc: Cancel")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.5))
+                        if controller.isDistanceScaling {
+                            Text("Distance Scale: Move cursor closer to shrink, farther to grow")
+                                .font(.caption2)
+                                .foregroundColor(.cyan.opacity(0.8))
+                            Text("X/Y/Z: Constrain axis • Enter: Lock scale • Esc: Cancel")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                        } else if controller.mode == .rotate {
+                            Text("Mouse: Rotate • Shift: Snap to 15° increments • Arrow keys: Nudge")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                            Text("X/Y/Z: Constrain axis • Enter: Confirm • Esc: Cancel")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                        } else {
+                            Text("Mouse: Transform • Shift: Snap mode • Arrow keys: Nudge")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                            Text("X/Y/Z: Constrain axis • Enter: Confirm • Esc: Cancel")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
                     }
                 }
                 .padding(16)
@@ -743,12 +1030,30 @@ struct TransformOverlay: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(controller.axis.color.swiftUIColor, lineWidth: 2)
+                        .stroke(
+                            controller.isDistanceScaling ? Color.cyan : 
+                            (controller.isSnapMode ? Color.yellow : controller.axis.color.swiftUIColor), 
+                            lineWidth: 2
+                        )
                 )
-                .shadow(color: controller.axis.color.swiftUIColor.opacity(0.3), radius: 8)
+                .shadow(
+                    color: (controller.isDistanceScaling ? Color.cyan : 
+                           (controller.isSnapMode ? Color.yellow : controller.axis.color.swiftUIColor)).opacity(0.3), 
+                    radius: 8
+                )
             }
             .padding(20)
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: controller.axis)
+            .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controller.isSnapMode)
+            .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controller.isDistanceScaling)
+        }
+    }
+    
+    private var modeDisplayName: String {
+        if controller.isDistanceScaling {
+            return "Distance Scale"
+        } else {
+            return controller.mode.rawValue.capitalized
         }
     }
     
@@ -756,7 +1061,7 @@ struct TransformOverlay: View {
         switch mode {
         case .move: return "arrow.up.and.down.and.arrow.left.and.right"
         case .rotate: return "arrow.clockwise"
-        case .scale: return "arrow.up.left.and.down.right.magnifyingglass"
+        case .scale: return controller.isDistanceScaling ? "arrow.up.left.and.down.right.magnifyingglass" : "arrow.up.left.and.down.right.magnifyingglass"
         }
     }
 }
