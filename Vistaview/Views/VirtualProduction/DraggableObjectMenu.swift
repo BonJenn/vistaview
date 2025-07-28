@@ -75,7 +75,7 @@ struct DraggableObjectMenu: View {
             .frame(height: isExpanded ? maxMenuHeight : minMenuHeight)
             .background(.black.opacity(0.9))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .cornerRadius(12, corners: [.topLeft, .topRight])
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(.white.opacity(0.2), lineWidth: 1)
@@ -350,90 +350,6 @@ struct AssetDragPreview: View {
                 .stroke(Color(asset.color), lineWidth: 2)
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
-    }
-}
-
-// Extension for corner radius on specific corners
-extension View {
-    func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
-        clipShape(RoundedCorner(radius: radius, corners: corners))
-    }
-}
-
-struct RectCorner: OptionSet {
-    let rawValue: Int
-    
-    static let topLeft = RectCorner(rawValue: 1 << 0)
-    static let topRight = RectCorner(rawValue: 1 << 1)
-    static let bottomLeft = RectCorner(rawValue: 1 << 2)
-    static let bottomRight = RectCorner(rawValue: 1 << 3)
-    static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
-    static let topCorners: RectCorner = [.topLeft, .topRight]
-    static let bottomCorners: RectCorner = [.bottomLeft, .bottomRight]
-}
-
-struct RoundedCorner: Shape {
-    var radius: CGFloat = .infinity
-    var corners: RectCorner = .allCorners
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        
-        let width = rect.size.width
-        let height = rect.size.height
-        
-        // Top-left corner
-        if corners.contains(.topLeft) {
-            path.move(to: CGPoint(x: 0, y: radius))
-            path.addArc(center: CGPoint(x: radius, y: radius), 
-                       radius: radius, 
-                       startAngle: Angle.degrees(180), 
-                       endAngle: Angle.degrees(270), 
-                       clockwise: false)
-        } else {
-            path.move(to: CGPoint(x: 0, y: 0))
-        }
-        
-        // Top edge
-        path.addLine(to: CGPoint(x: corners.contains(.topRight) ? width - radius : width, y: 0))
-        
-        // Top-right corner
-        if corners.contains(.topRight) {
-            path.addArc(center: CGPoint(x: width - radius, y: radius), 
-                       radius: radius, 
-                       startAngle: Angle.degrees(270), 
-                       endAngle: Angle.degrees(0), 
-                       clockwise: false)
-        }
-        
-        // Right edge
-        path.addLine(to: CGPoint(x: width, y: corners.contains(.bottomRight) ? height - radius : height))
-        
-        // Bottom-right corner
-        if corners.contains(.bottomRight) {
-            path.addArc(center: CGPoint(x: width - radius, y: height - radius), 
-                       radius: radius, 
-                       startAngle: Angle.degrees(0), 
-                       endAngle: Angle.degrees(90), 
-                       clockwise: false)
-        }
-        
-        // Bottom edge
-        path.addLine(to: CGPoint(x: corners.contains(.bottomLeft) ? radius : 0, y: height))
-        
-        // Bottom-left corner
-        if corners.contains(.bottomLeft) {
-            path.addArc(center: CGPoint(x: radius, y: height - radius), 
-                       radius: radius, 
-                       startAngle: Angle.degrees(90), 
-                       endAngle: Angle.degrees(180), 
-                       clockwise: false)
-        }
-        
-        // Left edge
-        path.addLine(to: CGPoint(x: 0, y: corners.contains(.topLeft) ? radius : 0))
-        
-        return path
     }
 }
 

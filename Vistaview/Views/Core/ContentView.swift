@@ -28,7 +28,6 @@ struct ContentView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Unified Top Navigation Bar
             HStack {
                 // Studio Selector
                 HStack {
@@ -55,12 +54,14 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                // Mode Switcher
+                // Mode Switcher - Simplified to avoid type-checking timeout
                 HStack(spacing: 0) {
                     Button(action: {
-                        switchToVirtualMode()
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                            switchToVirtualMode()
+                        }
                     }) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Image(systemName: "cube.transparent.fill")
                             Text("Virtual Studio")
                         }
@@ -72,9 +73,11 @@ struct ContentView: View {
                     .buttonStyle(PlainButtonStyle())
                     
                     Button(action: {
-                        switchToLiveMode()
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                            switchToLiveMode()
+                        }
                     }) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Image(systemName: "video.circle.fill")
                             Text("Live Production")
                         }
@@ -85,8 +88,15 @@ struct ContentView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                .background(Color.gray.opacity(0.2))
-                .cornerRadius(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.2))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(.white.opacity(0.1), lineWidth: 1)
+                        )
+                )
+                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
                 
                 Spacer()
                 
@@ -343,6 +353,7 @@ struct CenterPanelView: View {
 
 struct MainPreviewView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
+    @State private var isInitializing = true
     
     var body: some View {
         VStack {
@@ -352,48 +363,117 @@ struct MainPreviewView: View {
                     .foregroundColor(.white)
                 Spacer()
                 
-                // Virtual Studio Indicator
-                if productionManager.isVirtualStudioActive {
-                    HStack {
-                        Image(systemName: "cube.transparent")
-                            .foregroundColor(.blue)
-                        Text("Virtual Studio Active")
+                // Enhanced status indicators with animations
+                HStack(spacing: 16) {
+                    // Virtual Studio Status with animation
+                    if productionManager.isVirtualStudioActive {
+                        HStack(spacing: 6) {
+                            Image(systemName: "cube.transparent")
+                                .foregroundColor(.blue)
+                                .scaleEffect(1.1)
+                                .animation(.spring(response: 0.3, dampingFraction: 0.6).repeatForever(autoreverses: true), value: productionManager.isVirtualStudioActive)
+                            
+                            Text("Virtual Studio")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                    
+                    // Live Status with pulsing animation
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(productionManager.streamingViewModel.isPublishing ? Color.red : Color.gray)
+                            .frame(width: 8, height: 8)
+                            .scaleEffect(productionManager.streamingViewModel.isPublishing ? 1.2 : 1.0)
+                            .animation(
+                                productionManager.streamingViewModel.isPublishing ? 
+                                .spring(response: 0.6, dampingFraction: 0.4).repeatForever(autoreverses: true) : 
+                                .easeOut, 
+                                value: productionManager.streamingViewModel.isPublishing
+                            )
+                        
+                        Text(productionManager.streamingViewModel.isPublishing ? "LIVE" : "OFFLINE")
                             .font(.caption)
-                            .foregroundColor(.blue)
+                            .fontWeight(.semibold)
+                            .foregroundColor(productionManager.streamingViewModel.isPublishing ? .red : .secondary)
                     }
                 }
-                
-                Text(productionManager.streamingViewModel.statusMessage)
-                    .font(.caption)
-                    .foregroundColor(productionManager.streamingViewModel.cameraSetup ? .green : .orange)
             }
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // Main video output
-            CameraPreview(viewModel: productionManager.streamingViewModel)
-                .background(Color.black)
-                .overlay(
-                    Group {
-                        if !productionManager.streamingViewModel.cameraSetup {
-                            VStack {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                Text("Initializing Camera...")
-                                    .font(.caption)
-                                    .foregroundColor(.white)
+            // Main video output with enhanced loading state
+            ZStack {
+                CameraPreview(viewModel: productionManager.streamingViewModel)
+                    .background(Color.black)
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .opacity(productionManager.streamingViewModel.cameraSetup ? 1.0 : 0.3)
+                    .animation(.easeInOut(duration: 0.5), value: productionManager.streamingViewModel.cameraSetup)
+                
+                if !productionManager.streamingViewModel.cameraSetup {
+                    VStack(spacing: 16) {
+                        // Skeleton loading animation
+                        VStack(spacing: 8) {
+                            ForEach(0..<3) { index in
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.2))
+                                    .frame(height: 8)
+                                    .frame(maxWidth: CGFloat.random(in: 120...200))
+                                    .shimmer()
+                                    .animation(.easeInOut(duration: 1.5).delay(Double(index) * 0.2).repeatForever(autoreverses: true), value: isInitializing)
                             }
-                            .padding()
-                            .background(Color.black.opacity(0.7))
-                            .cornerRadius(10)
                         }
+                        .padding(.top, 20)
+                        
+                        Spacer()
+                        
+                        // Enhanced loading indicator
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            
+                            Text("Initializing Camera...")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            Text(productionManager.streamingViewModel.statusMessage)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.vertical, 20)
+                        .padding(.horizontal, 32)
+                        .background(.black.opacity(0.8))
+                        .cornerRadius(16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(.white.opacity(0.2), lineWidth: 1)
+                        )
+                        
+                        Spacer()
                     }
-                )
-                .aspectRatio(16/9, contentMode: .fit)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
         }
         .background(Color.black.opacity(0.9))
-        .cornerRadius(8)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
         .padding()
+        .onAppear {
+            // Simulate initialization delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                withAnimation(.easeOut(duration: 0.5)) {
+                    isInitializing = false
+                }
+            }
+        }
     }
 }
 
@@ -446,8 +526,6 @@ struct RightPanelView: View {
     }
 }
 
-// MARK: - Supporting Components
-
 struct VirtualStudioInfoView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     
@@ -468,6 +546,13 @@ struct VirtualStudioInfoView: View {
                         .foregroundColor(.blue)
                 }
                 
+                HStack {
+                    Text("Objects:")
+                    Spacer()
+                    Text("\(productionManager.studioManager.studioObjects.count)")
+                        .foregroundColor(.blue)
+                }
+                
                 Button("Sync from Virtual Studio") {
                     productionManager.syncVirtualToLive()
                 }
@@ -485,7 +570,7 @@ struct StreamingControlsView: View {
     @Binding var selectedPlatform: String
     
     var body: some View {
-        GroupBox("Live Streaming") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Platform:")
@@ -512,27 +597,24 @@ struct StreamingControlsView: View {
                 HStack {
                     Text("Key:")
                         .frame(width: 70, alignment: .leading)
-                    VStack(spacing: 4) {
-                        SecureField("Get from platform", text: $streamKey)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        
-                        if selectedPlatform == "Twitch" && streamKey.isEmpty {
-                            Button("Open Twitch Dashboard") {
-                                if let url = URL(string: "https://dashboard.twitch.tv/settings/stream") {
-                                    #if os(macOS)
-                                    NSWorkspace.shared.open(url)
-                                    #else
-                                    UIApplication.shared.open(url)
-                                    #endif
-                                }
+                    SecureField("Get from platform", text: $streamKey)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                    
+                    if selectedPlatform == "Twitch" && streamKey.isEmpty {
+                        Button("Open Twitch Dashboard") {
+                            if let url = URL(string: "https://dashboard.twitch.tv/settings/stream") {
+                                #if os(macOS)
+                                NSWorkspace.shared.open(url)
+                                #else
+                                UIApplication.shared.open(url)
+                                #endif
                             }
-                            .font(.caption)
-                            .foregroundColor(.blue)
                         }
+                        .font(.caption)
+                        .foregroundColor(.blue)
                     }
                 }
                 
-                // Connection Status
                 HStack {
                     Circle()
                         .fill(productionManager.streamingViewModel.isPublishing ? Color.green : (productionManager.streamingViewModel.cameraSetup ? Color.orange : Color.red))
@@ -559,6 +641,8 @@ struct StreamingControlsView: View {
                 }
                 .disabled(!productionManager.streamingViewModel.cameraSetup)
             }
+        } label: {
+            Text("Live Streaming")
         }
     }
     
@@ -1280,5 +1364,25 @@ enum MediaType {
         case .image: return "photo.fill"
         case .audio: return "music.note"
         }
+    }
+}
+
+// Shimmer effect extension
+extension View {
+    func shimmer() -> some View {
+        self.overlay(
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.clear, Color.white.opacity(0.4), Color.clear]),
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .rotationEffect(.degrees(10))
+                .offset(x: -200)
+                .animation(.linear(duration: 1.5).repeatForever(autoreverses: false), value: UUID())
+        )
+        .clipped()
     }
 }
