@@ -54,15 +54,19 @@ final class VirtualStudioManager: ObservableObject {
         let obj = StudioObject(name: "DEBUG_CUBE", type: .setPiece, position: SCNVector3(0, 1.5, 0))
         obj.node.geometry = box
         obj.node.name = "DEBUG_CUBE"
-        obj.setupHighlightAfterGeometry()
         
+        // IMPORTANT: Setup highlight AFTER adding geometry and to scene
         studioObjects.append(obj)
         scene.rootNode.addChildNode(obj.node)
+        
+        // Now setup the highlight system
+        obj.setupHighlightAfterGeometry()
         
         print("🧪 Added large red DEBUG_CUBE at (0, 1.5, 0)")
         print("   Cube node: \(obj.node)")
         print("   Cube geometry: \(obj.node.geometry != nil)")
         print("   Total objects in scene: \(studioObjects.count)")
+        print("   Highlight node setup: \(obj.node.childNodes.contains { $0.name?.contains("highlight") == true })")
     }
     
     // MARK: - Floor & Grid
@@ -173,14 +177,36 @@ final class VirtualStudioManager: ObservableObject {
         print("   Checking \(studioObjects.count) studio objects...")
         
         for obj in studioObjects {
-            print("   - Checking object: \(obj.name)")
-            if isNode(node, descendantOf: obj.node) {
-                print("   ✅ Found match: \(obj.name)")
-                return obj
-            }
+            print("   - Checking object: \(obj.name) (node: \(obj.node.name ?? "unnamed"))")
+            
+            // Direct match
             if node === obj.node {
                 print("   ✅ Direct node match: \(obj.name)")
                 return obj
+            }
+            
+            // Check if node is a descendant of the object's node
+            if isNode(node, descendantOf: obj.node) {
+                print("   ✅ Found descendant match: \(obj.name)")
+                return obj
+            }
+            
+            // Check if the node is a direct child with geometry
+            if let parent = node.parent, parent === obj.node {
+                print("   ✅ Found direct child match: \(obj.name)")
+                return obj
+            }
+            
+            // Check if the clicked node is a child geometry node
+            var currentNode: SCNNode? = node
+            var depth = 0
+            while let checkNode = currentNode, depth < 5 {
+                if checkNode === obj.node {
+                    print("   ✅ Found ancestor match at depth \(depth): \(obj.name)")
+                    return obj
+                }
+                currentNode = checkNode.parent
+                depth += 1
             }
         }
         
@@ -219,7 +245,7 @@ final class VirtualStudioManager: ObservableObject {
         
         // Create LED wall assembly with frame and support structure
         let ledWallGroup = SCNNode()
-        ledWallGroup.name = asset.name
+        ledWallGroup.name = asset.name + "_group"
         
         // Main screen
         let screenNode = SCNNode(geometry: plane)
@@ -307,14 +333,18 @@ final class VirtualStudioManager: ObservableObject {
         screenNode.name = "screen" // Important for finding the screen later
         
         obj.optimizeLEDWallForVideo()
-        obj.setupHighlightAfterGeometry()
         
+        // Add to collections and scene FIRST
         studioObjects.append(obj)
         rootNode.addChildNode(obj.node)
+        
+        // THEN setup highlight system
+        obj.setupHighlightAfterGeometry()
         
         print("➕ Added Enhanced LED Wall: \(asset.name) at \(pos)")
         print("   - Size: \(asset.width)x\(asset.height)m")
         print("   - With realistic frame and support structure")
+        print("   - Highlight setup complete: \(obj.node.childNodes.contains { $0.name?.contains("highlight") == true })")
     }
     
     func addSetPiece(from asset: SetPieceAsset, at pos: SCNVector3) {
@@ -909,5 +939,109 @@ final class VirtualStudioManager: ObservableObject {
             cur = n.parent
         }
         return false
+    }
+    
+    func selectObject(_ object: StudioObject) {
+        // Clear other selections first (single selection mode)
+        for obj in studioObjects {
+            obj.setSelected(false)
+        }
+        
+        // Select the target object
+        object.setSelected(true)
+        print("✅ Selected object: \(object.name)")
+    }
+    
+    func selectObjects(_ objects: [StudioObject]) {
+        // Clear all selections first
+        for obj in studioObjects {
+            obj.setSelected(false)
+        }
+        
+        // Select the target objects
+        for object in objects {
+            object.setSelected(true)
+        }
+        print("✅ Selected \(objects.count) objects")
+    }
+    
+    func getSelectedObjects() -> [StudioObject] {
+        return studioObjects.filter { $0.isSelected }
+    }
+    
+    func clearSelection() {
+        for obj in studioObjects {
+            obj.setSelected(false)
+        }
+        print("🔄 Cleared all selections")
+    }
+    
+    // MARK: - Debug and Testing Methods
+    
+    func testSelectionSystem() {
+        print("🧪 TESTING SELECTION SYSTEM")
+        print("   Total objects: \(studioObjects.count)")
+        
+        for (index, obj) in studioObjects.enumerated() {
+            print("   Object \(index): \(obj.name)")
+            print("     - Node name: \(obj.node.name ?? "unnamed")")
+            print("     - Node position: \(obj.node.position)")
+            print("     - Object position: \(obj.position)")
+            print("     - Node bounds: \(obj.node.boundingBox)")
+            print("     - Has geometry: \(obj.node.geometry != nil)")
+            print("     - Has highlight: \(obj.node.childNodes.contains { $0.name?.contains("selection_outline") == true })")
+            print("     - Is selected: \(obj.isSelected)")
+            
+            // Check highlight position if it exists
+            if let highlight = obj.node.childNodes.first(where: { $0.name?.contains("selection_outline") == true }) {
+                print("     - Highlight position: \(highlight.position)")
+            }
+            
+            // Force highlight setup if missing
+            if !obj.node.childNodes.contains(where: { $0.name?.contains("selection_outline") == true }) {
+                print("     - ⚠️ Missing selection outline, setting up now...")
+                obj.setupHighlightAfterGeometry()
+            }
+        }
+        
+        // Test selection on first object
+        if let firstObj = studioObjects.first {
+            print("🎯 Testing selection on: \(firstObj.name)")
+            firstObj.setSelected(true)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                firstObj.setSelected(false)
+                print("🔄 Deselected test object")
+            }
+        }
+    }
+    
+    func selectObject(_ objectId: UUID) {
+        // Clear all other selections
+        for obj in studioObjects {
+            obj.setSelected(false)
+        }
+        
+        // Select the target object
+        if let targetObj = studioObjects.first(where: { $0.id == objectId }) {
+            targetObj.setSelected(true)
+            print("✅ Selected object: \(targetObj.name)")
+        }
+    }
+    
+    func resetObjectHighlights() {
+        print("🔄 Resetting all object highlights...")
+        for obj in studioObjects {
+            // Remove existing highlight
+            obj.node.childNodes.forEach { child in
+                if child.name?.contains("selection_outline") == true {
+                    child.removeFromParentNode()
+                }
+            }
+            
+            // Recreate highlight
+            obj.setupHighlightAfterGeometry()
+        }
+        print("✅ Reset highlights for \(studioObjects.count) objects")
     }
 }

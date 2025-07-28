@@ -215,15 +215,17 @@ struct Viewport3DView: NSViewRepresentable {
             let velocity = gesture.velocity(in: view)
             let currentPoint = gesture.location(in: view)
             
-            // Check if we're in transform mode first
+            // PRIORITY 1: Check if we're in active transform mode
             if parent.transformController.isActive {
-                // Update transform with mouse movement
+                // Use the transform controller's mouse update method
                 parent.transformController.updateTransformWithMouse(mousePos: currentPoint)
                 gesture.setTranslation(.zero, in: view)
+                
+                // Prevent gesture from interfering
                 return
             }
             
-            // Improved gesture detection for better multitouch support
+            // PRIORITY 2: Normal camera controls only if NOT transforming
             let isHighVelocityScroll = abs(velocity.x) > 50 || abs(velocity.y) > 50
             let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
             let isCommandPressed = NSEvent.modifierFlags.contains(.command)
@@ -567,64 +569,85 @@ struct Viewport3DView: NSViewRepresentable {
         
         // Enhanced selection handling with better visual feedback
         private func handleSelection(at point: CGPoint, in scnView: SCNView) {
+            print("🎯 CLICK at \(point)")
+            
             let hitResults = scnView.hitTest(point, options: [
                 .searchMode: SCNHitTestSearchMode.all.rawValue,
                 .ignoreChildNodes: false,
-                .ignoreHiddenNodes: true
+                .ignoreHiddenNodes: true,
+                .boundingBoxOnly: false
             ])
             
-            // Clear all highlights first
-            for obj in parent.studioManager.studioObjects {
-                obj.setHighlighted(false)
+            print("   Found \(hitResults.count) hit results")
+            
+            // Filter out highlight/gizmo nodes from hits
+            let validHits = hitResults.filter { hit in
+                let nodeName = hit.node.name ?? ""
+                return !nodeName.contains("selection_outline") && 
+                       !nodeName.contains("transform_gizmo") &&
+                       !nodeName.contains("highlight")
             }
             
-            if let hitResult = hitResults.first {
+            print("   Valid hits (excluding UI): \(validHits.count)")
+            
+            if let hitResult = validHits.first {
                 let hitNode = hitResult.node
+                print("   Hit node: \(hitNode.name ?? "unnamed")")
                 
-                // Find the studio object that contains this node
+                // Find the studio object
                 if let object = parent.studioManager.getObject(from: hitNode) {
                     let wasSelected = selectedObjects.contains(object.id)
                     let isMultiSelect = NSEvent.modifierFlags.contains(.shift) || NSEvent.modifierFlags.contains(.command)
                     
+                    print("   Found object: \(object.name), currently selected: \(wasSelected)")
+                    
                     if isMultiSelect {
-                        // Multi-selection mode
+                        // Multi-selection
                         if wasSelected {
                             selectedObjects.remove(object.id)
                             object.setSelected(false)
+                            print("   ➖ Removed from selection: \(object.name)")
                         } else {
                             selectedObjects.insert(object.id)
                             object.setSelected(true)
+                            print("   ➕ Added to selection: \(object.name)")
                         }
                     } else {
-                        // Single selection mode - clear others first
+                        // Single selection - clear others first
                         for obj in parent.studioManager.studioObjects {
                             obj.setSelected(false)
                         }
                         selectedObjects.removeAll()
                         
-                        // Select the clicked object
+                        // Select clicked object
                         selectedObjects.insert(object.id)
                         object.setSelected(true)
+                        print("   ✅ Selected: \(object.name)")
+                        
+                        // Haptic feedback
+                        #if os(macOS)
+                        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                        #endif
                     }
                     
-                    print("🎯 Selected object: \(object.name) (Total selected: \(selectedObjects.count))")
-                    
-                    // Provide haptic feedback on selection
-                    #if os(macOS)
-                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-                    #endif
+                    // Update parent binding immediately
+                    parent.selectedObjects = selectedObjects
+                    print("   🔄 Updated selection binding: \(selectedObjects.count) objects")
                     
                 } else {
-                    print("⚠️ Hit node \(hitNode.name ?? "unnamed") but couldn't find associated StudioObject")
+                    print("   ⚠️ No StudioObject found for hit node: \(hitNode.name ?? "unnamed")")
                 }
+                
             } else {
-                // Clicked on empty space, clear selection unless multi-selecting
+                // Clicked empty space
                 if !NSEvent.modifierFlags.contains(.shift) && !NSEvent.modifierFlags.contains(.command) {
+                    print("   🌌 Clicked empty space - clearing selection")
+                    
                     for obj in parent.studioManager.studioObjects {
                         obj.setSelected(false)
                     }
                     selectedObjects.removeAll()
-                    print("🎯 Cleared selection (clicked empty space)")
+                    parent.selectedObjects = selectedObjects
                 }
             }
         }

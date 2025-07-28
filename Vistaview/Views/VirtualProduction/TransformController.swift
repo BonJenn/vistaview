@@ -109,21 +109,22 @@ class TransformController: ObservableObject {
     func updateTransformWithMouse(mousePos: CGPoint) {
         guard isActive else { return }
         
-        let deltaX = Float(mousePos.x - lastMousePos.x) * 0.01
-        let deltaY = Float(lastMousePos.y - mousePos.y) * 0.01 // Invert Y
+        // Calculate delta from start position for more accurate transforms
+        let totalDeltaX = Float(mousePos.x - startMousePos.x) * 0.01
+        let totalDeltaY = Float(startMousePos.y - mousePos.y) * 0.01 // Invert Y
         
         switch mode {
         case .move:
-            updateMoveTransform(deltaX: deltaX, deltaY: deltaY, objects: selectedObjects)
+            updateMoveTransform(deltaX: totalDeltaX, deltaY: totalDeltaY, objects: selectedObjects)
         case .rotate:
-            updateRotateTransform(deltaX: deltaX, deltaY: deltaY, objects: selectedObjects)
+            updateRotateTransform(deltaX: totalDeltaX, deltaY: totalDeltaY, objects: selectedObjects)
         case .scale:
-            updateScaleTransform(deltaX: deltaX, deltaY: deltaY, objects: selectedObjects)
+            updateScaleTransform(deltaX: totalDeltaX, deltaY: totalDeltaY, objects: selectedObjects)
         }
         
         lastMousePos = mousePos
         updateCurrentValues(from: selectedObjects)
-        updateAxisGizmos()
+        updateGizmoPositions()
     }
     
     func setAxis(_ newAxis: TransformAxis) {
@@ -167,19 +168,17 @@ class TransformController: ObservableObject {
             guard let originalPos = originalPositions[obj.id] else { continue }
             
             var newPosition = originalPos
-            let totalDeltaX = Float(lastMousePos.x - startMousePos.x) * 0.005 // More sensitive (was 0.01)
-            let totalDeltaY = Float(startMousePos.y - lastMousePos.y) * 0.005 // More sensitive (was 0.01)
             
             switch axis {
             case .free:
-                newPosition.x += CGFloat(totalDeltaX)
-                newPosition.y += CGFloat(totalDeltaY)
+                newPosition.x += CGFloat(deltaX)
+                newPosition.y += CGFloat(deltaY)
             case .x:
-                newPosition.x += CGFloat(totalDeltaX)
+                newPosition.x += CGFloat(deltaX)
             case .y:
-                newPosition.y += CGFloat(totalDeltaY)
+                newPosition.y += CGFloat(deltaY)
             case .z:
-                newPosition.z += CGFloat(totalDeltaX) // Use X mouse movement for Z
+                newPosition.z += CGFloat(deltaX) // Use X mouse movement for Z
             }
             
             obj.position = newPosition
@@ -283,24 +282,32 @@ class TransformController: ObservableObject {
         let gizmoNode = SCNNode()
         gizmoNode.name = "transform_gizmo_\(object.id.uuidString)"
         
-        // Create the constraint line
-        let lineGeometry = SCNCylinder(radius: 0.02, height: 20) // Long thin cylinder as line
+        // CRITICAL: Set initial position to object's current position
+        gizmoNode.position = object.position
+        
+        // Create the constraint line geometry
+        let lineLength: CGFloat = 30.0
+        let lineGeometry = SCNCylinder(radius: 0.03, height: lineLength)
+        
         let lineMaterial = SCNMaterial()
         lineMaterial.diffuse.contents = axis.color
-        lineMaterial.emission.contents = axis.color.withAlphaComponent(0.3)
+        lineMaterial.emission.contents = axis.color.withAlphaComponent(0.6)
+        lineMaterial.emission.intensity = 2.0
+        lineMaterial.transparency = 0.9
+        lineMaterial.isDoubleSided = true
+        
         lineGeometry.materials = [lineMaterial]
         
         let lineNode = SCNNode(geometry: lineGeometry)
+        lineNode.position = SCNVector3Zero // Centered within the gizmo node
         
-        // Position and orient the line based on axis
-        lineNode.position = object.position
-        
+        // Orient the line based on axis
         switch axis {
         case .x:
             lineNode.eulerAngles = SCNVector3(0, 0, Float.pi / 2) // Rotate to X-axis
         case .y:
             // Y-axis is default (vertical)
-            break
+            lineNode.eulerAngles = SCNVector3Zero
         case .z:
             lineNode.eulerAngles = SCNVector3(Float.pi / 2, 0, 0) // Rotate to Z-axis
         case .free:
@@ -309,23 +316,26 @@ class TransformController: ObservableObject {
         
         gizmoNode.addChildNode(lineNode)
         
-        // Add small arrow indicators at the ends
-        let arrowGeometry = SCNCone(topRadius: 0, bottomRadius: 0.1, height: 0.3)
+        // Create arrow indicators
+        let arrowGeometry = SCNCone(topRadius: 0, bottomRadius: 0.15, height: 0.5)
         let arrowMaterial = SCNMaterial()
         arrowMaterial.diffuse.contents = axis.color
+        arrowMaterial.emission.contents = axis.color.withAlphaComponent(0.8)
+        arrowMaterial.emission.intensity = 2.5
         arrowGeometry.materials = [arrowMaterial]
         
         // Positive direction arrow
         let positiveArrow = SCNNode(geometry: arrowGeometry)
-        positiveArrow.position = SCNVector3(0, 10.15, 0) // At the top of the line
+        positiveArrow.position = SCNVector3(0, Float(lineLength/2 + 0.25), 0)
         lineNode.addChildNode(positiveArrow)
         
-        // Negative direction arrow (flipped)
+        // Negative direction arrow
         let negativeArrow = SCNNode(geometry: arrowGeometry)
-        negativeArrow.position = SCNVector3(0, -10.15, 0)
-        negativeArrow.eulerAngles = SCNVector3(Float.pi, 0, 0) // Flip it
+        negativeArrow.position = SCNVector3(0, -Float(lineLength/2 + 0.25), 0)
+        negativeArrow.eulerAngles = SCNVector3(Float.pi, 0, 0)
         lineNode.addChildNode(negativeArrow)
         
+        print("✨ Created axis gizmo for \(axis.label) at object position \(object.position)")
         return gizmoNode
     }
     
@@ -338,9 +348,19 @@ class TransformController: ObservableObject {
     
     private func updateGizmoPositions() {
         // Update gizmo positions to follow the transformed objects
+        guard axisGizmoNodes.count == selectedObjects.count else {
+            print("⚠️ Gizmo count mismatch: \(axisGizmoNodes.count) gizmos, \(selectedObjects.count) objects")
+            return
+        }
+        
         for (index, obj) in selectedObjects.enumerated() {
             if index < axisGizmoNodes.count {
-                axisGizmoNodes[index].position = obj.position
+                let gizmo = axisGizmoNodes[index]
+                
+                // CRITICAL FIX: Set the gizmo position to match the object's current position
+                gizmo.position = obj.position
+                
+                print("🎯 Updated gizmo \(index) position to match object at \(obj.position)")
             }
         }
     }
@@ -397,6 +417,226 @@ class TransformController: ObservableObject {
         }
         isDragging = false
     }
+    
+    // MARK: - Mouse-Based Transform System
+    
+    var isMouseTransformActive: Bool {
+        return isActive && axis != .free
+    }
+    
+    func startMouseTransform(_ mode: TransformMode, objects: [StudioObject], mousePosition: CGPoint, scene: SCNScene) {
+        guard !objects.isEmpty else { return }
+        
+        self.mode = mode
+        self.isActive = true
+        self.selectedObjects = objects
+        self.scene = scene
+        self.startMousePos = mousePosition
+        self.lastMousePos = mousePosition
+        
+        // Store original values
+        originalPositions.removeAll()
+        originalRotations.removeAll()
+        originalScales.removeAll()
+        
+        for obj in objects {
+            originalPositions[obj.id] = obj.position
+            originalRotations[obj.id] = obj.rotation
+            originalScales[obj.id] = obj.scale
+        }
+        
+        updateCurrentValues(from: objects)
+        updateAxisGizmos()
+        
+        print("🎯 Started mouse transform: \(mode.rawValue) on \(axis.label) for \(objects.count) objects")
+    }
+    
+    func updateMouseTransform(mousePosition: CGPoint) {
+        guard isActive else { return }
+        
+        let deltaX = Float(mousePosition.x - startMousePos.x) * 0.01
+        let deltaY = Float(startMousePos.y - mousePosition.y) * 0.01 // Invert Y
+        
+        switch mode {
+        case .move:
+            updateMouseMoveTransform(deltaX: deltaX, deltaY: deltaY)
+        case .rotate:
+            updateMouseRotateTransform(deltaX: deltaX, deltaY: deltaY)
+        case .scale:
+            updateMouseScaleTransform(deltaX: deltaX, deltaY: deltaY)
+        }
+        
+        updateCurrentValues(from: selectedObjects)
+        updateGizmoPositions()
+    }
+    
+    private func updateMouseMoveTransform(deltaX: Float, deltaY: Float) {
+        for obj in selectedObjects {
+            guard let originalPos = originalPositions[obj.id] else { continue }
+            
+            var newPosition = originalPos
+            
+            switch axis {
+            case .x:
+                newPosition.x += CGFloat(deltaX)
+            case .y:
+                newPosition.y += CGFloat(deltaY)
+            case .z:
+                newPosition.z += CGFloat(deltaX) // Use X mouse movement for Z
+            case .free:
+                newPosition.x += CGFloat(deltaX)
+                newPosition.y += CGFloat(deltaY)
+            }
+            
+            obj.position = newPosition
+            obj.updateNodeTransform()
+        }
+    }
+    
+    private func updateMouseRotateTransform(deltaX: Float, deltaY: Float) {
+        let rotationAmount = deltaX * Float.pi / 2 // More sensitive rotation
+        
+        for obj in selectedObjects {
+            guard let originalRot = originalRotations[obj.id] else { continue }
+            
+            var newRotation = originalRot
+            
+            switch axis {
+            case .x:
+                newRotation.x += CGFloat(rotationAmount)
+            case .y:
+                newRotation.y += CGFloat(rotationAmount)
+            case .z:
+                newRotation.z += CGFloat(rotationAmount)
+            case .free:
+                newRotation.y += CGFloat(rotationAmount)
+            }
+            
+            obj.rotation = newRotation
+            obj.updateNodeTransform()
+        }
+    }
+    
+    private func updateMouseScaleTransform(deltaX: Float, deltaY: Float) {
+        let scaleFactor = max(0.1, 1.0 + deltaX)
+        
+        for obj in selectedObjects {
+            guard let originalScale = originalScales[obj.id] else { continue }
+            
+            var newScale = originalScale
+            
+            switch axis {
+            case .x:
+                newScale.x = originalScale.x * CGFloat(scaleFactor)
+            case .y:
+                newScale.y = originalScale.y * CGFloat(scaleFactor)
+            case .z:
+                newScale.z = originalScale.z * CGFloat(scaleFactor)
+            case .free:
+                newScale = SCNVector3(
+                    originalScale.x * CGFloat(scaleFactor),
+                    originalScale.y * CGFloat(scaleFactor),
+                    originalScale.z * CGFloat(scaleFactor)
+                )
+            }
+            
+            obj.scale = newScale
+            obj.updateNodeTransform()
+        }
+    }
+    
+    // MARK: - Keyboard Arrow Key Support - SIMPLIFIED VERSION
+    
+    func nudgeObjects(_ direction: NudgeDirection, amount: Float = 0.1) {
+        guard isActive && !selectedObjects.isEmpty else { 
+            print("⚠️ Cannot nudge: isActive=\(isActive), objects=\(selectedObjects.count)")
+            return 
+        }
+        
+        print("🎯 Nudging \(selectedObjects.count) objects \(direction.description) by \(amount) on axis \(axis.label)")
+        
+        for obj in selectedObjects {
+            let originalPosition = obj.position
+            var newPosition = obj.position
+            var moved = false
+            
+            switch direction {
+            case .up:
+                if axis == .free || axis == .y {
+                    newPosition.y += CGFloat(amount)
+                    moved = true
+                    print("   Y+ nudge: \(originalPosition.y) → \(newPosition.y)")
+                } else if axis == .z {
+                    // When Z-axis is constrained, up/down arrows control Z movement
+                    newPosition.z += CGFloat(amount)
+                    moved = true
+                    print("   Z+ nudge (via up arrow): \(originalPosition.z) → \(newPosition.z)")
+                }
+                
+            case .down:
+                if axis == .free || axis == .y {
+                    newPosition.y -= CGFloat(amount)
+                    moved = true
+                    print("   Y- nudge: \(originalPosition.y) → \(newPosition.y)")
+                } else if axis == .z {
+                    // When Z-axis is constrained, up/down arrows control Z movement
+                    newPosition.z -= CGFloat(amount)
+                    moved = true
+                    print("   Z- nudge (via down arrow): \(originalPosition.z) → \(newPosition.z)")
+                }
+                
+            case .left:
+                if axis == .free || axis == .x {
+                    newPosition.x -= CGFloat(amount)
+                    moved = true
+                    print("   X- nudge: \(originalPosition.x) → \(newPosition.x)")
+                }
+                
+            case .right:
+                if axis == .free || axis == .x {
+                    newPosition.x += CGFloat(amount)
+                    moved = true
+                    print("   X+ nudge: \(originalPosition.x) → \(newPosition.x)")
+                }
+                
+            case .forward, .backward:
+                // These are no longer needed since we use up/down for Z
+                if axis == .free || axis == .z {
+                    let zDelta = direction == .forward ? amount : -amount
+                    newPosition.z += CGFloat(zDelta)
+                    moved = true
+                    print("   Z nudge: \(originalPosition.z) → \(newPosition.z)")
+                }
+            }
+            
+            if moved {
+                obj.position = newPosition
+                obj.updateNodeTransform()
+            } else {
+                print("   Movement blocked by axis constraint: \(axis.label)")
+            }
+        }
+        
+        updateCurrentValues(from: selectedObjects)
+        updateGizmoPositions() // This should now work correctly
+        
+        print("✅ Nudge complete - gizmos updated")
+    }
+    
+    enum NudgeDirection {
+        case up, down, left, right, forward, backward
+        
+        var description: String {
+            switch self {
+            case .up: return "up"
+            case .down: return "down"
+            case .left: return "left"
+            case .right: return "right"  
+            case .forward: return "forward"
+            case .backward: return "backward"
+            }
+        }
+    }
 }
 
 // MARK: - Transform UI Overlay
@@ -410,48 +650,113 @@ struct TransformOverlay: View {
             VStack {
                 Spacer()
                 
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Mode and axis indicator
+                // Beautiful transform information panel
+                VStack(alignment: .leading, spacing: 12) {
+                    // Header with mode and object count
+                    HStack {
                         HStack(spacing: 8) {
-                            Text(controller.mode.instruction)
-                                .font(.caption)
+                            Image(systemName: iconForMode(controller.mode))
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(controller.axis.color.swiftUIColor)
+                            
+                            Text(controller.mode.rawValue.capitalized)
+                                .font(.headline)
                                 .foregroundColor(.white)
+                        }
+                        
+                        Spacer()
+                        
+                        Text("\(selectedObjects.count) object\(selectedObjects.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                    
+                    // Axis constraint indicator
+                    HStack {
+                        Text("Constraint:")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                        
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(controller.axis.color.swiftUIColor)
+                                .frame(width: 8, height: 8)
+                            
+                            Text(controller.axis.label)
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(controller.axis.color.swiftUIColor)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(controller.axis.color.swiftUIColor.opacity(0.2))
+                        .cornerRadius(4)
+                        
+                        Spacer()
+                    }
+                    
+                    // Current values with beautiful formatting
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Position:")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.white.opacity(0.7))
                             
                             Spacer()
                             
-                            Text("Axis: \(controller.axis.label)")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(controller.axis.color.swiftUIColor)
+                            Text("(\(controller.currentValues.position.x, specifier: "%.2f"), \(controller.currentValues.position.y, specifier: "%.2f"), \(controller.currentValues.position.z, specifier: "%.2f"))")
+                                .font(.caption.monospaced())
                                 .foregroundColor(.white)
-                                .cornerRadius(4)
                         }
                         
-                        // Current values
-                        HStack(spacing: 16) {
-                            Text("Pos: (\(controller.currentValues.position.x, specifier: "%.2f"), \(controller.currentValues.position.y, specifier: "%.2f"), \(controller.currentValues.position.z, specifier: "%.2f"))")
-                                .font(.caption)
-                                .foregroundColor(.white)
+                        HStack {
+                            Text("Delta:")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.yellow.opacity(0.7))
                             
-                            Text("Delta: (\(controller.currentValues.delta.x, specifier: "%.2f"), \(controller.currentValues.delta.y, specifier: "%.2f"), \(controller.currentValues.delta.z, specifier: "%.2f"))")
-                                .font(.caption)
+                            Spacer()
+                            
+                            Text("(\(controller.currentValues.delta.x, specifier: "%.2f"), \(controller.currentValues.delta.y, specifier: "%.2f"), \(controller.currentValues.delta.z, specifier: "%.2f"))")
+                                .font(.caption.monospaced())
                                 .foregroundColor(.yellow)
                         }
                     }
                     
-                    Spacer()
+                    // Enhanced instructions
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mouse: Click & drag to transform • Arrow keys: Nudge position")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.5))
+                        Text("X/Y/Z: Constrain axis • Enter: Confirm • Esc: Cancel")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
                 }
-                .padding(12)
-                .background(Color.black.opacity(0.8))
-                .cornerRadius(8)
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.black.opacity(0.85))
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 12)
                         .stroke(controller.axis.color.swiftUIColor, lineWidth: 2)
                 )
+                .shadow(color: controller.axis.color.swiftUIColor.opacity(0.3), radius: 8)
             }
-            .padding(16)
+            .padding(20)
+            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: controller.axis)
+        }
+    }
+    
+    private func iconForMode(_ mode: TransformController.TransformMode) -> String {
+        switch mode {
+        case .move: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .rotate: return "arrow.clockwise"
+        case .scale: return "arrow.up.left.and.down.right.magnifyingglass"
         }
     }
 }

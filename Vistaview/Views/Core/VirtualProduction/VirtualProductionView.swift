@@ -23,6 +23,9 @@ struct VirtualProductionView: View {
     // Transform Controller for Blender-style interactions
     @StateObject private var transformController = TransformController()
     
+    // Keyboard Feedback Controller
+    @StateObject private var keyboardFeedback = KeyboardFeedbackController()
+    
     // Camera Feed Management
     @StateObject private var cameraDeviceManager = CameraDeviceManager()
     @StateObject private var cameraFeedManager: CameraFeedManager
@@ -77,50 +80,61 @@ struct VirtualProductionView: View {
                     showingRightPanel.toggle()
                 }
             }
-            // Blender-style keyboard shortcuts
+            // Blender-style keyboard shortcuts with visual feedback
             .onKeyPress("g") { 
                 startGrabMode()
+                keyboardFeedback.showFeedback("G - Grab/Move (press X/Y/Z to constrain axis)", color: .green)
                 return .handled
             }
             .onKeyPress("r") { 
                 startRotateMode()
+                keyboardFeedback.showFeedback("R - Rotate (press X/Y/Z to constrain axis)", color: .orange)
                 return .handled
             }
             .onKeyPress("s") { 
                 startScaleMode()
+                keyboardFeedback.showFeedback("S - Scale (press X/Y/Z to constrain axis)", color: .purple)
                 return .handled
             }
             .onKeyPress("x") { 
                 setTransformAxis(.x)
+                keyboardFeedback.showFeedback("X - Constrained to X-axis (Red)", color: .red)
                 return .handled
             }
             .onKeyPress("y") { 
                 setTransformAxis(.y)
+                keyboardFeedback.showFeedback("Y - Constrained to Y-axis (Green)", color: .green)
                 return .handled
             }
             .onKeyPress("z") { 
                 setTransformAxis(.z)
+                keyboardFeedback.showFeedback("Z - Constrained to Z-axis (Blue)", color: .blue)
                 return .handled
             }
             .onKeyPress(.return) { 
                 confirmTransform()
+                keyboardFeedback.showFeedback("✓ Transform Confirmed", color: .green)
                 return .handled
             }
             .onKeyPress(.escape) { 
                 cancelTransform()
+                keyboardFeedback.showFeedback("✗ Transform Cancelled", color: .red)
                 return .handled
             }
             // Object placement shortcuts (Blender-style)
             .onKeyPress("v") {
                 self.selectedTool = .select
+                keyboardFeedback.showFeedback("V - Select Tool", color: .white)
                 return .handled
             }
             .onKeyPress("l") {
                 self.selectedTool = .ledWall
+                keyboardFeedback.showFeedback("L - LED Wall Tool", color: .blue)
                 return .handled
             }
             .onKeyPress("c") {
                 self.selectedTool = .camera
+                keyboardFeedback.showFeedback("C - Camera Tool", color: .orange)
                 return .handled
             }
             // Toggle draggable menu with 'D' key
@@ -128,6 +142,7 @@ struct VirtualProductionView: View {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     self.showingDraggableMenu.toggle()
                 }
+                keyboardFeedback.showFeedback("D - Toggle Drag Menu", color: .cyan)
                 return .handled
             }
             // Toggle object browser window with 'B' key
@@ -135,27 +150,19 @@ struct VirtualProductionView: View {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     self.showingObjectBrowser.toggle()
                 }
+                keyboardFeedback.showFeedback("B - Toggle Object Browser", color: .purple)
                 return .handled
             }
             .onKeyPress("t") {
-                // Test key - manually select the debug cube
-                if let testCube = studioManager.studioObjects.first(where: { $0.name == "DEBUG_CUBE" }) {
-                    print("🧪 Manually selecting DEBUG_CUBE via 't' key")
-                    
-                    // Clear other selections
-                    for obj in studioManager.studioObjects {
-                        obj.setSelected(false)
-                    }
-                    
-                    // Select test cube
-                    selectedObject = testCube
-                    testCube.setSelected(true)
-                    selectedObjects = [testCube.id]
-                    
-                    print("✅ Test cube selected: \(testCube.isSelected)")
-                } else {
-                    print("❌ No DEBUG_CUBE found")
-                }
+                // Test key - debug selection system
+                studioManager.testSelectionSystem()
+                keyboardFeedback.showFeedback("T - Testing Selection System", color: .yellow)
+                return .handled
+            }
+            .onKeyPress("h") {
+                // Reset highlights if they're misaligned
+                studioManager.resetObjectHighlights()
+                keyboardFeedback.showFeedback("H - Reset Highlights", color: .cyan)
                 return .handled
             }
             .onChange(of: selectedTool) { _, newValue in
@@ -163,6 +170,86 @@ struct VirtualProductionView: View {
             }
             .onAppear {
                 setupInitialCameras()
+            }
+            // Arrow key support for fine object positioning
+            .onKeyPress(.upArrow) {
+                if transformController.isActive {
+                    transformController.nudgeObjects(.up)
+                    
+                    // Show appropriate feedback based on current axis constraint
+                    switch transformController.axis {
+                    case .z:
+                        keyboardFeedback.showFeedback("↑ Nudge Forward (Z+)", color: .blue)
+                    case .y, .free:
+                        keyboardFeedback.showFeedback("↑ Nudge Up (Y+)", color: .green)
+                    case .x:
+                        keyboardFeedback.showFeedback("↑ No movement (X-axis only)", color: .orange)
+                    }
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.downArrow) {
+                if transformController.isActive {
+                    transformController.nudgeObjects(.down)
+                    
+                    // Show appropriate feedback based on current axis constraint
+                    switch transformController.axis {
+                    case .z:
+                        keyboardFeedback.showFeedback("↓ Nudge Backward (Z-)", color: .blue)
+                    case .y, .free:
+                        keyboardFeedback.showFeedback("↓ Nudge Down (Y-)", color: .green)
+                    case .x:
+                        keyboardFeedback.showFeedback("↓ No movement (X-axis only)", color: .orange)
+                    }
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.leftArrow) {
+                if transformController.isActive {
+                    transformController.nudgeObjects(.left)
+                    
+                    switch transformController.axis {
+                    case .x, .free:
+                        keyboardFeedback.showFeedback("← Nudge Left (X-)", color: .red)
+                    default:
+                        keyboardFeedback.showFeedback("← No movement (axis constrained)", color: .orange)
+                    }
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.rightArrow) {
+                if transformController.isActive {
+                    transformController.nudgeObjects(.right)
+                    
+                    switch transformController.axis {
+                    case .x, .free:
+                        keyboardFeedback.showFeedback("→ Nudge Right (X+)", color: .red)
+                    default:
+                        keyboardFeedback.showFeedback("→ No movement (axis constrained)", color: .orange)
+                    }
+                    return .handled
+                }
+                return .ignored
+            }
+            // Add support for forward/backward with Shift+Up/Down
+            .onKeyPress(.upArrow) {
+                if NSEvent.modifierFlags.contains(.shift) && transformController.isActive {
+                    transformController.nudgeObjects(.forward)
+                    keyboardFeedback.showFeedback("⬆ Nudge Forward", color: .blue)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.downArrow) {
+                if NSEvent.modifierFlags.contains(.shift) && transformController.isActive {
+                    transformController.nudgeObjects(.backward)
+                    keyboardFeedback.showFeedback("⬇ Nudge Backward", color: .blue)
+                    return .handled
+                }
+                return .ignored
             }
     }
     
@@ -189,6 +276,10 @@ struct VirtualProductionView: View {
                         .environmentObject(studioManager) // Pass the studio manager
                 }
             }
+            
+            // Keyboard Feedback Overlay - HIGH PRIORITY
+            KeyboardFeedbackOverlay(controller: keyboardFeedback)
+                .zIndex(100) // Ensure it's always on top
             
             // Floating overlays (highest layer)
             floatingOverlays
@@ -382,64 +473,87 @@ struct VirtualProductionView: View {
     // MARK: - Transform Actions
     
     private func startGrabMode() {
-        let objects = getSelectedStudioObjects()
-        guard !objects.isEmpty else { return }
-        
-        selectedTool = .select
-        transformController.startTransform(.move, objects: objects, startPoint: .zero, scene: studioManager.scene)
-        transformController.setAxis(.free)
-    }
-    
-    private func startRotateMode() {
-        let objects = getSelectedStudioObjects()
-        guard !objects.isEmpty else { return }
-        
-        selectedTool = .select
-        transformController.startTransform(.rotate, objects: objects, startPoint: .zero, scene: studioManager.scene)
-        transformController.setAxis(.free)
-    }
-    
-    private func startScaleMode() {
-        let objects = getSelectedStudioObjects()
-        guard !objects.isEmpty else { return }
-        
-        selectedTool = .select
-        transformController.startTransform(.scale, objects: objects, startPoint: .zero, scene: studioManager.scene)
-        transformController.setAxis(.free)
-    }
-    
-    private func setTransformAxis(_ axis: TransformController.TransformAxis) {
-        let objects = getSelectedStudioObjects()
-        guard !objects.isEmpty else { 
-            if let selectedObj = selectedObject {
-                startGrabMode()
-                transformController.setAxis(axis)
-            }
+        let selectedObjs = getSelectedStudioObjects()
+        guard !selectedObjs.isEmpty else { 
+            print("⚠️ No objects selected for grab mode")
+            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
             return 
         }
         
-        if !transformController.isActive {
-            startGrabMode()
+        print("🎯 Starting grab mode for \(selectedObjs.count) objects")
+        selectedTool = .select
+        transformController.startTransform(.move, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
+        transformController.setAxis(.free)
+        
+        print("💡 Grab mode active - press X/Y/Z to constrain axis, then click and drag")
+    }
+    
+    private func startRotateMode() {
+        let selectedObjs = getSelectedStudioObjects()
+        guard !selectedObjs.isEmpty else { 
+            print("⚠️ No objects selected for rotate mode")
+            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            return 
         }
         
-        transformController.setAxis(axis)
+        print("🔄 Starting rotate mode for \(selectedObjs.count) objects")
+        selectedTool = .select
+        transformController.startTransform(.rotate, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
+        transformController.setAxis(.free)
+        
+        print("💡 Rotate mode active - press X/Y/Z to constrain axis, then click and drag")
+    }
+    
+    private func startScaleMode() {
+        let selectedObjs = getSelectedStudioObjects()
+        guard !selectedObjs.isEmpty else { 
+            print("⚠️ No objects selected for scale mode")
+            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            return 
+        }
+        
+        print("📏 Starting scale mode for \(selectedObjs.count) objects")
+        selectedTool = .select
+        transformController.startTransform(.scale, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
+        transformController.setAxis(.free)
+        
+        print("💡 Scale mode active - press X/Y/Z to constrain axis, then click and drag")
+    }
+    
+    private func setTransformAxis(_ axis: TransformController.TransformAxis) {
+        let selectedObjs = getSelectedStudioObjects()
+        
+        if transformController.isActive {
+            // Already in transform mode, just change axis
+            transformController.setAxis(axis)
+            print("🎯 Set transform axis to: \(axis.label)")
+        } else if !selectedObjs.isEmpty {
+            // Start grab mode first, then set axis
+            transformController.startTransform(.move, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
+            transformController.setAxis(axis)
+            print("🎯 Started grab mode with axis: \(axis.label)")
+        } else {
+            print("⚠️ No objects selected for axis constraint")
+            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+        }
     }
     
     private func confirmTransform() {
-        transformController.confirmTransform()
+        if transformController.isActive {
+            print("✅ Confirming transform")
+            transformController.confirmTransform()
+        }
     }
     
     private func cancelTransform() {
-        transformController.cancelTransform()
+        if transformController.isActive {
+            print("❌ Cancelling transform")
+            transformController.cancelTransform()
+        }
     }
     
     private func getSelectedStudioObjects() -> [StudioObject] {
-        if let selectedObject = selectedObject {
-            return [selectedObject]
-        }
-        return studioManager.studioObjects.filter { 
-            selectedObjects.contains($0.id) 
-        }
+        return studioManager.studioObjects.filter { selectedObjects.contains($0.id) }
     }
     
     // MARK: - Actions

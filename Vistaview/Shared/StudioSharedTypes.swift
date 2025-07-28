@@ -490,82 +490,76 @@ final class StudioObject: Identifiable, ObservableObject {
     }
     
     private func setupHighlightNode() {
-        // Try to get actual geometry bounds, fallback to default size
-        var highlightSize = SCNVector3(1.2, 1.2, 1.2) // Default size
-        
-        if let geometry = node.geometry {
-            let boundingBox = geometry.boundingBox
-            let size = SCNVector3(
-                boundingBox.max.x - boundingBox.min.x,
-                boundingBox.max.y - boundingBox.min.y,
-                boundingBox.max.z - boundingBox.min.z
-            )
-            
-            // Use actual object size + padding for highlight
-            let padding: Float = 0.5 // Increased padding for more visible outline
-            highlightSize = SCNVector3(
-                max(1.0, Float(size.x) + padding),
-                max(1.0, Float(size.y) + padding),
-                max(1.0, Float(size.z) + padding)
-            )
+        // Remove any existing highlight
+        if let existingHighlight = highlightNode {
+            existingHighlight.removeFromParentNode()
         }
         
-        // Create a MUCH more prominent selection outline with thick, bright lines
-        let highlightGeometry = SCNBox(
-            width: CGFloat(highlightSize.x),
-            height: CGFloat(highlightSize.y),
-            length: CGFloat(highlightSize.z),
-            chamferRadius: 0.1 // Add slight chamfer for better visibility
+        // Get the actual bounding box of the entire node hierarchy
+        let (minVec, maxVec) = node.boundingBox
+        
+        // Calculate size with small padding
+        let padding: Float = 0.05
+        let size = SCNVector3(
+            max(0.5, Float(maxVec.x - minVec.x) + padding),
+            max(0.5, Float(maxVec.y - minVec.y) + padding),
+            max(0.5, Float(maxVec.z - minVec.z) + padding)
         )
         
-        let highlightMaterial = SCNMaterial()
-        highlightMaterial.fillMode = .lines // Wireframe outline
+        // Calculate center point relative to the node's local coordinate system
+        let center = SCNVector3(
+            Float(minVec.x + maxVec.x) / 2,
+            Float(minVec.y + maxVec.y) / 2,
+            Float(minVec.z + maxVec.z) / 2
+        )
         
-        // Use MUCH brighter, more saturated colors based on object type
-        let highlightColor = colorForObjectType()
-        highlightMaterial.diffuse.contents = highlightColor
-        highlightMaterial.emission.contents = highlightColor // Make it glow!
-        highlightMaterial.emission.intensity = 2.0 // Very bright emission
-        highlightMaterial.transparency = 1.0 // Fully opaque
-        highlightMaterial.isDoubleSided = true
+        // Create wireframe outline box
+        let outlineGeometry = SCNBox(
+            width: CGFloat(size.x),
+            height: CGFloat(size.y),
+            length: CGFloat(size.z),
+            chamferRadius: 0.01
+        )
         
-        // Add much stronger glow effect
-        highlightMaterial.multiply.contents = highlightColor
-        highlightMaterial.multiply.intensity = 1.5
+        let outlineMaterial = SCNMaterial()
+        outlineMaterial.fillMode = .lines
+        outlineMaterial.diffuse.contents = colorForObjectType()
+        outlineMaterial.emission.contents = colorForObjectType().withAlphaComponent(0.8)
+        outlineMaterial.emission.intensity = 2.0
+        outlineMaterial.isDoubleSided = true
+        outlineMaterial.transparency = 1.0
         
-        highlightGeometry.materials = [highlightMaterial]
+        // Make the lines more visible
+        outlineMaterial.multiply.contents = colorForObjectType()
+        outlineMaterial.multiply.intensity = 1.5
         
-        highlightNode = SCNNode(geometry: highlightGeometry)
+        outlineGeometry.materials = [outlineMaterial]
+        
+        highlightNode = SCNNode(geometry: outlineGeometry)
+        highlightNode?.name = "selection_outline_\(id.uuidString)"
+        highlightNode?.position = center // Position at calculated center in local space
         highlightNode?.isHidden = true
         
-        // Add MUCH more dramatic pulsing animation
-        let pulseAnimation = CABasicAnimation(keyPath: "emission.intensity")
-        pulseAnimation.fromValue = 1.5
-        pulseAnimation.toValue = 3.0 // Much brighter pulse
-        pulseAnimation.duration = 0.8
-        pulseAnimation.autoreverses = true
-        pulseAnimation.repeatCount = .infinity
-        pulseAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        
-        highlightNode?.addAnimation(pulseAnimation, forKey: "pulseAnimation")
-        
+        // Add to the main node
         node.addChildNode(highlightNode!)
         
-        print("🔧 Setup ENHANCED highlight node with size: \(highlightSize) and BRIGHT color: \(highlightColor)")
+        print("✨ Fixed selection outline for \(name)")
+        print("   Node bounds: min=\(minVec), max=\(maxVec)")
+        print("   Outline size: \(size), center: \(center)")
     }
     
     private func colorForObjectType() -> PlatformColor {
         switch type {
         case .ledWall:
-            return .systemBlue.withAlphaComponent(1.0) // Bright blue
+            return .systemBlue
         case .camera:
-            return .systemOrange.withAlphaComponent(1.0) // Bright orange
+            return .systemOrange  
         case .light:
-            return .systemYellow.withAlphaComponent(1.0) // Bright yellow
+            return .systemYellow
         case .setPiece:
-            return .systemGreen.withAlphaComponent(1.0) // Bright green
+            return .systemGreen
         case .select:
-            return .systemPurple.withAlphaComponent(1.0) // Bright purple
+            return .systemPurple
         }
     }
     
@@ -573,52 +567,50 @@ final class StudioObject: Identifiable, ObservableObject {
         let shouldShow = isSelected || isHighlighted
         highlightNode?.isHidden = !shouldShow
         
-        // Update animation state with MUCH more dramatic effects
         if shouldShow && isSelected {
-            // VERY bright pulsing for selected objects
-            highlightNode?.removeAnimation(forKey: "pulseAnimation")
+            // Beautiful pulsing animation for selected objects - more dramatic
+            highlightNode?.removeAllAnimations()
             
+            // Intense pulsing for selected state
             let pulseAnimation = CABasicAnimation(keyPath: "emission.intensity")
-            pulseAnimation.fromValue = 2.0
-            pulseAnimation.toValue = 4.0 // VERY bright
-            pulseAnimation.duration = 0.6
+            pulseAnimation.fromValue = 1.5
+            pulseAnimation.toValue = 4.0
+            pulseAnimation.duration = 0.8
             pulseAnimation.autoreverses = true
             pulseAnimation.repeatCount = .infinity
             pulseAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             
-            highlightNode?.addAnimation(pulseAnimation, forKey: "pulseAnimation")
-            
-            // Add scale pulsing too for extra visibility
+            // Subtle scale pulse for extra visibility
             let scaleAnimation = CABasicAnimation(keyPath: "transform.scale")
-            scaleAnimation.fromValue = 1.0
-            scaleAnimation.toValue = 1.02
-            scaleAnimation.duration = 0.6
+            scaleAnimation.fromValue = SCNVector3(1.0, 1.0, 1.0)
+            scaleAnimation.toValue = SCNVector3(1.03, 1.03, 1.03)
+            scaleAnimation.duration = 0.8
             scaleAnimation.autoreverses = true
             scaleAnimation.repeatCount = .infinity
             scaleAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             
-            highlightNode?.addAnimation(scaleAnimation, forKey: "scaleAnimation")
+            highlightNode?.addAnimation(pulseAnimation, forKey: "selectedPulse")
+            highlightNode?.addAnimation(scaleAnimation, forKey: "selectedScale")
+            
+            print("🌟 SELECTION HIGHLIGHT ACTIVE for \(name)")
             
         } else if shouldShow && isHighlighted {
-            // Bright steady glow for highlighted (hovered) objects
-            highlightNode?.removeAnimation(forKey: "pulseAnimation")
-            highlightNode?.removeAnimation(forKey: "scaleAnimation")
+            // Steady glow for hover state
+            highlightNode?.removeAllAnimations()
             
-            let glowAnimation = CABasicAnimation(keyPath: "emission.intensity")
-            glowAnimation.fromValue = 1.0
-            glowAnimation.toValue = 2.5
-            glowAnimation.duration = 0.3
-            glowAnimation.autoreverses = true
-            glowAnimation.repeatCount = .infinity
-            glowAnimation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            let steadyGlow = CABasicAnimation(keyPath: "emission.intensity")
+            steadyGlow.toValue = 2.5
+            steadyGlow.duration = 0.2
+            steadyGlow.fillMode = .forwards
+            steadyGlow.isRemovedOnCompletion = false
             
-            highlightNode?.addAnimation(glowAnimation, forKey: "glowAnimation")
+            highlightNode?.addAnimation(steadyGlow, forKey: "hoverGlow")
         } else {
-            // Remove all animations when not selected/highlighted
+            // Clean fade out
             highlightNode?.removeAllAnimations()
         }
         
-        print("👁️ ENHANCED highlight visibility for \(name): \(shouldShow) (selected: \(isSelected), highlighted: \(isHighlighted))")
+        print("✨ Updated beautiful highlight for \(name): selected=\(isSelected), highlighted=\(isHighlighted)")
     }
 }
 
