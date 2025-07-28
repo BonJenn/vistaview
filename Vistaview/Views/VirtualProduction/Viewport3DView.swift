@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SceneKit
+import AppKit
 
 #if os(macOS)
 struct Viewport3DView: NSViewRepresentable {
@@ -164,11 +165,23 @@ struct Viewport3DView: NSViewRepresentable {
             rightClickGesture.delegate = self
             view.addGestureRecognizer(rightClickGesture)
             
+            // Left Mouse Button pan gesture for orbiting
+            let leftPanGesture = NSPanGestureRecognizer(target: self, action: #selector(handleLeftPan(_:)))
+            leftPanGesture.delegate = self
+            leftPanGesture.buttonMask = 1 // Left mouse button only
+            view.addGestureRecognizer(leftPanGesture)
+            
+            // Middle Mouse Button pan gesture for Blender-style panning
+            let middlePanGesture = NSPanGestureRecognizer(target: self, action: #selector(handleMiddlePan(_:)))
+            middlePanGesture.delegate = self
+            middlePanGesture.buttonMask = 4 // Middle mouse button
+            view.addGestureRecognizer(middlePanGesture)
+            
             // Use pan gesture with specific configuration for trackpad
-            let panGesture = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-            panGesture.delegate = self
-            panGesture.buttonMask = 0 // Accept all buttons/touches
-            view.addGestureRecognizer(panGesture)
+            let trackpadPanGesture = NSPanGestureRecognizer(target: self, action: #selector(handleTrackpadPan(_:)))
+            trackpadPanGesture.delegate = self
+            trackpadPanGesture.buttonMask = 0 // Accept all buttons/touches for trackpad
+            view.addGestureRecognizer(trackpadPanGesture)
             
             // Enhanced rotation gesture for trackpad rotate (Z-axis rotation)
             let rotationGesture = NSRotationGestureRecognizer(target: self, action: #selector(handleRotation(_:)))
@@ -177,19 +190,30 @@ struct Viewport3DView: NSViewRepresentable {
         }
         
         func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool {
-            // Allow rotation gesture to work simultaneously with pan for proper multitouch
+            // Allow rotation gesture to work simultaneously with trackpad pan for proper multitouch
             if (gestureRecognizer is NSRotationGestureRecognizer && otherGestureRecognizer is NSPanGestureRecognizer) ||
                (gestureRecognizer is NSPanGestureRecognizer && otherGestureRecognizer is NSRotationGestureRecognizer) {
                 return true
             }
             
-            // Allow magnify to work with pan for zoom + orbit
+            // Allow magnify to work with pan gestures for zoom + orbit/pan combinations
             if (gestureRecognizer is NSMagnificationGestureRecognizer && otherGestureRecognizer is NSPanGestureRecognizer) ||
                (gestureRecognizer is NSPanGestureRecognizer && otherGestureRecognizer is NSMagnificationGestureRecognizer) {
                 return true
             }
             
-            return true // Allow all gestures to work together for better multitouch support
+            // Prevent conflicts between different pan gestures (left, middle, trackpad)
+            if gestureRecognizer is NSPanGestureRecognizer && otherGestureRecognizer is NSPanGestureRecognizer {
+                let leftPan = gestureRecognizer as? NSPanGestureRecognizer
+                let rightPan = otherGestureRecognizer as? NSPanGestureRecognizer
+                
+                // Don't allow different mouse button pan gestures to conflict
+                if leftPan?.buttonMask != rightPan?.buttonMask {
+                    return false
+                }
+            }
+            
+            return true // Allow most gestures to work together for better multitouch support
         }
         
         // Handle trackpad scroll for orbiting
@@ -208,30 +232,97 @@ struct Viewport3DView: NSViewRepresentable {
             updateCameraPosition()
         }
         
-        @objc func handlePan(_ gesture: NSPanGestureRecognizer) {
+        @objc func handleLeftPan(_ gesture: NSPanGestureRecognizer) {
             guard let view = gesture.view as? SCNView else { return }
             
             let translation = gesture.translation(in: view)
-            let velocity = gesture.velocity(in: view)
             let currentPoint = gesture.location(in: view)
+            
+            // Debug logging
+            let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
+            print("🖱️ LEFT PAN: shift=\(isShiftPressed), translation=\(translation)")
             
             // PRIORITY 1: Check if we're in active transform mode
             if parent.transformController.isActive {
                 // Use the transform controller's mouse update method
                 parent.transformController.updateTransformWithMouse(mousePos: currentPoint)
                 gesture.setTranslation(.zero, in: view)
-                
-                // Prevent gesture from interfering
                 return
             }
             
-            // PRIORITY 2: Normal camera controls only if NOT transforming
-            let isHighVelocityScroll = abs(velocity.x) > 50 || abs(velocity.y) > 50
+            // PRIORITY 2: Check for Shift + Left Mouse Button = Blender-style pan
+            if isShiftPressed {
+                // Shift + Left Mouse = Pan (Blender style)
+                print("🎯 SHIFT + LEFT MOUSE: Activating Blender-style pan")
+                handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            } else {
+                // Normal Left Mouse = Orbit
+                print("🌀 NORMAL LEFT MOUSE: Activating orbit")
+                let sensitivity: Float = 0.005
+                let deltaAzimuth = Float(translation.x) * sensitivity     // Horizontal = Y-axis rotation
+                let deltaElevation = -Float(translation.y) * sensitivity  // Vertical = X-axis rotation
+                
+                cameraAzimuth += deltaAzimuth
+                cameraElevation += deltaElevation
+                
+                // Clamp elevation
+                let maxElevation: Float = Float.pi / 2 - 0.1
+                cameraElevation = max(-maxElevation, min(maxElevation, cameraElevation))
+                
+                updateCameraPosition()
+                gesture.setTranslation(.zero, in: view)
+            }
+        }
+        
+        @objc func handleMiddlePan(_ gesture: NSPanGestureRecognizer) {
+            guard let view = gesture.view as? SCNView else { return }
+            
+            let translation = gesture.translation(in: view)
+            let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
+            
+            print("🖱️ MIDDLE PAN: shift=\(isShiftPressed), translation=\(translation)")
+            
+            if isShiftPressed {
+                // Shift + Middle Mouse Button = Blender-style pan (exactly like Blender!)
+                print("🎯 SHIFT + MIDDLE MOUSE: Activating Blender-style pan")
+                handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            } else {
+                // Plain middle mouse button could be used for other functions
+                // For now, also do panning (some users prefer this)
+                print("🖱️ PLAIN MIDDLE MOUSE: Activating pan")
+                handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            }
+        }
+        
+        @objc func handleTrackpadPan(_ gesture: NSPanGestureRecognizer) {
+            guard let view = gesture.view as? SCNView else { return }
+            
+            let translation = gesture.translation(in: view)
+            let velocity = gesture.velocity(in: view)
+            let currentPoint = gesture.location(in: view)
+            
+            // Debug logging for trackpad
             let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
             let isCommandPressed = NSEvent.modifierFlags.contains(.command)
+            let isHighVelocityScroll = abs(velocity.x) > 50 || abs(velocity.y) > 50
             
+            print("🖱️ TRACKPAD PAN: shift=\(isShiftPressed), cmd=\(isCommandPressed), highVel=\(isHighVelocityScroll), translation=\(translation)")
+            
+            // PRIORITY 1: Check if we're in active transform mode
+            if parent.transformController.isActive {
+                // Use the transform controller's mouse update method
+                parent.transformController.updateTransformWithMouse(mousePos: currentPoint)
+                gesture.setTranslation(.zero, in: view)
+                return
+            }
+            
+            // PRIORITY 2: Trackpad gestures (high velocity indicates scroll gestures)
             if isHighVelocityScroll || (!isShiftPressed && !isCommandPressed) {
                 // This looks like a scroll gesture or normal orbit - use for orbiting
+                print("🌀 TRACKPAD ORBIT")
                 let sensitivity: Float = 0.005
                 let deltaAzimuth = Float(translation.x) * sensitivity     // Horizontal = Y-axis rotation
                 let deltaElevation = -Float(translation.y) * sensitivity  // Vertical = X-axis rotation
@@ -246,11 +337,13 @@ struct Viewport3DView: NSViewRepresentable {
                 updateCameraPosition()
                 gesture.setTranslation(.zero, in: view)
             } else if isShiftPressed {
-                // Shift + drag = pan focus point
-                handleCameraPan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                // Shift + trackpad drag = Blender-style pan
+                print("🎯 SHIFT + TRACKPAD: Activating Blender-style pan")
+                handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
                 gesture.setTranslation(.zero, in: view)
             } else if isCommandPressed {
                 // Command + drag = alternative orbit mode
+                print("⌘ COMMAND + TRACKPAD: Alternative orbit")
                 let sensitivity: Float = 0.01
                 let deltaAzimuth = Float(translation.x) * sensitivity
                 let deltaElevation = -Float(translation.y) * sensitivity
@@ -299,35 +392,49 @@ struct Viewport3DView: NSViewRepresentable {
             gesture.magnification = 0
         }
         
-        private func handleCameraPan(deltaX: Float, deltaY: Float) {
-            // Calculate right and up vectors from camera transform
+        private func handleBlenderStylePan(deltaX: Float, deltaY: Float) {
+            // Debug logging
+            print("🎯 EXECUTING Blender-style pan: deltaX=\(deltaX), deltaY=\(deltaY)")
+            
+            // Calculate screen-space pan vectors from the camera's perspective
+            // This creates the exact same behavior as Blender's Shift + MMB pan
+            
             let cameraTransform = cameraNode.worldTransform
-            let rightVector = SCNVector3(cameraTransform.m11, cameraTransform.m12, cameraTransform.m13)
-            let upVector = SCNVector3(cameraTransform.m21, cameraTransform.m22, cameraTransform.m23)
             
-            let panScale = cameraDistance * 0.001
-            let panX = deltaX * panScale
-            let panY = deltaY * panScale
+            // Extract right vector (local X axis) - ensure CGFloat compatibility for macOS
+            let rightX = CGFloat(cameraTransform.m11)
+            let rightY = CGFloat(cameraTransform.m12)
+            let rightZ = CGFloat(cameraTransform.m13)
             
-            // Break up the complex expression with proper type conversion
-            let rightMovement = SCNVector3(
-                -Float(rightVector.x) * panX,
-                -Float(rightVector.y) * panX,
-                -Float(rightVector.z) * panX
-            )
-            let upMovement = SCNVector3(
-                -Float(upVector.x) * panY,
-                -Float(upVector.y) * panY,
-                -Float(upVector.z) * panY
-            )
+            // Extract up vector (local Y axis) - ensure CGFloat compatibility for macOS
+            let upX = CGFloat(cameraTransform.m21)
+            let upY = CGFloat(cameraTransform.m22)
+            let upZ = CGFloat(cameraTransform.m23)
             
+            // Scale pan speed based on camera distance (closer = slower pan, farther = faster pan)
+            // This matches Blender's behavior exactly
+            let panScale = CGFloat(cameraDistance * 0.002)
+            let panXAmount = CGFloat(deltaX) * panScale
+            let panYAmount = CGFloat(deltaY) * panScale
+            
+            // Move the focus point in screen space
+            // X movement = right/left in camera space
+            // Y movement = up/down in camera space
+            let deltaFocusX = -(rightX * panXAmount - upX * panYAmount)
+            let deltaFocusY = -(rightY * panXAmount - upY * panYAmount)
+            let deltaFocusZ = -(rightZ * panXAmount - upZ * panYAmount)
+            
+            let oldFocusPoint = focusPoint
             focusPoint = SCNVector3(
-                focusPoint.x + CGFloat(rightMovement.x + upMovement.x),
-                focusPoint.y + CGFloat(rightMovement.y + upMovement.y),
-                focusPoint.z + CGFloat(rightMovement.z + upMovement.z)
+                focusPoint.x + deltaFocusX,
+                focusPoint.y + deltaFocusY,
+                focusPoint.z + deltaFocusZ
             )
             
+            // Update camera position to maintain the same relative position to the new focus point
             updateCameraPosition()
+            
+            print("🎯 Blender-style pan complete: \(oldFocusPoint) -> \(focusPoint)")
         }
         
         private func updateCameraPosition() {
@@ -411,11 +518,11 @@ struct Viewport3DView: NSViewRepresentable {
                 
                 // Object-specific menu
                 menu.addItem(NSMenuItem(title: "Select \(object.name)", action: #selector(selectObject), keyEquivalent: ""))
-                menu.addItem(NSMenuItem.separator())
+                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
                 menu.addItem(NSMenuItem(title: "Focus on Object", action: #selector(focusOnObject), keyEquivalent: ""))
                 menu.addItem(NSMenuItem(title: "Duplicate", action: #selector(duplicateObject), keyEquivalent: ""))
                 menu.addItem(NSMenuItem(title: "Delete", action: #selector(deleteObject), keyEquivalent: ""))
-                menu.addItem(NSMenuItem.separator())
+                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
                 menu.addItem(NSMenuItem(title: "Reset Transform", action: #selector(resetTransform), keyEquivalent: ""))
                 
             } else {
@@ -424,7 +531,7 @@ struct Viewport3DView: NSViewRepresentable {
                 menu.addItem(NSMenuItem(title: "Add Camera", action: #selector(addCamera), keyEquivalent: ""))
                 menu.addItem(NSMenuItem(title: "Add Set Piece", action: #selector(addSetPiece), keyEquivalent: ""))
                 menu.addItem(NSMenuItem(title: "Add Light", action: #selector(addLight), keyEquivalent: ""))
-                menu.addItem(NSMenuItem.separator())
+                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
                 menu.addItem(NSMenuItem(title: "Select All", action: #selector(selectAll), keyEquivalent: ""))
                 menu.addItem(NSMenuItem(title: "Deselect All", action: #selector(deselectAll), keyEquivalent: ""))
             }
@@ -676,11 +783,65 @@ struct Viewport3DView: NSViewRepresentable {
                 Float(round(position.z / CGFloat(gridStep)) * CGFloat(gridStep))
             )
         }
+        
+        // Add method for direct pan handling (without gesture recognizer)
+        func handleBlenderStylePanDirect(deltaX: Float, deltaY: Float) {
+            // Debug logging
+            print("🎯 EXECUTING Direct Blender-style pan: deltaX=\(deltaX), deltaY=\(deltaY)")
+            
+            // Don't pan if we're in transform mode
+            if parent.transformController.isActive {
+                print("⚠️ Skipping pan - transform mode active")
+                return
+            }
+            
+            // Calculate screen-space pan vectors from the camera's perspective
+            let cameraTransform = cameraNode.worldTransform
+            
+            // Extract right vector (local X axis) - ensure CGFloat compatibility for macOS
+            let rightX = CGFloat(cameraTransform.m11)
+            let rightY = CGFloat(cameraTransform.m12)
+            let rightZ = CGFloat(cameraTransform.m13)
+            
+            // Extract up vector (local Y axis) - ensure CGFloat compatibility for macOS
+            let upX = CGFloat(cameraTransform.m21)
+            let upY = CGFloat(cameraTransform.m22)
+            let upZ = CGFloat(cameraTransform.m23)
+            
+            // Scale pan speed based on camera distance (closer = slower pan, farther = faster pan)
+            // This matches Blender's behavior exactly
+            let panScale = CGFloat(cameraDistance * 0.002)
+            let panXAmount = CGFloat(deltaX) * panScale
+            let panYAmount = CGFloat(deltaY) * panScale
+            
+            // Move the focus point in screen space
+            // X movement = right/left in camera space
+            // Y movement = up/down in camera space
+            let deltaFocusX = -(rightX * panXAmount - upX * panYAmount)
+            let deltaFocusY = -(rightY * panXAmount - upY * panYAmount)
+            let deltaFocusZ = -(rightZ * panXAmount - upZ * panYAmount)
+            
+            let oldFocusPoint = focusPoint
+            focusPoint = SCNVector3(
+                focusPoint.x + deltaFocusX,
+                focusPoint.y + deltaFocusY,
+                focusPoint.z + deltaFocusZ
+            )
+            
+            // Update camera position to maintain the same relative position to the new focus point
+            updateCameraPosition()
+            
+            print("🎯 Direct Blender-style pan complete: \(oldFocusPoint) -> \(focusPoint)")
+        }
     }
     
     // Custom SCNView that handles trackpad scroll events AND drag operations
     class CustomSCNView: SCNView {
         weak var gestureHandler: Coordinator?
+        
+        // Track mouse movement without button press
+        private var lastMouseLocation: CGPoint = .zero
+        private var isTrackingShiftDrag = false
         
         override var acceptsFirstResponder: Bool {
             return true
@@ -701,16 +862,185 @@ struct Viewport3DView: NSViewRepresentable {
             // Ensure drag registration happens when view is in window
             registerForDraggedTypes([.string])
             print("🎯 CustomSCNView registered for drag types: [.string]")
+            
+            // Set up tracking area for mouse movement
+            setupTrackingArea()
+        }
+        
+        private func setupTrackingArea() {
+            // Remove existing tracking areas
+            trackingAreas.forEach { removeTrackingArea($0) }
+            
+            // Add new tracking area for the entire view
+            let trackingArea = NSTrackingArea(
+                rect: bounds,
+                options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+        }
+        
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            setupTrackingArea()
+        }
+        
+        override func mouseMoved(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ MOUSE MOVED: shift=\(isShiftPressed), location=\(currentLocation)")
+            
+            // Check if we should start or continue shift+drag panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    // Start tracking
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 STARTED Shift+Mouse tracking")
+                } else {
+                    // Continue tracking - calculate delta and pan
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    if abs(deltaX) > 0.5 || abs(deltaY) > 0.5 { // Only pan if there's meaningful movement
+                        print("🎯 SHIFT + MOUSE MOVE: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                        gestureHandler?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    }
+                    
+                    lastMouseLocation = currentLocation
+                }
+            } else {
+                // Stop tracking if shift is released
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 STOPPED Shift+Mouse tracking")
+                }
+            }
+            
+            super.mouseMoved(with: event)
+        }
+        
+        override func mouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ MOUSE DRAGGED: shift=\(isShiftPressed), location=\(currentLocation), button=\(event.buttonNumber)")
+            
+            // If shift is pressed during drag, override normal drag behavior with panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    // Start tracking
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 STARTED Shift+Drag tracking")
+                } else {
+                    // Continue tracking - calculate delta and pan
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 SHIFT + DRAG: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                    gestureHandler?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                
+                // Don't pass to super - we're handling this drag ourselves
+                return
+            } else {
+                // Stop tracking if shift is released during drag
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 STOPPED Shift+Drag tracking")
+                }
+            }
+            
+            // Let normal drag behavior continue if shift is not pressed
+            super.mouseDragged(with: event)
+        }
+        
+        override func rightMouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ RIGHT MOUSE DRAGGED: shift=\(isShiftPressed), location=\(currentLocation)")
+            
+            // If shift is pressed during right drag, override with panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 STARTED Shift+Right Drag tracking")
+                } else {
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 SHIFT + RIGHT DRAG: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                    gestureHandler?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                return
+            } else {
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 STOPPED Shift+Right Drag tracking")
+                }
+            }
+            
+            super.rightMouseDragged(with: event)
+        }
+        
+        override func otherMouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ OTHER MOUSE DRAGGED: shift=\(isShiftPressed), location=\(currentLocation), button=\(event.buttonNumber)")
+            
+            // If shift is pressed during middle mouse drag, override with panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 STARTED Shift+Middle Drag tracking")
+                } else {
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 SHIFT + MIDDLE DRAG: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                    gestureHandler?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                return
+            } else {
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 STOPPED Shift+Middle Drag tracking")
+                }
+            }
+            
+            super.otherMouseDragged(with: event)
         }
         
         override func scrollWheel(with event: NSEvent) {
-            // Always handle trackpad gestures, regardless of phase
+            // Check if Shift is pressed for panning
+            let isShiftPressed = event.modifierFlags.contains(.shift)
             let deltaX = Float(event.scrollingDeltaX)
             let deltaY = Float(event.scrollingDeltaY)
             
             // Check if there's actual movement
             if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
-                gestureHandler?.handleTrackpadScroll(deltaX: deltaX, deltaY: deltaY)
+                if isShiftPressed {
+                    // Shift + scroll = Blender-style pan
+                    print("🎯 SHIFT + SCROLL: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                    gestureHandler?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                } else {
+                    // Normal scroll = orbit
+                    print("🌀 NORMAL SCROLL: Activating orbit")
+                    gestureHandler?.handleTrackpadScroll(deltaX: deltaX, deltaY: deltaY)
+                }
             } else {
                 // Pass through if no movement  
                 super.scrollWheel(with: event)
@@ -735,7 +1065,7 @@ struct Viewport3DView: NSViewRepresentable {
         }
         
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            print("🎯 CustomSCNView: Performing drag operation")
+            print("🎯 CustomSCnView: Performing drag operation")
             let result = gestureHandler?.performDragOperation(sender) ?? false
             print("🎯 CustomSCNView: Drag operation result: \(result)")
             return result

@@ -14,6 +14,7 @@ enum StudioToolType: String, CaseIterable {
     case camera = "Camera" 
     case setPiece = "Set Piece"
     case light = "Light"
+    case staging = "Staging"
     
     var icon: String {
         switch self {
@@ -22,6 +23,7 @@ enum StudioToolType: String, CaseIterable {
         case .camera: return "camera"
         case .setPiece: return "cube"
         case .light: return "lightbulb"
+        case .staging: return "rectangle.stack"
         }
     }
     
@@ -32,6 +34,7 @@ enum StudioToolType: String, CaseIterable {
         case .camera: return "C"
         case .setPiece: return "P"
         case .light: return "Shift+L"
+        case .staging: return "T"
         }
     }
 }
@@ -154,6 +157,10 @@ struct BlenderStudioView: View {
         }
         .onKeyPress(.tab) { 
             selectedTool = .select
+            return .handled 
+        }
+        .onKeyPress(.init("t")) { 
+            selectedTool = .staging
             return .handled 
         }
     }

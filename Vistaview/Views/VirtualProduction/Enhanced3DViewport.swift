@@ -36,11 +36,11 @@ struct Enhanced3DViewport: NSViewRepresentable {
         }
     }
     
-    func makeNSView(context: Context) -> SCNView {
+    func makeNSView(context: Context) -> DragDropSCNView {
         let scnView = DragDropSCNView()
         scnView.scene = studioManager.scene
         scnView.backgroundColor = NSColor.black
-        scnView.allowsCameraControl = true
+        scnView.allowsCameraControl = false  // Disable built-in controls for custom Blender-style controls
         scnView.autoenablesDefaultLighting = false
         scnView.showsStatistics = false
         scnView.delegate = context.coordinator
@@ -49,7 +49,22 @@ struct Enhanced3DViewport: NSViewRepresentable {
         scnView.registerForDraggedTypes([.string])
         scnView.coordinator = context.coordinator
         
-        // Add gesture recognizers
+        // Set up camera controls first
+        context.coordinator.setupCamera(in: scnView)
+        
+        // Add gesture recognizers for camera control
+        let leftPanGesture = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLeftPan(_:)))
+        leftPanGesture.buttonMask = 1 // Left mouse button
+        scnView.addGestureRecognizer(leftPanGesture)
+        
+        let middlePanGesture = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMiddlePan(_:)))
+        middlePanGesture.buttonMask = 4 // Middle mouse button
+        scnView.addGestureRecognizer(middlePanGesture)
+        
+        let magnifyGesture = NSMagnificationGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMagnify(_:)))
+        scnView.addGestureRecognizer(magnifyGesture)
+        
+        // Click gestures for selection/placement
         let clickGesture = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleClick(_:)))
         scnView.addGestureRecognizer(clickGesture)
         
@@ -61,7 +76,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
         return scnView
     }
     
-    func updateNSView(_ nsView: SCNView, context: Context) {
+    func updateNSView(_ nsView: DragDropSCNView, context: Context) {
         // Update view mode
         switch viewMode {
         case .wireframe:
@@ -87,12 +102,16 @@ struct Enhanced3DViewport: NSViewRepresentable {
     }
     
     private func setupDefaultCamera(_ scnView: SCNView) {
+        // Remove any existing camera to avoid conflicts
+        studioManager.scene.rootNode.childNode(withName: "enhanced_viewport_camera", recursively: true)?.removeFromParentNode()
+        
         let cameraNode = SCNNode()
         let camera = SCNCamera()
         camera.fieldOfView = 60
         camera.zNear = 0.1
         camera.zFar = 1000
         cameraNode.camera = camera
+        cameraNode.name = "enhanced_viewport_camera"
         cameraNode.position = SCNVector3(10, 10, 10)
         cameraNode.look(at: SCNVector3(0, 0, 0))
         
@@ -108,6 +127,200 @@ struct Enhanced3DViewport: NSViewRepresentable {
     
     class DragDropSCNView: SCNView {
         weak var coordinator: Enhanced3DViewport.Coordinator?
+        
+        // Track mouse movement without button press for Blender-style shift+drag
+        private var lastMouseLocation: CGPoint = .zero
+        private var isTrackingShiftDrag = false
+        
+        override var acceptsFirstResponder: Bool {
+            return true
+        }
+        
+        override func becomeFirstResponder() -> Bool {
+            return true
+        }
+        
+        override func awakeFromNib() {
+            super.awakeFromNib()
+            self.wantsLayer = true
+        }
+        
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            registerForDraggedTypes([.string])
+            setupTrackingArea()
+        }
+        
+        private func setupTrackingArea() {
+            // Remove existing tracking areas
+            trackingAreas.forEach { removeTrackingArea($0) }
+            
+            // Add new tracking area for the entire view
+            let trackingArea = NSTrackingArea(
+                rect: bounds,
+                options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+        }
+        
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            setupTrackingArea()
+        }
+        
+        override func mouseMoved(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] MOUSE MOVED: shift=\(isShiftPressed), location=\(currentLocation)")
+            
+            // Check if we should start or continue shift+drag panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    // Start tracking
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 [Enhanced] STARTED Shift+Mouse tracking")
+                } else {
+                    // Continue tracking - calculate delta and pan
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    if abs(deltaX) > 0.5 || abs(deltaY) > 0.5 { // Only pan if there's meaningful movement
+                        print("🎯 [Enhanced] SHIFT + MOUSE MOVE: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                        coordinator?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    }
+                    
+                    lastMouseLocation = currentLocation
+                }
+            } else {
+                // Stop tracking if shift is released
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 [Enhanced] STOPPED Shift+Mouse tracking")
+                }
+            }
+            
+            super.mouseMoved(with: event)
+        }
+        
+        override func mouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] MOUSE DRAGGED: shift=\(isShiftPressed), location=\(currentLocation)")
+            
+            // If shift is pressed during drag, override normal drag behavior with panning
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 [Enhanced] STARTED Shift+Drag tracking")
+                } else {
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 [Enhanced] SHIFT + DRAG: Activating Blender-style pan (deltaX=\(deltaX), deltaY=\(deltaY))")
+                    coordinator?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                return // Don't pass to super - we're handling this drag ourselves
+            } else {
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 [Enhanced] STOPPED Shift+Drag tracking")
+                }
+            }
+            
+            super.mouseDragged(with: event)
+        }
+        
+        override func rightMouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] RIGHT MOUSE DRAGGED: shift=\(isShiftPressed)")
+            
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 [Enhanced] STARTED Shift+Right Drag tracking")
+                } else {
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 [Enhanced] SHIFT + RIGHT DRAG: Activating pan")
+                    coordinator?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                return
+            } else {
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 [Enhanced] STOPPED Shift+Right Drag tracking")
+                }
+            }
+            
+            super.rightMouseDragged(with: event)
+        }
+        
+        override func otherMouseDragged(with event: NSEvent) {
+            let currentLocation = convert(event.locationInWindow, from: nil)
+            let isShiftPressed = event.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] OTHER MOUSE DRAGGED: shift=\(isShiftPressed), button=\(event.buttonNumber)")
+            
+            if isShiftPressed {
+                if !isTrackingShiftDrag {
+                    isTrackingShiftDrag = true
+                    lastMouseLocation = currentLocation
+                    print("🎯 [Enhanced] STARTED Shift+Middle Drag tracking")
+                } else {
+                    let deltaX = Float(currentLocation.x - lastMouseLocation.x)
+                    let deltaY = Float(currentLocation.y - lastMouseLocation.y)
+                    
+                    print("🎯 [Enhanced] SHIFT + MIDDLE DRAG: Activating pan")
+                    coordinator?.handleBlenderStylePanDirect(deltaX: deltaX, deltaY: deltaY)
+                    
+                    lastMouseLocation = currentLocation
+                }
+                return
+            } else {
+                if isTrackingShiftDrag {
+                    isTrackingShiftDrag = false
+                    print("🎯 [Enhanced] STOPPED Shift+Middle Drag tracking")
+                }
+            }
+            
+            super.otherMouseDragged(with: event)
+        }
+        
+        override func mouseExited(with event: NSEvent) {
+            // Reset tracking when mouse leaves view
+            isTrackingShiftDrag = false
+            super.mouseExited(with: event)
+        }
+        
+        override func scrollWheel(with event: NSEvent) {
+            // Handle scroll wheel for zooming
+            if let coordinator = coordinator {
+                let scrollDelta = Float(event.scrollingDeltaY)
+                if abs(scrollDelta) > 0.1 {
+                    // Zoom based on scroll direction
+                    let zoomFactor: Float = scrollDelta > 0 ? 1.1 : 0.9
+                    let newDistance = coordinator.cameraDistance * zoomFactor
+                    coordinator.cameraDistance = max(1.0, min(100.0, newDistance))
+                    coordinator.updateCameraPositionPublic()
+                }
+            } else {
+                super.scrollWheel(with: event)
+            }
+        }
         
         // MARK: - NSDraggingDestination
         
@@ -188,10 +401,6 @@ struct Enhanced3DViewport: NSViewRepresentable {
         
         // MARK: - Key Event Handling for Transform Mode
         
-        override var acceptsFirstResponder: Bool {
-            return true
-        }
-        
         override func keyDown(with event: NSEvent) {
             guard let coordinator = coordinator else {
                 super.keyDown(with: event)
@@ -255,6 +464,14 @@ struct Enhanced3DViewport: NSViewRepresentable {
         var snapToGrid: Bool = true
         var gridSize: Float = 1.0
         
+        // Camera control properties
+        var cameraNode: SCNNode!
+        var cameraDistance: Float = 15.0
+        var cameraAzimuth: Float = 0.0      // Y-axis rotation (horizontal)
+        var cameraElevation: Float = 0.3    // X-axis rotation (vertical)
+        var cameraRoll: Float = 0.0         // Z-axis rotation
+        var focusPoint = SCNVector3(0, 1, 0)
+        
         // Transform state
         var isTransforming = false
         var transformAxis: TransformAxis = .free
@@ -266,6 +483,157 @@ struct Enhanced3DViewport: NSViewRepresentable {
         init(_ parent: Enhanced3DViewport) {
             self.parent = parent
             super.init()
+        }
+        
+        // MARK: - Camera Control Methods
+        
+        func setupCamera(in scnView: SCNView) {
+            let camera = SCNCamera()
+            camera.fieldOfView = 60
+            camera.zNear = 0.1
+            camera.zFar = 1000
+            camera.automaticallyAdjustsZRange = true
+            
+            cameraNode = SCNNode()
+            cameraNode.camera = camera
+            cameraNode.name = "enhanced_viewport_camera"
+            
+            parent.studioManager.scene.rootNode.addChildNode(cameraNode)
+            scnView.pointOfView = cameraNode
+            
+            updateCameraPosition()
+        }
+        
+        @objc func handleLeftPan(_ gesture: NSPanGestureRecognizer) {
+            guard let view = gesture.view as? SCNView else { return }
+            
+            let translation = gesture.translation(in: view)
+            let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] LEFT PAN: shift=\(isShiftPressed), translation=\(translation)")
+            
+            if isShiftPressed {
+                // Shift + Left Mouse = Blender-style pan
+                print("🎯 [Enhanced] SHIFT + LEFT MOUSE: Activating Blender-style pan")
+                handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+                gesture.setTranslation(.zero, in: view)
+            } else {
+                // Normal Left Mouse = Orbit
+                print("🌀 [Enhanced] NORMAL LEFT MOUSE: Activating orbit")
+                let sensitivity: Float = 0.005
+                let deltaAzimuth = Float(translation.x) * sensitivity
+                let deltaElevation = -Float(translation.y) * sensitivity
+                
+                cameraAzimuth += deltaAzimuth
+                cameraElevation += deltaElevation
+                
+                // Clamp elevation
+                let maxElevation: Float = Float.pi / 2 - 0.1
+                cameraElevation = max(-maxElevation, min(maxElevation, cameraElevation))
+                
+                updateCameraPosition()
+                gesture.setTranslation(.zero, in: view)
+            }
+        }
+        
+        @objc func handleMiddlePan(_ gesture: NSPanGestureRecognizer) {
+            guard gesture.view is SCNView else { return }
+            
+            let translation = gesture.translation(in: gesture.view!)
+            let isShiftPressed = NSEvent.modifierFlags.contains(.shift)
+            
+            print("🖱️ [Enhanced] MIDDLE PAN: shift=\(isShiftPressed), translation=\(translation)")
+            
+            if isShiftPressed {
+                // Shift + Middle Mouse Button = Blender-style pan (exactly like Blender!)
+                print("🎯 [Enhanced] SHIFT + MIDDLE MOUSE: Activating Blender-style pan")
+            } else {
+                print("🖱️ [Enhanced] PLAIN MIDDLE MOUSE: Activating pan")
+            }
+            
+            // Both Shift+MMB and plain MMB do Blender-style panning
+            handleBlenderStylePan(deltaX: Float(translation.x), deltaY: Float(translation.y))
+            gesture.setTranslation(.zero, in: gesture.view!)
+        }
+        
+        @objc func handleMagnify(_ gesture: NSMagnificationGestureRecognizer) {
+            let zoomFactor = 1.0 + gesture.magnification
+            let newDistance = cameraDistance / Float(zoomFactor)
+            
+            cameraDistance = max(1.0, min(100.0, newDistance))
+            updateCameraPosition()
+            gesture.magnification = 0
+        }
+        
+        private func handleBlenderStylePan(deltaX: Float, deltaY: Float) {
+            // Calculate screen-space pan vectors from the camera's perspective
+            // This creates the exact same behavior as Blender's Shift + MMB pan
+            
+            let cameraTransform = cameraNode.worldTransform
+            
+            // Extract right vector (local X axis) - ensure CGFloat compatibility for macOS
+            let rightX = CGFloat(cameraTransform.m11)
+            let rightY = CGFloat(cameraTransform.m12)
+            let rightZ = CGFloat(cameraTransform.m13)
+            
+            // Extract up vector (local Y axis) - ensure CGFloat compatibility for macOS
+            let upX = CGFloat(cameraTransform.m21)
+            let upY = CGFloat(cameraTransform.m22)
+            let upZ = CGFloat(cameraTransform.m23)
+            
+            // Scale pan speed based on camera distance (closer = slower pan, farther = faster pan)
+            // This matches Blender's behavior exactly
+            let panScale = CGFloat(cameraDistance * 0.002)
+            let panXAmount = CGFloat(deltaX) * panScale
+            let panYAmount = CGFloat(deltaY) * panScale
+            
+            // Move the focus point in screen space
+            // X movement = right/left in camera space
+            // Y movement = up/down in camera space
+            let deltaFocusX = -(rightX * panXAmount - upX * panYAmount)
+            let deltaFocusY = -(rightY * panXAmount - upY * panYAmount)
+            let deltaFocusZ = -(rightZ * panXAmount - upZ * panYAmount)
+            
+            focusPoint = SCNVector3(
+                focusPoint.x + deltaFocusX,
+                focusPoint.y + deltaFocusY,
+                focusPoint.z + deltaFocusZ
+            )
+            
+            // Update camera position to maintain the same relative position to the new focus point
+            updateCameraPosition()
+            
+            print("🎯 Enhanced viewport Blender-style pan: focus point now at \(focusPoint)")
+        }
+        
+        private func updateCameraPosition() {
+            // Spherical to Cartesian conversion
+            // Azimuth rotates around Y-axis (horizontal movement)
+            // Elevation rotates around X-axis (vertical movement)
+            let x = cameraDistance * cos(cameraElevation) * sin(cameraAzimuth)
+            let y = cameraDistance * sin(cameraElevation)
+            let z = cameraDistance * cos(cameraElevation) * cos(cameraAzimuth)
+            
+            cameraNode.position = SCNVector3(
+                focusPoint.x + CGFloat(x),
+                focusPoint.y + CGFloat(y),
+                focusPoint.z + CGFloat(z)
+            )
+            
+            // Look at the focus point
+            cameraNode.look(at: focusPoint, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
+            
+            // Apply roll rotation if needed
+            if abs(cameraRoll) > 0.001 {
+                let currentTransform = cameraNode.worldTransform
+                let rollTransform = SCNMatrix4MakeRotation(CGFloat(cameraRoll), 0, 0, 1)
+                cameraNode.transform = SCNMatrix4Mult(currentTransform, rollTransform)
+            }
+        }
+        
+        // Add public wrapper for the private method
+        func updateCameraPositionPublic() {
+            updateCameraPosition()
         }
         
         // MARK: - Transform Mode Methods
@@ -367,7 +735,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
                 switch selectedTool {
                 case .select:
                     handleSelection(at: location, in: scnView)
-                case .ledWall, .camera, .setPiece, .light:
+                case .ledWall, .camera, .setPiece, .light, .staging:
                     handleObjectPlacement(at: location, in: scnView)
                 }
             }
@@ -441,6 +809,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
             case .camera: studioTool = .camera
             case .setPiece: studioTool = .setPiece
             case .light: studioTool = .light
+            case .staging: studioTool = .staging
             }
             parent.studioManager.addObject(type: studioTool, at: worldPos)
         }
@@ -451,6 +820,50 @@ struct Enhanced3DViewport: NSViewRepresentable {
             let menu = NSMenu()
             menu.addItem(NSMenuItem(title: "Add Set Piece", action: nil, keyEquivalent: ""))
             menu.popUp(positioning: nil, at: point, in: scnView)
+        }
+        
+        // Add direct pan method
+        func handleBlenderStylePanDirect(deltaX: Float, deltaY: Float) {
+            // Debug logging
+            print("🎯 [Enhanced] EXECUTING Direct Blender-style pan: deltaX=\(deltaX), deltaY=\(deltaY)")
+            
+            // Calculate screen-space pan vectors from the camera's perspective
+            let cameraTransform = cameraNode.worldTransform
+            
+            // Extract right vector (local X axis) - ensure CGFloat compatibility for macOS
+            let rightX = CGFloat(cameraTransform.m11)
+            let rightY = CGFloat(cameraTransform.m12)
+            let rightZ = CGFloat(cameraTransform.m13)
+            
+            // Extract up vector (local Y axis) - ensure CGFloat compatibility for macOS
+            let upX = CGFloat(cameraTransform.m21)
+            let upY = CGFloat(cameraTransform.m22)
+            let upZ = CGFloat(cameraTransform.m23)
+            
+            // Scale pan speed based on camera distance (closer = slower pan, farther = faster pan)
+            // This matches Blender's behavior exactly
+            let panScale = CGFloat(cameraDistance * 0.002)
+            let panXAmount = CGFloat(deltaX) * panScale
+            let panYAmount = CGFloat(deltaY) * panScale
+            
+            // Move the focus point in screen space
+            // X movement = right/left in camera space
+            // Y movement = up/down in camera space
+            let deltaFocusX = -(rightX * panXAmount - upX * panYAmount)
+            let deltaFocusY = -(rightY * panXAmount - upY * panYAmount)
+            let deltaFocusZ = -(rightZ * panXAmount - upZ * panYAmount)
+            
+            let oldFocusPoint = focusPoint
+            focusPoint = SCNVector3(
+                focusPoint.x + deltaFocusX,
+                focusPoint.y + deltaFocusY,
+                focusPoint.z + deltaFocusZ
+            )
+            
+            // Update camera position to maintain the same relative position to the new focus point
+            updateCameraPosition()
+            
+            print("🎯 [Enhanced] Direct Blender-style pan complete: \(oldFocusPoint) -> \(focusPoint)")
         }
     }
 }
