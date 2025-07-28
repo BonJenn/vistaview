@@ -204,6 +204,7 @@ struct ObjectListRow: View {
         case .light: return "lightbulb"
         case .setPiece: return "cube.box"
         case .select: return "cursorarrow"
+        case .staging: return "rectangle.stack"
         }
     }
     
@@ -214,6 +215,7 @@ struct ObjectListRow: View {
         case .light: return .yellow
         case .setPiece: return .green
         case .select: return .purple
+        case .staging: return .gray
         }
     }
 }

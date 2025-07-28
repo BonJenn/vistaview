@@ -688,6 +688,10 @@ struct VirtualProductionView: View {
             studioManager.addLight(from: lightAsset, at: randomPos)
         case let setPieceAsset as SetPieceAsset:
             studioManager.addSetPiece(from: setPieceAsset, at: randomPos)
+        case let stagingAsset as StagingAsset:
+            studioManager.addStagingEquipment(from: stagingAsset, at: randomPos)
+        case let setPieceAsset as SetPieceAsset:
+            studioManager.addSetPiece(from: setPieceAsset, at: randomPos)
         default:
             print("⚠️ Unknown asset type: \(type(of: asset))")
         }
@@ -755,6 +759,7 @@ struct VirtualProductionView: View {
         case .light: return .yellow
         case .setPiece: return .green
         case .select: return .purple
+        case .staging: return .gray
         }
     }
 

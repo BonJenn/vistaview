@@ -13,7 +13,7 @@ typealias PlatformColor = UIColor
 
 // MARK: - Tool Enum
 enum StudioTool: CaseIterable {
-    case select, ledWall, camera, setPiece, light
+    case select, ledWall, camera, setPiece, light, staging
     
     var name: String {
         switch self {
@@ -22,6 +22,7 @@ enum StudioTool: CaseIterable {
         case .camera:  return "Camera"
         case .setPiece:return "Set Piece"
         case .light:   return "Light"
+        case .staging: return "Staging"
         }
     }
     
@@ -32,6 +33,7 @@ enum StudioTool: CaseIterable {
         case .camera:  return "video"
         case .setPiece:return "cube.box"
         case .light:   return "lightbulb"
+        case .staging: return "rectangle.stack"
         }
     }
 }
@@ -340,6 +342,227 @@ struct SetPieceAsset: StudioAsset, Identifiable {
     }
 }
 
+struct StagingAsset: StudioAsset, Identifiable {
+    let id = UUID()
+    let name: String
+    let category: StagingCategory
+    let size: SCNVector3
+    let description: String
+    let thumbnailImage: String
+    
+    var icon: String { thumbnailImage }
+    var color: PlatformColor {
+        switch category {
+        case .trussing: return .systemGray
+        case .speakers: return .systemBlue
+        case .rigging: return .systemYellow
+        case .staging: return .systemBrown
+        case .effects: return .systemPurple
+        }
+    }
+    
+    init(name: String, 
+         category: StagingCategory,
+         size: SCNVector3 = SCNVector3(1, 1, 1),
+         description: String = "",
+         thumbnailImage: String = "cube") {
+        self.name = name
+        self.category = category
+        self.size = size
+        self.description = description
+        self.thumbnailImage = thumbnailImage
+    }
+    
+    static let predefinedStaging: [StagingAsset] = [
+        // MARK: - Trussing Systems
+        StagingAsset(name: "12' Straight Truss", category: .trussing,
+                    size: SCNVector3(3.66, 0.3, 0.3), 
+                    description: "Standard 12-foot aluminum box truss section",
+                    thumbnailImage: "rectangle.grid.1x2"),
+        
+        StagingAsset(name: "6' Straight Truss", category: .trussing,
+                    size: SCNVector3(1.83, 0.3, 0.3), 
+                    description: "6-foot aluminum box truss section",
+                    thumbnailImage: "rectangle.grid.1x2"),
+        
+        StagingAsset(name: "Corner Truss (90°)", category: .trussing,
+                    size: SCNVector3(0.3, 0.3, 0.3), 
+                    description: "90-degree corner truss connector",
+                    thumbnailImage: "rectangle.topthird.inset"),
+        
+        StagingAsset(name: "T-Junction Truss", category: .trussing,
+                    size: SCNVector3(0.3, 0.3, 0.3), 
+                    description: "T-junction truss connector",
+                    thumbnailImage: "rectangle.center.inset"),
+        
+        StagingAsset(name: "Lighting Truss (20')", category: .trussing,
+                    size: SCNVector3(6.1, 0.4, 0.4), 
+                    description: "Heavy-duty lighting truss for overhead rigging",
+                    thumbnailImage: "rectangle.grid.2x2"),
+        
+        StagingAsset(name: "Ground Support Tower", category: .trussing,
+                    size: SCNVector3(0.5, 6.0, 0.5), 
+                    description: "Telescopic ground support tower",
+                    thumbnailImage: "rectangle.portrait"),
+        
+        StagingAsset(name: "Truss Base Plate", category: .trussing,
+                    size: SCNVector3(1.2, 0.1, 1.2), 
+                    description: "Heavy base plate for truss towers",
+                    thumbnailImage: "square"),
+        
+        // MARK: - Speaker Systems
+        StagingAsset(name: "Line Array Module", category: .speakers,
+                    size: SCNVector3(0.6, 0.25, 0.45), 
+                    description: "Professional line array speaker module",
+                    thumbnailImage: "speaker.wave.2"),
+        
+        StagingAsset(name: "Subwoofer (18\")", category: .speakers,
+                    size: SCNVector3(0.7, 0.7, 0.8), 
+                    description: "High-power 18-inch subwoofer",
+                    thumbnailImage: "speaker.3"),
+        
+        StagingAsset(name: "Monitor Wedge", category: .speakers,
+                    size: SCNVector3(0.6, 0.3, 0.4), 
+                    description: "Stage monitor wedge speaker",
+                    thumbnailImage: "speaker.2"),
+        
+        StagingAsset(name: "Main Speaker Stack", category: .speakers,
+                    size: SCNVector3(1.2, 2.0, 0.8), 
+                    description: "Complete main speaker stack system",
+                    thumbnailImage: "speaker.3.fill"),
+        
+        StagingAsset(name: "Side Fill Speaker", category: .speakers,
+                    size: SCNVector3(0.8, 1.2, 0.6), 
+                    description: "Side fill speaker for stage coverage",
+                    thumbnailImage: "speaker.wave.3"),
+        
+        StagingAsset(name: "Delay Tower", category: .speakers,
+                    size: SCNVector3(0.4, 4.0, 0.4), 
+                    description: "Delay speaker tower for large venues",
+                    thumbnailImage: "antenna.radiowaves.left.and.right"),
+        
+        // MARK: - Rigging Equipment
+        StagingAsset(name: "Chain Hoist (1 Ton)", category: .rigging,
+                    size: SCNVector3(0.3, 0.8, 0.3), 
+                    description: "1-ton capacity chain motor hoist",
+                    thumbnailImage: "link"),
+        
+        StagingAsset(name: "Rigging Point", category: .rigging,
+                    size: SCNVector3(0.2, 0.2, 0.2), 
+                    description: "Certified rigging attachment point",
+                    thumbnailImage: "circle.fill"),
+        
+        StagingAsset(name: "Shackle (3/8\")", category: .rigging,
+                    size: SCNVector3(0.1, 0.1, 0.05), 
+                    description: "3/8-inch rated shackle",
+                    thumbnailImage: "link.circle"),
+        
+        StagingAsset(name: "Span Set (6')", category: .rigging,
+                    size: SCNVector3(1.83, 0.05, 0.05), 
+                    description: "6-foot span set rigging strap",
+                    thumbnailImage: "minus.rectangle"),
+        
+        StagingAsset(name: "Bridle Assembly", category: .rigging,
+                    size: SCNVector3(1.0, 1.0, 0.1), 
+                    description: "Multi-point bridle rigging assembly",
+                    thumbnailImage: "triangle"),
+        
+        // MARK: - Staging Platforms
+        StagingAsset(name: "Stage Deck (4'x8')", category: .staging,
+                    size: SCNVector3(2.44, 0.2, 1.22), 
+                    description: "Standard 4x8 foot stage deck platform",
+                    thumbnailImage: "rectangle.fill"),
+        
+        StagingAsset(name: "Stage Riser (2' High)", category: .staging,
+                    size: SCNVector3(2.44, 0.61, 1.22), 
+                    description: "2-foot high stage riser with deck",
+                    thumbnailImage: "rectangle.stack"),
+        
+        StagingAsset(name: "Drum Riser", category: .staging,
+                    size: SCNVector3(3.0, 0.4, 2.5), 
+                    description: "Specialized drum kit riser platform",
+                    thumbnailImage: "rectangle.stack.fill"),
+        
+        StagingAsset(name: "Catwalk Section", category: .staging,
+                    size: SCNVector3(3.0, 0.1, 0.6), 
+                    description: "Catwalk section with safety rails",
+                    thumbnailImage: "rectangle.and.hand.point.up.left"),
+        
+        StagingAsset(name: "Stage Steps", category: .staging,
+                    size: SCNVector3(1.2, 0.8, 0.6), 
+                    description: "Portable stage access steps",
+                    thumbnailImage: "stairs"),
+        
+        StagingAsset(name: "Orchestra Shell", category: .staging,
+                    size: SCNVector3(4.0, 3.0, 0.3), 
+                    description: "Acoustic orchestra shell panel",
+                    thumbnailImage: "rectangle.portrait.and.arrow.forward"),
+        
+        // MARK: - Special Effects
+        StagingAsset(name: "Fog Machine", category: .effects,
+                    size: SCNVector3(0.6, 0.3, 0.4), 
+                    description: "Professional fog machine",
+                    thumbnailImage: "cloud"),
+        
+        StagingAsset(name: "Haze Machine", category: .effects,
+                    size: SCNVector3(0.5, 0.25, 0.35), 
+                    description: "Atmospheric haze generator",
+                    thumbnailImage: "cloud.fill"),
+        
+        StagingAsset(name: "Pyro Launcher", category: .effects,
+                    size: SCNVector3(0.3, 0.8, 0.3), 
+                    description: "Pyrotechnic effect launcher",
+                    thumbnailImage: "flame"),
+        
+        StagingAsset(name: "Confetti Cannon", category: .effects,
+                    size: SCNVector3(0.2, 0.6, 0.2), 
+                    description: "Confetti and streamer cannon",
+                    thumbnailImage: "star.circle"),
+        
+        StagingAsset(name: "Wind Machine", category: .effects,
+                    size: SCNVector3(0.8, 0.8, 1.2), 
+                    description: "Industrial wind effect machine",
+                    thumbnailImage: "wind"),
+        
+        StagingAsset(name: "Bubble Machine", category: .effects,
+                    size: SCNVector3(0.4, 0.3, 0.3), 
+                    description: "Professional bubble machine",
+                    thumbnailImage: "bubble.left.and.bubble.right")
+    ]
+    
+    static func stagingAssets(for category: StagingCategory) -> [StagingAsset] {
+        return predefinedStaging.filter { $0.category == category }
+    }
+}
+
+enum StagingCategory: String, CaseIterable {
+    case trussing = "Trussing"
+    case speakers = "Speakers"
+    case rigging = "Rigging"
+    case staging = "Staging"
+    case effects = "Effects"
+    
+    var icon: String {
+        switch self {
+        case .trussing: return "rectangle.grid.2x2"
+        case .speakers: return "speaker.3"
+        case .rigging: return "link"
+        case .staging: return "rectangle.stack"
+        case .effects: return "cloud"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .trussing: return .gray
+        case .speakers: return .blue
+        case .rigging: return .yellow
+        case .staging: return .brown
+        case .effects: return .purple
+        }
+    }
+}
+
 // MARK: - Scene Objects
 @MainActor
 final class StudioObject: Identifiable, ObservableObject {
@@ -490,6 +713,15 @@ final class StudioObject: Identifiable, ObservableObject {
         print("🎬 Set LED wall content type to \(type.displayName) for: \(name)")
     }
     
+    private func findScreenNode() -> SCNNode? {
+        // Look for the screen node in the LED wall group
+        return node.childNodes.first { groupNode in
+            return groupNode.childNodes.contains { childNode in
+                childNode.name == "screen"
+            }
+        }?.childNodes.first { $0.name == "screen" }
+    }
+    
     private func setupHighlightNode() {
         // Remove any existing highlight
         if let existingHighlight = highlightNode {
@@ -561,6 +793,8 @@ final class StudioObject: Identifiable, ObservableObject {
             return .systemGreen
         case .select:
             return .systemPurple
+        case .staging:
+            return .systemGray
         }
     }
     

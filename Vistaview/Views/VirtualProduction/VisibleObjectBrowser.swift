@@ -16,6 +16,7 @@ struct VisibleObjectBrowser: View {
         case cameras = "Cameras" 
         case lighting = "Lighting"
         case setPieces = "Set Pieces"
+        case staging = "Staging"
         
         var icon: String {
             switch self {
@@ -24,6 +25,7 @@ struct VisibleObjectBrowser: View {
             case .cameras: return "video"
             case .lighting: return "lightbulb"
             case .setPieces: return "cube.box"
+            case .staging: return "rectangle.stack"
             }
         }
         
@@ -34,6 +36,7 @@ struct VisibleObjectBrowser: View {
             case .cameras: return .orange
             case .lighting: return .yellow
             case .setPieces: return .green
+            case .staging: return .gray
             }
         }
     }
@@ -110,7 +113,8 @@ struct VisibleObjectBrowser: View {
             let all: [any StudioAsset] = LEDWallAsset.predefinedWalls + 
                                         CameraAsset.predefinedCameras + 
                                         LightAsset.predefinedLights + 
-                                        SetPieceAsset.predefinedPieces
+                                        SetPieceAsset.predefinedPieces +
+                                        StagingAsset.predefinedStaging
             return all
         case .ledWalls:
             return LEDWallAsset.predefinedWalls
@@ -120,6 +124,8 @@ struct VisibleObjectBrowser: View {
             return LightAsset.predefinedLights
         case .setPieces:
             return SetPieceAsset.predefinedPieces
+        case .staging:
+            return StagingAsset.predefinedStaging
         }
     }
 }
@@ -326,6 +332,9 @@ struct ObjectCard: View {
             
         case let setPieceAsset as SetPieceAsset:
             studioManager.addSetPiece(from: setPieceAsset, at: position)
+            
+        case let stagingAsset as StagingAsset:
+            studioManager.addStagingEquipment(from: stagingAsset, at: position)
             
         default:
             print("⚠️ Unknown asset type: \(type(of: asset))")

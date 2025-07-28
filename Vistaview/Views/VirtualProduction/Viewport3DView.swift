@@ -385,7 +385,7 @@ struct Viewport3DView: NSViewRepresentable {
                 switch self.selectedTool {
                 case .select:
                     self.handleSelection(at: location, in: scnView)
-                case .ledWall, .camera, .setPiece, .light:
+                case .ledWall, .camera, .setPiece, .light, .staging:
                     self.handleObjectPlacement(at: location, in: scnView)
                 }
             }
@@ -543,6 +543,11 @@ struct Viewport3DView: NSViewRepresentable {
                 } else if let setPieceAsset = SetPieceAsset.predefinedPieces.first(where: { $0.id.uuidString == finalAssetID }) {
                     self.parent.studioManager.addSetPiece(from: setPieceAsset, at: finalPos)
                     print("🖱️ Successfully dropped Set Piece: \(setPieceAsset.name) at \(finalPos)")
+                    assetFound = true
+                    
+                } else if let stagingAsset = StagingAsset.predefinedStaging.first(where: { $0.id.uuidString == finalAssetID }) {
+                    self.parent.studioManager.addStagingEquipment(from: stagingAsset, at: finalPos)
+                    print("🖱️ Successfully dropped Staging Equipment: \(stagingAsset.name) at \(finalPos)")
                     assetFound = true
                 }
                 

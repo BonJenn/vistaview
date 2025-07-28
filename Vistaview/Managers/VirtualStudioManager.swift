@@ -159,6 +159,10 @@ final class VirtualStudioManager: ObservableObject {
             if let asset = LightAsset.predefinedLights.first {
                 addLight(from: asset, at: pos)
             }
+        case .staging:
+            if let asset = StagingAsset.predefinedStaging.first {
+                addStagingEquipment(from: asset, at: pos)
+            }
         case .select:
             break
         }
@@ -988,6 +992,1249 @@ final class VirtualStudioManager: ObservableObject {
         print("🔄 Cleared all selections")
     }
     
+    // MARK: - Staging Equipment
+    
+    func addStagingEquipment(from asset: StagingAsset, at pos: SCNVector3) {
+        let stagingGroup = SCNNode()
+        stagingGroup.name = asset.name
+        
+        // Create different geometries based on the staging category and name
+        switch asset.category {
+        case .trussing:
+            createTrussingGeometry(asset: asset, group: stagingGroup)
+        case .speakers:
+            createSpeakerSystemGeometry(asset: asset, group: stagingGroup)
+        case .rigging:
+            createRiggingGeometry(asset: asset, group: stagingGroup)
+        case .staging:
+            createStagingPlatformGeometry(asset: asset, group: stagingGroup)
+        case .effects:
+            createEffectsGeometry(asset: asset, group: stagingGroup)
+        }
+        
+        let obj = StudioObject(name: asset.name, type: .staging, position: pos)
+        obj.node.addChildNode(stagingGroup)
+        
+        // Add to collections and scene FIRST
+        studioObjects.append(obj)
+        rootNode.addChildNode(obj.node)
+        
+        // THEN setup highlight system
+        obj.setupHighlightAfterGeometry()
+        
+        print("➕ Added Staging Equipment: \(asset.name) (\(asset.category.rawValue)) at \(pos)")
+    }
+    
+    // MARK: - Staging Geometry Creation Methods
+    
+    private func createTrussingGeometry(asset: StagingAsset, group: SCNNode) {
+        let trussMaterial = SCNMaterial()
+        trussMaterial.diffuse.contents = UXColor.lightGray
+        trussMaterial.metalness.contents = 0.8
+        trussMaterial.roughness.contents = 0.3
+        
+        switch asset.name.lowercased() {
+        case let name where name.contains("straight truss"):
+            createStraightTruss(asset: asset, group: group, material: trussMaterial)
+        case let name where name.contains("corner"):
+            createCornerTruss(asset: asset, group: group, material: trussMaterial)
+        case let name where name.contains("t-junction"):
+            createTJunctionTruss(asset: asset, group: group, material: trussMaterial)
+        case let name where name.contains("lighting truss"):
+            createLightingTruss(asset: asset, group: group, material: trussMaterial)
+        case let name where name.contains("tower"):
+            createGroundSupportTower(asset: asset, group: group, material: trussMaterial)
+        case let name where name.contains("base plate"):
+            createTrussBasePlate(asset: asset, group: group, material: trussMaterial)
+        default:
+            createDefaultTruss(asset: asset, group: group, material: trussMaterial)
+        }
+    }
+    
+    private func createStraightTruss(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let trussSize = CGFloat(0.02) // Truss tube diameter
+        let length = CGFloat(asset.size.x)
+        
+        // Main truss tubes (4 corners of box truss)
+        let positions = [
+            SCNVector3(0, 0.15, 0.15),   // Top right
+            SCNVector3(0, 0.15, -0.15),  // Top left
+            SCNVector3(0, -0.15, 0.15),  // Bottom right
+            SCNVector3(0, -0.15, -0.15)  // Bottom left
+        ]
+        
+        for position in positions {
+            let tube = SCNCylinder(radius: trussSize, height: length)
+            tube.materials = [material]
+            let tubeNode = SCNNode(geometry: tube)
+            tubeNode.position = position
+            tubeNode.eulerAngles = SCNVector3(0, 0, Float.pi/2) // Rotate to horizontal
+            group.addChildNode(tubeNode)
+        }
+        
+        // Cross braces - create several along the length
+        let numBraces = max(3, Int(length / 0.5)) // One brace every 0.5 meters
+        
+        for i in 0..<numBraces {
+            let bracingX = (CGFloat(i) / CGFloat(numBraces - 1)) * length - length/2
+            
+            // Diagonal cross braces
+            createCrossBrace(from: SCNVector3(bracingX, 0.15, 0.15), 
+                           to: SCNVector3(bracingX, -0.15, -0.15), 
+                           group: group, material: material, radius: trussSize * 0.7)
+            
+            createCrossBrace(from: SCNVector3(bracingX, 0.15, -0.15), 
+                           to: SCNVector3(bracingX, -0.15, 0.15), 
+                           group: group, material: material, radius: trussSize * 0.7)
+        }
+    }
+    
+    private func createCornerTruss(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let trussSize = CGFloat(0.02)
+        let length = CGFloat(0.3) // Square corner piece
+        
+        // Create L-shaped truss structure
+        // Horizontal section
+        for z in [0.15, -0.15] {
+            for y in [0.15, -0.15] {
+                let tube = SCNCylinder(radius: trussSize, height: length)
+                tube.materials = [material]
+                let tubeNode = SCNNode(geometry: tube)
+                tubeNode.position = SCNVector3(0, y, z)
+                tubeNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+                group.addChildNode(tubeNode)
+            }
+        }
+        
+        // Vertical section (perpendicular)
+        for x in [0.15, -0.15] {
+            for y in [0.15, -0.15] {
+                let tube = SCNCylinder(radius: trussSize, height: length)
+                tube.materials = [material]
+                let tubeNode = SCNNode(geometry: tube)
+                tubeNode.position = SCNVector3(x, y, 0)
+                group.addChildNode(tubeNode)
+            }
+        }
+        
+        // Corner connectors
+        let connectorPositions = [
+            SCNVector3(0.15, 0.15, 0.15), SCNVector3(-0.15, 0.15, 0.15),
+            SCNVector3(0.15, -0.15, 0.15), SCNVector3(-0.15, -0.15, 0.15),
+            SCNVector3(0.15, 0.15, -0.15), SCNVector3(-0.15, 0.15, -0.15),
+            SCNVector3(0.15, -0.15, -0.15), SCNVector3(-0.15, -0.15, -0.15)
+        ]
+        
+        for position in connectorPositions {
+            let connector = SCNSphere(radius: trussSize * 1.5)
+            connector.materials = [material]
+            let connectorNode = SCNNode(geometry: connector)
+            connectorNode.position = position
+            group.addChildNode(connectorNode)
+        }
+    }
+    
+    private func createTJunctionTruss(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Similar to corner but with three arms instead of two
+        let trussSize = CGFloat(0.02)
+        let length = CGFloat(0.3)
+        
+        // Main horizontal truss
+        createStraightTrussSection(length: length, group: group, material: material, 
+                                 rotation: SCNVector3(0, 0, Float.pi/2))
+        
+        // Perpendicular section (T-junction arm)
+        createStraightTrussSection(length: length, group: group, material: material, 
+                                 rotation: SCNVector3(0, Float.pi/2, 0))
+        
+        // Center connector hub
+        let hub = SCNSphere(radius: trussSize * 2)
+        hub.materials = [material]
+        let hubNode = SCNNode(geometry: hub)
+        group.addChildNode(hubNode)
+    }
+    
+    private func createLightingTruss(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Heavy-duty truss with mounting points
+        createStraightTruss(asset: asset, group: group, material: material)
+        
+        // Add lighting clamp mounting points along the truss
+        let clampMaterial = SCNMaterial()
+        clampMaterial.diffuse.contents = UXColor.black
+        clampMaterial.metalness.contents = 0.9
+        
+        let numClamps = Int(asset.size.x / 0.5) // One clamp every 0.5 meters
+        
+        for i in 0..<numClamps {
+            let clampX = (CGFloat(i) / CGFloat(max(1, numClamps - 1))) * CGFloat(asset.size.x) - CGFloat(asset.size.x)/2
+            
+            // Lighting clamp
+            let clamp = SCNBox(width: 0.05, height: 0.1, length: 0.08, chamferRadius: 0.01)
+            clamp.materials = [clampMaterial]
+            let clampNode = SCNNode(geometry: clamp)
+            clampNode.position = SCNVector3(clampX, -0.2, 0)
+            group.addChildNode(clampNode)
+            
+            // Safety cable anchor
+            let anchor = SCNSphere(radius: 0.01)
+            anchor.materials = [clampMaterial]
+            let anchorNode = SCNNode(geometry: anchor)
+            anchorNode.position = SCNVector3(clampX, -0.25, 0)
+            group.addChildNode(anchorNode)
+        }
+    }
+    
+    private func createGroundSupportTower(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let trussSize = CGFloat(0.03) // Slightly thicker for tower
+        let height = CGFloat(asset.size.y)
+        
+        // Main vertical legs (4 corners)
+        let legPositions = [
+            SCNVector3(0.2, 0, 0.2), SCNVector3(-0.2, 0, 0.2),
+            SCNVector3(0.2, 0, -0.2), SCNVector3(-0.2, 0, -0.2)
+        ]
+        
+        for position in legPositions {
+            let leg = SCNCylinder(radius: trussSize, height: height)
+            leg.materials = [material]
+            let legNode = SCNNode(geometry: leg)
+            legNode.position = SCNVector3(position.x, height/2, position.z)
+            group.addChildNode(legNode)
+        }
+        
+        // Horizontal cross braces at multiple levels
+        let numLevels = max(3, Int(height / 1.5))
+        
+        for level in 0..<numLevels {
+            let levelY = (CGFloat(level) / CGFloat(numLevels - 1)) * height
+            
+            // Create cross braces at this level
+            createCrossBrace(from: SCNVector3(0.2, levelY, 0.2), 
+                           to: SCNVector3(-0.2, levelY, -0.2), 
+                           group: group, material: material, radius: trussSize * 0.8)
+            
+            createCrossBrace(from: SCNVector3(-0.2, levelY, 0.2), 
+                           to: SCNVector3(0.2, levelY, -0.2), 
+                           group: group, material: material, radius: trussSize * 0.8)
+        }
+        
+        // Top platform for lighting attachment
+        let platform = SCNBox(width: 0.5, height: 0.02, length: 0.5, chamferRadius: 0.01)
+        platform.materials = [material]
+        let platformNode = SCNNode(geometry: platform)
+        platformNode.position = SCNVector3(0, height, 0)
+        group.addChildNode(platformNode)
+    }
+    
+    private func createTrussBasePlate(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Heavy steel base plate
+        let baseMaterial = SCNMaterial()
+        baseMaterial.diffuse.contents = UXColor.darkGray
+        baseMaterial.metalness.contents = 0.9
+        baseMaterial.roughness.contents = 0.1
+        
+        let plate = SCNBox(width: CGFloat(asset.size.x), 
+                          height: CGFloat(asset.size.y), 
+                          length: CGFloat(asset.size.z), 
+                          chamferRadius: 0.02)
+        plate.materials = [baseMaterial]
+        let plateNode = SCNNode(geometry: plate)
+        plateNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(plateNode)
+        
+        // Center mounting socket
+        let socket = SCNCylinder(radius: 0.05, height: CGFloat(asset.size.y) + 0.05)
+        socket.materials = [material]
+        let socketNode = SCNNode(geometry: socket)
+        socketNode.position = SCNVector3(0, CGFloat(asset.size.y/2) + 0.025, 0)
+        group.addChildNode(socketNode)
+        
+        // Corner weights/handles
+        let handlePositions = [
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, CGFloat(asset.size.y), CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y), CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, CGFloat(asset.size.y), -CGFloat(asset.size.z/2) + 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y), -CGFloat(asset.size.z/2) + 0.1)
+        ]
+        
+        for position in handlePositions {
+            let handle = SCNTorus(ringRadius: 0.04, pipeRadius: 0.01)
+            handle.materials = [baseMaterial]
+            let handleNode = SCNNode(geometry: handle)
+            handleNode.position = position
+            group.addChildNode(handleNode)
+        }
+    }
+    
+    private func createDefaultTruss(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        createStraightTruss(asset: asset, group: group, material: material)
+    }
+    
+    // Helper method for creating cross braces
+    private func createCrossBrace(from start: SCNVector3, to end: SCNVector3, 
+                                group: SCNNode, material: SCNMaterial, radius: CGFloat = 0.015) {
+        let diff = simd_float3(Float(end.x - start.x), Float(end.y - start.y), Float(end.z - start.z))
+        let length = CGFloat(simd_length(diff))
+        
+        let brace = SCNCylinder(radius: radius, height: length)
+        brace.materials = [material]
+        
+        let braceNode = SCNNode(geometry: brace)
+        braceNode.position = SCNVector3(
+            (start.x + end.x) / 2,
+            (start.y + end.y) / 2,
+            (start.z + end.z) / 2
+        )
+        braceNode.look(at: end, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 1, 0))
+        group.addChildNode(braceNode)
+    }
+    
+    // Helper method for creating straight truss sections
+    private func createStraightTrussSection(length: CGFloat, group: SCNNode, 
+                                          material: SCNMaterial, rotation: SCNVector3) {
+        let trussSize = CGFloat(0.02)
+        
+        let positions = [
+            SCNVector3(0, 0.15, 0.15), SCNVector3(0, 0.15, -0.15),
+            SCNVector3(0, -0.15, 0.15), SCNVector3(0, -0.15, -0.15)
+        ]
+        
+        for position in positions {
+            let tube = SCNCylinder(radius: trussSize, height: length)
+            tube.materials = [material]
+            let tubeNode = SCNNode(geometry: tube)
+            tubeNode.position = position
+            tubeNode.eulerAngles = rotation
+            group.addChildNode(tubeNode)
+        }
+    }
+    
+    private func createSpeakerSystemGeometry(asset: StagingAsset, group: SCNNode) {
+        let speakerMaterial = SCNMaterial()
+        speakerMaterial.diffuse.contents = UXColor.black
+        speakerMaterial.roughness.contents = 0.8
+        
+        switch asset.name.lowercased() {
+        case let name where name.contains("line array"):
+            createLineArrayModule(asset: asset, group: group, material: speakerMaterial)
+        case let name where name.contains("subwoofer"):
+            createSubwoofer(asset: asset, group: group, material: speakerMaterial)
+        case let name where name.contains("monitor wedge"):
+            createMonitorWedge(asset: asset, group: group, material: speakerMaterial)
+        case let name where name.contains("main speaker stack"):
+            createMainSpeakerStack(asset: asset, group: group, material: speakerMaterial)
+        case let name where name.contains("side fill"):
+            createSideFillSpeaker(asset: asset, group: group, material: speakerMaterial)
+        case let name where name.contains("delay tower"):
+            createDelayTower(asset: asset, group: group, material: speakerMaterial)
+        default:
+            createGenericSpeaker(asset: asset, group: group, material: speakerMaterial)
+        }
+    }
+    
+    private func createLineArrayModule(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main enclosure - typically rectangular for line arrays
+        let enclosure = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.02)
+        enclosure.materials = [material]
+        let enclosureNode = SCNNode(geometry: enclosure)
+        enclosureNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(enclosureNode)
+        
+        // Driver array on front face
+        let driverMaterial = SCNMaterial()
+        driverMaterial.diffuse.contents = UXColor.darkGray
+        driverMaterial.metalness.contents = 0.3
+        
+        // Multiple small drivers in a line
+        let numDrivers = 4
+        for i in 0..<numDrivers {
+            let driverY = (CGFloat(i) - CGFloat(numDrivers-1)/2) * 0.04 + CGFloat(asset.size.y/2)
+            
+            let driver = SCNCylinder(radius: 0.025, height: 0.005)
+            driver.materials = [driverMaterial]
+            let driverNode = SCNNode(geometry: driver)
+            driverNode.position = SCNVector3(0, driverY, CGFloat(asset.size.z/2) + 0.003)
+            driverNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+            group.addChildNode(driverNode)
+        }
+        
+        // Rigging points
+        createRiggingPoints(for: asset, group: group)
+    }
+    
+    private func createSubwoofer(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Large cube-like enclosure
+        let enclosure = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.05)
+        enclosure.materials = [material]
+        let enclosureNode = SCNNode(geometry: enclosure)
+        enclosureNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(enclosureNode)
+        
+        // Large woofer driver
+        let driverMaterial = SCNMaterial()
+        driverMaterial.diffuse.contents = UXColor.darkGray
+        driverMaterial.metalness.contents = 0.3
+        
+        let woofer = SCNCylinder(radius: CGFloat(min(asset.size.x, asset.size.z)) * 0.35, height: 0.02)
+        woofer.materials = [driverMaterial]
+        let wooferNode = SCNNode(geometry: woofer)
+        wooferNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.01)
+        wooferNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(wooferNode)
+        
+        // Port (for bass reflex)
+        let port = SCNCylinder(radius: 0.05, height: 0.1)
+        let portMaterial = SCNMaterial()
+        portMaterial.diffuse.contents = UXColor.black
+        portMaterial.metalness.contents = 0.8
+        port.materials = [portMaterial]
+        let portNode = SCNNode(geometry: port)
+        portNode.position = SCNVector3(CGFloat(asset.size.x/3), CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.05)
+        portNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(portNode)
+        
+        // Handles on sides
+        createSpeakerHandles(for: asset, group: group)
+    }
+    
+    private func createMonitorWedge(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Wedge-shaped enclosure (angled)
+        let wedgeAngle: Float = -15 * Float.pi / 180 // 15 degrees
+        
+        let enclosure = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.03)
+        enclosure.materials = [material]
+        let enclosureNode = SCNNode(geometry: enclosure)
+        enclosureNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        enclosureNode.eulerAngles = SCNVector3(wedgeAngle, 0, 0) // Angle upward
+        group.addChildNode(enclosureNode)
+        
+        // Driver facing upward at angle
+        let driverMaterial = SCNMaterial()
+        driverMaterial.diffuse.contents = UXColor.darkGray
+        
+        let driver = SCNCylinder(radius: CGFloat(asset.size.x) * 0.25, height: 0.01)
+        driver.materials = [driverMaterial]
+        let driverNode = SCNNode(geometry: driver)
+        driverNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.005)
+        driverNode.eulerAngles = SCNVector3(Float.pi/2 + wedgeAngle, 0, 0)
+        group.addChildNode(driverNode)
+        
+        // Horn tweeter
+        let horn = SCNCone(topRadius: 0.02, bottomRadius: 0.06, height: 0.03)
+        horn.materials = [driverMaterial]
+        let hornNode = SCNNode(geometry: horn)
+        hornNode.position = SCNVector3(CGFloat(asset.size.x/4), CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.015)
+        hornNode.eulerAngles = SCNVector3(Float.pi/2 + wedgeAngle, 0, 0)
+        group.addChildNode(hornNode)
+    }
+    
+    private func createMainSpeakerStack(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Stack of multiple speaker boxes
+        let numBoxes = 3
+        let boxHeight = CGFloat(asset.size.y) / CGFloat(numBoxes)
+        
+        for i in 0..<numBoxes {
+            let boxY = CGFloat(i) * boxHeight + boxHeight/2
+            
+            let box = SCNBox(width: CGFloat(asset.size.x), 
+                           height: boxHeight - 0.02, // Small gap between boxes
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.03)
+            box.materials = [material]
+            let boxNode = SCNNode(geometry: box)
+            boxNode.position = SCNVector3(0, boxY, 0)
+            group.addChildNode(boxNode)
+            
+            // Different drivers for each box
+            let driverMaterial = SCNMaterial()
+            driverMaterial.diffuse.contents = UXColor.darkGray
+            
+            if i == 0 { // Bottom box - subwoofers
+                let woofer = SCNCylinder(radius: CGFloat(asset.size.x) * 0.25, height: 0.01)
+                woofer.materials = [driverMaterial]
+                let wooferNode = SCNNode(geometry: woofer)
+                wooferNode.position = SCNVector3(0, boxY, CGFloat(asset.size.z/2) + 0.005)
+                wooferNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+                group.addChildNode(wooferNode)
+            } else { // Mid/high boxes
+                let midDriver = SCNCylinder(radius: CGFloat(asset.size.x) * 0.15, height: 0.01)
+                midDriver.materials = [driverMaterial]
+                let midNode = SCNNode(geometry: midDriver)
+                midNode.position = SCNVector3(-CGFloat(asset.size.x/4), boxY, CGFloat(asset.size.z/2) + 0.005)
+                midNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+                group.addChildNode(midNode)
+                
+                let tweeter = SCNCylinder(radius: CGFloat(asset.size.x) * 0.08, height: 0.01)
+                tweeter.materials = [driverMaterial]
+                let tweeterNode = SCNNode(geometry: tweeter)
+                tweeterNode.position = SCNVector3(CGFloat(asset.size.x/4), boxY, CGFloat(asset.size.z/2) + 0.005)
+                tweeterNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+                group.addChildNode(tweeterNode)
+            }
+        }
+    }
+    
+    private func createSideFillSpeaker(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Similar to main speaker but smaller and typically mounted on a pole
+        createGenericSpeaker(asset: asset, group: group, material: material)
+        
+        // Add mounting pole
+        let poleMaterial = SCNMaterial()
+        poleMaterial.diffuse.contents = UXColor.darkGray
+        poleMaterial.metalness.contents = 0.8
+        
+        let pole = SCNCylinder(radius: 0.02, height: CGFloat(asset.size.y) + 0.5)
+        pole.materials = [poleMaterial]
+        let poleNode = SCNNode(geometry: pole)
+        poleNode.position = SCNVector3(0, -0.25, 0)
+        group.addChildNode(poleNode)
+    }
+    
+    private func createDelayTower(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Tall tower with speakers mounted at different heights
+        let poleMaterial = SCNMaterial()
+        poleMaterial.diffuse.contents = UXColor.darkGray
+        poleMaterial.metalness.contents = 0.8
+        
+        // Main tower pole
+        let pole = SCNCylinder(radius: CGFloat(asset.size.x/2), height: CGFloat(asset.size.y))
+        pole.materials = [poleMaterial]
+        let poleNode = SCNNode(geometry: pole)
+        poleNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(poleNode)
+        
+        // Speakers mounted at different heights
+        let numSpeakers = 4
+        for i in 0..<numSpeakers {
+            let speakerY = CGFloat(asset.size.y) * (0.3 + 0.5 * CGFloat(i) / CGFloat(numSpeakers - 1))
+            
+            let speaker = SCNBox(width: 0.4, height: 0.2, length: 0.3, chamferRadius: 0.02)
+            speaker.materials = [material]
+            let speakerNode = SCNNode(geometry: speaker)
+            speakerNode.position = SCNVector3(CGFloat(asset.size.x/2) + 0.2, speakerY, 0)
+            group.addChildNode(speakerNode)
+            
+            // Driver
+            let driver = SCNCylinder(radius: 0.08, height: 0.01)
+            let driverMaterial = SCNMaterial()
+            driverMaterial.diffuse.contents = UXColor.darkGray
+            driver.materials = [driverMaterial]
+            let driverNode = SCNNode(geometry: driver)
+            driverNode.position = SCNVector3(CGFloat(asset.size.x/2) + 0.35, speakerY, 0)
+            driverNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+            group.addChildNode(driverNode)
+        }
+    }
+    
+    private func createGenericSpeaker(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Basic speaker box
+        let enclosure = SCNBox(width: CGFloat(asset.size.x), 
+                              height: CGFloat(asset.size.y), 
+                              length: CGFloat(asset.size.z), 
+                              chamferRadius: 0.03)
+        enclosure.materials = [material]
+        let enclosureNode = SCNNode(geometry: enclosure)
+        enclosureNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(enclosureNode)
+        
+        // Basic driver
+        let driverMaterial = SCNMaterial()
+        driverMaterial.diffuse.contents = UXColor.darkGray
+        let driver = SCNCylinder(radius: CGFloat(min(asset.size.x, asset.size.z)) * 0.25, height: 0.01)
+        driver.materials = [driverMaterial]
+        let driverNode = SCNNode(geometry: driver)
+        driverNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.005)
+        driverNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(driverNode)
+    }
+    
+    private func createRiggingPoints(for asset: StagingAsset, group: SCNNode) {
+        let riggingMaterial = SCNMaterial()
+        riggingMaterial.diffuse.contents = UXColor.systemYellow
+        riggingMaterial.metalness.contents = 0.8
+        
+        // Top rigging points
+        let pointPositions = [
+            SCNVector3(-CGFloat(asset.size.x/3), CGFloat(asset.size.y), 0),
+            SCNVector3(CGFloat(asset.size.x/3), CGFloat(asset.size.y), 0)
+        ]
+        
+        for position in pointPositions {
+            let riggingPoint = SCNSphere(radius: 0.02)
+            riggingPoint.materials = [riggingMaterial]
+            let pointNode = SCNNode(geometry: riggingPoint)
+            pointNode.position = position
+            group.addChildNode(pointNode)
+        }
+    }
+    
+    private func createSpeakerHandles(for asset: StagingAsset, group: SCNNode) {
+        let handleMaterial = SCNMaterial()
+        handleMaterial.diffuse.contents = UXColor.darkGray
+        handleMaterial.metalness.contents = 0.8
+        
+        let handlePositions = [
+            SCNVector3(-CGFloat(asset.size.x/2) - 0.02, CGFloat(asset.size.y/2), 0),
+            SCNVector3(CGFloat(asset.size.x/2) + 0.02, CGFloat(asset.size.y/2), 0)
+        ]
+        
+        for position in handlePositions {
+            let handle = SCNTorus(ringRadius: 0.04, pipeRadius: 0.01)
+            handle.materials = [handleMaterial]
+            let handleNode = SCNNode(geometry: handle)
+            handleNode.position = position
+            handleNode.eulerAngles = SCNVector3(0, Float.pi/2, 0)
+            group.addChildNode(handleNode)
+        }
+    }
+    
+    private func createRiggingGeometry(asset: StagingAsset, group: SCNNode) {
+        let riggingMaterial = SCNMaterial()
+        riggingMaterial.diffuse.contents = UXColor.systemYellow
+        riggingMaterial.metalness.contents = 0.9
+        riggingMaterial.roughness.contents = 0.2
+        
+        switch asset.name.lowercased() {
+        case let name where name.contains("chain hoist"):
+            createChainHoist(asset: asset, group: group, material: riggingMaterial)
+        case let name where name.contains("rigging point"):
+            createRiggingPoint(asset: asset, group: group, material: riggingMaterial)
+        case let name where name.contains("shackle"):
+            createShackle(asset: asset, group: group, material: riggingMaterial)
+        case let name where name.contains("span set"):
+            createSpanSet(asset: asset, group: group, material: riggingMaterial)
+        case let name where name.contains("bridle"):
+            createBridleAssembly(asset: asset, group: group, material: riggingMaterial)
+        default:
+            createGenericRigging(asset: asset, group: group, material: riggingMaterial)
+        }
+    }
+    
+    private func createChainHoist(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Motor housing
+        let housing = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y) * 0.4, 
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.02)
+        let housingMaterial = SCNMaterial()
+        housingMaterial.diffuse.contents = UXColor.black
+        housingMaterial.metalness.contents = 0.8
+        housing.materials = [housingMaterial]
+        
+        let housingNode = SCNNode(geometry: housing)
+        housingNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.8, 0)
+        group.addChildNode(housingNode)
+        
+        // Chain
+        let chainLength = CGFloat(asset.size.y) * 0.6
+        let chain = SCNCylinder(radius: 0.01, height: chainLength)
+        chain.materials = [material]
+        let chainNode = SCNNode(geometry: chain)
+        chainNode.position = SCNVector3(0, chainLength/2, 0)
+        group.addChildNode(chainNode)
+        
+        // Hook at bottom
+        let hook = SCNTorus(ringRadius: 0.03, pipeRadius: 0.008)
+        hook.materials = [material]
+        let hookNode = SCNNode(geometry: hook)
+        hookNode.position = SCNVector3(0, 0, 0)
+        group.addChildNode(hookNode)
+        
+        // Rigging point at top
+        let riggingPoint = SCNSphere(radius: 0.02)
+        riggingPoint.materials = [material]
+        let pointNode = SCNNode(geometry: riggingPoint)
+        pointNode.position = SCNVector3(0, CGFloat(asset.size.y), 0)
+        group.addChildNode(pointNode)
+    }
+    
+    private func createRiggingPoint(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Certified rigging point
+        let point = SCNSphere(radius: CGFloat(asset.size.x/2))
+        point.materials = [material]
+        let pointNode = SCNNode(geometry: point)
+        group.addChildNode(pointNode)
+        
+        // Safety rating plate
+        let plate = SCNBox(width: CGFloat(asset.size.x) * 1.5, 
+                          height: 0.01, 
+                          length: CGFloat(asset.size.z) * 1.5, 
+                          chamferRadius: 0.001)
+        let plateMaterial = SCNMaterial()
+        plateMaterial.diffuse.contents = UXColor.systemRed
+        plate.materials = [plateMaterial]
+        let plateNode = SCNNode(geometry: plate)
+        plateNode.position = SCNVector3(0, CGFloat(asset.size.y/2) + 0.005, 0)
+        group.addChildNode(plateNode)
+    }
+    
+    private func createShackle(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // U-shaped shackle
+        let shackleRadius = CGFloat(asset.size.x/2)
+        let shackle = SCNTorus(ringRadius: shackleRadius, pipeRadius: CGFloat(asset.size.z))
+        shackle.materials = [material]
+        let shackleNode = SCNNode(geometry: shackle)
+        shackleNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(shackleNode)
+        
+        // Pin
+        let pin = SCNCylinder(radius: CGFloat(asset.size.z) * 0.8, height: shackleRadius * 2.2)
+        pin.materials = [material]
+        let pinNode = SCNNode(geometry: pin)
+        pinNode.position = SCNVector3(0, 0, 0)
+        pinNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+        group.addChildNode(pinNode)
+    }
+    
+    private func createSpanSet(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Flat rigging strap
+        let strap = SCNBox(width: CGFloat(asset.size.x), 
+                          height: CGFloat(asset.size.y), 
+                          length: CGFloat(asset.size.z), 
+                          chamferRadius: 0.005)
+        let strapMaterial = SCNMaterial()
+        strapMaterial.diffuse.contents = UXColor.systemPurple
+        strap.materials = [strapMaterial]
+        let strapNode = SCNNode(geometry: strap)
+        group.addChildNode(strapNode)
+        
+        // End loops
+        let loopRadius = CGFloat(asset.size.y) * 2
+        for x in [-CGFloat(asset.size.x/2), CGFloat(asset.size.x/2)] {
+            let loop = SCNTorus(ringRadius: loopRadius, pipeRadius: CGFloat(asset.size.y))
+            loop.materials = [strapMaterial]
+            let loopNode = SCNNode(geometry: loop)
+            loopNode.position = SCNVector3(x, 0, 0)
+            loopNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+            group.addChildNode(loopNode)
+        }
+    }
+    
+    private func createBridleAssembly(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Central attachment point
+        let center = SCNSphere(radius: 0.03)
+        center.materials = [material]
+        let centerNode = SCNNode(geometry: center)
+        group.addChildNode(centerNode)
+        
+        // Bridle legs to corners
+        let corners = [
+            SCNVector3(CGFloat(asset.size.x/2), CGFloat(asset.size.y/2), 0),
+            SCNVector3(-CGFloat(asset.size.x/2), CGFloat(asset.size.y/2), 0),
+            SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2)),
+            SCNVector3(0, CGFloat(asset.size.y/2), -CGFloat(asset.size.z/2))
+        ]
+        
+        for corner in corners {
+            // Cable from center to corner
+            let length = sqrt(pow(corner.x, 2) + pow(corner.y, 2) + pow(corner.z, 2))
+            let cable = SCNCylinder(radius: 0.005, height: CGFloat(length))
+            cable.materials = [material]
+            let cableNode = SCNNode(geometry: cable)
+            cableNode.position = SCNVector3(corner.x/2, corner.y/2, corner.z/2)
+            cableNode.look(at: corner, up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 1, 0))
+            group.addChildNode(cableNode)
+            
+            // Corner attachment
+            let attachment = SCNSphere(radius: 0.02)
+            attachment.materials = [material]
+            let attachmentNode = SCNNode(geometry: attachment)
+            attachmentNode.position = corner
+            group.addChildNode(attachmentNode)
+        }
+    }
+    
+    private func createGenericRigging(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let rigging = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y), 
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.01)
+        rigging.materials = [material]
+        let riggingNode = SCNNode(geometry: rigging)
+        riggingNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(riggingNode)
+    }
+    
+    private func createStagingPlatformGeometry(asset: StagingAsset, group: SCNNode) {
+        let stagingMaterial = SCNMaterial()
+        stagingMaterial.diffuse.contents = UXColor.systemBrown
+        stagingMaterial.roughness.contents = 0.6
+        stagingMaterial.metalness.contents = 0.1
+        
+        switch asset.name.lowercased() {
+        case let name where name.contains("stage deck"):
+            createStageDeck(asset: asset, group: group, material: stagingMaterial)
+        case let name where name.contains("riser"):
+            createStageRiser(asset: asset, group: group, material: stagingMaterial)
+        case let name where name.contains("catwalk"):
+            createCatwalk(asset: asset, group: group, material: stagingMaterial)
+        case let name where name.contains("steps"):
+            createStageSteps(asset: asset, group: group, material: stagingMaterial)
+        case let name where name.contains("orchestra shell"):
+            createOrchestraShell(asset: asset, group: group, material: stagingMaterial)
+        default:
+            createGenericStagingPlatform(asset: asset, group: group, material: stagingMaterial)
+        }
+    }
+    
+    private func createStageDeck(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main deck platform
+        let deck = SCNBox(width: CGFloat(asset.size.x), 
+                         height: CGFloat(asset.size.y), 
+                         length: CGFloat(asset.size.z), 
+                         chamferRadius: 0.01)
+        deck.materials = [material]
+        let deckNode = SCNNode(geometry: deck)
+        deckNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(deckNode)
+        
+        // Support legs underneath
+        let legMaterial = SCNMaterial()
+        legMaterial.diffuse.contents = UXColor.darkGray
+        legMaterial.metalness.contents = 0.8
+        
+        let legPositions = [
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, CGFloat(asset.size.y/4), CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y/4), CGFloat(asset.size.z/2) - 0.1),
+            SCNVector3(CGFloat(asset.size.x/2) - 0.1, CGFloat(asset.size.y/4), -CGFloat(asset.size.z/2) + 0.1),
+            SCNVector3(-CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y/4), -CGFloat(asset.size.z/2) + 0.1)
+        ]
+        
+        for position in legPositions {
+            let leg = SCNCylinder(radius: 0.03, height: CGFloat(asset.size.y/2))
+            leg.materials = [legMaterial]
+            let legNode = SCNNode(geometry: leg)
+            legNode.position = position
+            group.addChildNode(legNode)
+        }
+        
+        // Edge trim
+        createDeckEdgeTrim(asset: asset, group: group)
+    }
+    
+    private func createStageRiser(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Higher platform than regular deck
+        createStageDeck(asset: asset, group: group, material: material)
+        
+        // Additional front fascia
+        let fascia = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y) - 0.05, 
+                           length: 0.02, 
+                           chamferRadius: 0.01)
+        let fasciaMaterial = SCNMaterial()
+        fasciaMaterial.diffuse.contents = UXColor.black
+        fascia.materials = [fasciaMaterial]
+        let fasciaNode = SCNNode(geometry: fascia)
+        fasciaNode.position = SCNVector3(0, CGFloat(asset.size.y/2) - 0.025, CGFloat(asset.size.z/2) + 0.01)
+        group.addChildNode(fasciaNode)
+    }
+    
+    private func createCatwalk(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main walkway
+        let walkway = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y), 
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.01)
+        walkway.materials = [material]
+        let walkwayNode = SCNNode(geometry: walkway)
+        walkwayNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(walkwayNode)
+        
+        // Safety railings
+        let railMaterial = SCNMaterial()
+        railMaterial.diffuse.contents = UXColor.systemYellow
+        railMaterial.metalness.contents = 0.8
+        
+        // Side railings
+        for side in [-1, 1] {
+            let railZ = Float(side) * Float(asset.size.z/2)
+            
+            // Top rail
+            let topRail = SCNCylinder(radius: 0.02, height: CGFloat(asset.size.x))
+            topRail.materials = [railMaterial]
+            let topRailNode = SCNNode(geometry: topRail)
+            topRailNode.position = SCNVector3(0, CGFloat(asset.size.y) + 0.9, CGFloat(railZ))
+            topRailNode.eulerAngles = SCNVector3(0, 0, Float.pi/2)
+            group.addChildNode(topRailNode)
+            
+            // Support posts
+            let numPosts = max(2, Int(asset.size.x / 1.5))
+            for i in 0..<numPosts {
+                let postX = (CGFloat(i) / CGFloat(numPosts - 1)) * CGFloat(asset.size.x) - CGFloat(asset.size.x/2)
+                
+                let post = SCNCylinder(radius: 0.02, height: 0.9)
+                post.materials = [railMaterial]
+                let postNode = SCNNode(geometry: post)
+                postNode.position = SCNVector3(postX, CGFloat(asset.size.y) + 0.45, CGFloat(railZ))
+                group.addChildNode(postNode)
+            }
+        }
+    }
+    
+    private func createStageSteps(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let numSteps = Int(asset.size.y / 0.2) // 20cm per step
+        let stepHeight = CGFloat(asset.size.y) / CGFloat(numSteps)
+        let stepDepth = CGFloat(asset.size.z) / CGFloat(numSteps)
+        
+        for i in 0..<numSteps {
+            let stepY = CGFloat(i) * stepHeight + stepHeight/2
+            let stepZ = CGFloat(asset.size.z/2) - CGFloat(i) * stepDepth - stepDepth/2
+            
+            let step = SCNBox(width: CGFloat(asset.size.x), 
+                            height: stepHeight, 
+                            length: stepDepth, 
+                            chamferRadius: 0.01)
+            step.materials = [material]
+            let stepNode = SCNNode(geometry: step)
+            stepNode.position = SCNVector3(0, stepY, stepZ)
+            group.addChildNode(stepNode)
+        }
+        
+        // Handrail
+        let railMaterial = SCNMaterial()
+        railMaterial.diffuse.contents = UXColor.systemBlue
+        railMaterial.metalness.contents = 0.8
+        
+        let handrail = SCNCylinder(radius: 0.02, height: CGFloat(asset.size.z))
+        handrail.materials = [railMaterial]
+        let handrailNode = SCNNode(geometry: handrail)
+        handrailNode.position = SCNVector3(CGFloat(asset.size.x/2) + 0.1, CGFloat(asset.size.y) * 0.8, 0)
+        handrailNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(handrailNode)
+    }
+    
+    private func createOrchestraShell(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Curved acoustic panel
+        let shellMaterial = SCNMaterial()
+        shellMaterial.diffuse.contents = UXColor.systemBrown
+        shellMaterial.roughness.contents = 0.4
+        
+        // Main curved panel - approximate with angled flat panel
+        let panel = SCNBox(width: CGFloat(asset.size.x), 
+                          height: CGFloat(asset.size.y), 
+                          length: CGFloat(asset.size.z), 
+                          chamferRadius: 0.05)
+        panel.materials = [shellMaterial]
+        let panelNode = SCNNode(geometry: panel)
+        panelNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        panelNode.eulerAngles = SCNVector3(0, Float.pi/8, 0) // Slight curve simulation
+        group.addChildNode(panelNode)
+        
+        // Support frame
+        let frameMaterial = SCNMaterial()
+        frameMaterial.diffuse.contents = UXColor.darkGray
+        frameMaterial.metalness.contents = 0.8
+        
+        // Vertical supports
+        for x in [-CGFloat(asset.size.x/2), CGFloat(asset.size.x/2)] {
+            let support = SCNCylinder(radius: 0.03, height: CGFloat(asset.size.y))
+            support.materials = [frameMaterial]
+            let supportNode = SCNNode(geometry: support)
+            supportNode.position = SCNVector3(x, CGFloat(asset.size.y/2), -CGFloat(asset.size.z/2) - 0.05)
+            group.addChildNode(supportNode)
+        }
+    }
+    
+    private func createGenericStagingPlatform(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let platform = SCNBox(width: CGFloat(asset.size.x), 
+                             height: CGFloat(asset.size.y), 
+                             length: CGFloat(asset.size.z), 
+                             chamferRadius: 0.02)
+        platform.materials = [material]
+        let platformNode = SCNNode(geometry: platform)
+        platformNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(platformNode)
+    }
+    
+    private func createDeckEdgeTrim(asset: StagingAsset, group: SCNNode) {
+        let trimMaterial = SCNMaterial()
+        trimMaterial.diffuse.contents = UXColor.darkGray
+        trimMaterial.metalness.contents = 0.8
+        
+        let trimHeight: CGFloat = 0.03
+        let trimDepth: CGFloat = 0.02
+        
+        // Front and back trim
+        for z in [-CGFloat(asset.size.z/2), CGFloat(asset.size.z/2)] {
+            let trim = SCNBox(width: CGFloat(asset.size.x), 
+                            height: trimHeight, 
+                            length: trimDepth, 
+                            chamferRadius: 0.005)
+            trim.materials = [trimMaterial]
+            let trimNode = SCNNode(geometry: trim)
+            trimNode.position = SCNVector3(0, CGFloat(asset.size.y) + trimHeight/2, z)
+            group.addChildNode(trimNode)
+        }
+        
+        // Left and right trim
+        for x in [-CGFloat(asset.size.x/2), CGFloat(asset.size.x/2)] {
+            let trim = SCNBox(width: trimDepth, 
+                            height: trimHeight, 
+                            length: CGFloat(asset.size.z), 
+                            chamferRadius: 0.005)
+            trim.materials = [trimMaterial]
+            let trimNode = SCNNode(geometry: trim)
+            trimNode.position = SCNVector3(x, CGFloat(asset.size.y) + trimHeight/2, 0)
+            group.addChildNode(trimNode)
+        }
+    }
+    
+    private func createEffectsGeometry(asset: StagingAsset, group: SCNNode) {
+        let effectsMaterial = SCNMaterial()
+        effectsMaterial.diffuse.contents = UXColor.systemPurple
+        effectsMaterial.roughness.contents = 0.7
+        
+        switch asset.name.lowercased() {
+        case let name where name.contains("fog machine"):
+            createFogMachine(asset: asset, group: group, material: effectsMaterial)
+        case let name where name.contains("haze machine"):
+            createHazeMachine(asset: asset, group: group, material: effectsMaterial)
+        case let name where name.contains("pyro"):
+            createPyroLauncher(asset: asset, group: group, material: effectsMaterial)
+        case let name where name.contains("confetti"):
+            createConfettiCannon(asset: asset, group: group, material: effectsMaterial)
+        case let name where name.contains("wind"):
+            createWindMachine(asset: asset, group: group, material: effectsMaterial)
+        case let name where name.contains("bubble"):
+            createBubbleMachine(asset: asset, group: group, material: effectsMaterial)
+        default:
+            createGenericEffectsMachine(asset: asset, group: group, material: effectsMaterial)
+        }
+    }
+    
+    private func createFogMachine(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main machine body
+        let body = SCNBox(width: CGFloat(asset.size.x), 
+                         height: CGFloat(asset.size.y), 
+                         length: CGFloat(asset.size.z), 
+                         chamferRadius: 0.05)
+        body.materials = [material]
+        let bodyNode = SCNNode(geometry: body)
+        bodyNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(bodyNode)
+        
+        // Output nozzle
+        let nozzle = SCNCylinder(radius: 0.04, height: 0.15)
+        let nozzleMaterial = SCNMaterial()
+        nozzleMaterial.diffuse.contents = UXColor.black
+        nozzleMaterial.metalness.contents = 0.8
+        nozzle.materials = [nozzleMaterial]
+        let nozzleNode = SCNNode(geometry: nozzle)
+        nozzleNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.075)
+        nozzleNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(nozzleNode)
+        
+        // Control panel
+        let panel = SCNBox(width: 0.15, height: 0.08, length: 0.02, chamferRadius: 0.01)
+        let panelMaterial = SCNMaterial()
+        panelMaterial.diffuse.contents = UXColor.black
+        panelMaterial.emission.contents = UXColor.systemBlue
+        panelMaterial.emission.intensity = 0.3
+        panel.materials = [panelMaterial]
+        let panelNode = SCNNode(geometry: panel)
+        panelNode.position = SCNVector3(CGFloat(asset.size.x/2) + 0.01, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(panelNode)
+    }
+    
+    private func createHazeMachine(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Similar to fog machine but smaller and more subtle
+        createFogMachine(asset: asset, group: group, material: material)
+        
+        // Add "HAZE" label
+        let label = SCNBox(width: 0.1, height: 0.02, length: 0.001, chamferRadius: 0.001)
+        let labelMaterial = SCNMaterial()
+        labelMaterial.diffuse.contents = UXColor.white
+        labelMaterial.emission.contents = UXColor.white
+        labelMaterial.emission.intensity = 0.5
+        label.materials = [labelMaterial]
+        let labelNode = SCNNode(geometry: label)
+        labelNode.position = SCNVector3(0, CGFloat(asset.size.y) + 0.01, CGFloat(asset.size.z/4))
+        group.addChildNode(labelNode)
+    }
+    
+    private func createPyroLauncher(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Cylindrical launcher
+        let launcher = SCNCylinder(radius: CGFloat(asset.size.x/2), height: CGFloat(asset.size.y))
+        let launcherMaterial = SCNMaterial()
+        launcherMaterial.diffuse.contents = UXColor.systemRed
+        launcherMaterial.metalness.contents = 0.8
+        launcher.materials = [launcherMaterial]
+        let launcherNode = SCNNode(geometry: launcher)
+        launcherNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(launcherNode)
+        
+        // Warning labels
+        let warning = SCNBox(width: 0.08, height: 0.08, length: 0.001, chamferRadius: 0.001)
+        let warningMaterial = SCNMaterial()
+        warningMaterial.diffuse.contents = UXColor.systemYellow
+        warningMaterial.emission.contents = UXColor.systemRed
+        warningMaterial.emission.intensity = 0.8
+        warning.materials = [warningMaterial]
+        let warningNode = SCNNode(geometry: warning)
+        warningNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.x/2) + 0.001)
+        group.addChildNode(warningNode)
+        
+        // Base with safety features
+        let base = SCNCylinder(radius: CGFloat(asset.size.x/2) + 0.05, height: 0.05)
+        let baseMaterial = SCNMaterial()
+        baseMaterial.diffuse.contents = UXColor.black
+        baseMaterial.metalness.contents = 0.9
+        base.materials = [baseMaterial]
+        let baseNode = SCNNode(geometry: base)
+        baseNode.position = SCNVector3(0, 0.025, 0)
+        group.addChildNode(baseNode)
+    }
+    
+    private func createConfettiCannon(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Smaller cylindrical cannon
+        let cannon = SCNCylinder(radius: CGFloat(asset.size.x/2), height: CGFloat(asset.size.y))
+        let cannonMaterial = SCNMaterial()
+        cannonMaterial.diffuse.contents = UXColor.systemBlue
+        cannonMaterial.metalness.contents = 0.6
+        cannon.materials = [cannonMaterial]
+        let cannonNode = SCNNode(geometry: cannon)
+        cannonNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(cannonNode)
+        
+        // Colorful accent rings
+        let colors = [UXColor.systemRed, UXColor.systemYellow, UXColor.systemGreen]
+        for (i, color) in colors.enumerated() {
+            let ring = SCNTorus(ringRadius: CGFloat(asset.size.x/2) + 0.01, pipeRadius: 0.01)
+            let ringMaterial = SCNMaterial()
+            ringMaterial.diffuse.contents = color
+            ringMaterial.emission.contents = color
+            ringMaterial.emission.intensity = 0.5
+            ring.materials = [ringMaterial]
+            let ringNode = SCNNode(geometry: ring)
+            ringNode.position = SCNVector3(0, CGFloat(asset.size.y) * (0.3 + 0.2 * CGFloat(i)), 0)
+            group.addChildNode(ringNode)
+        }
+    }
+    
+    private func createWindMachine(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main fan housing
+        let housing = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y), 
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.1)
+        let housingMaterial = SCNMaterial()
+        housingMaterial.diffuse.contents = UXColor.systemGray
+        housingMaterial.metalness.contents = 0.8
+        housing.materials = [housingMaterial]
+        let housingNode = SCNNode(geometry: housing)
+        housingNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(housingNode)
+        
+        // Fan blades (simplified as a disc)
+        let fan = SCNCylinder(radius: CGFloat(min(asset.size.x, asset.size.y)) * 0.4, height: 0.02)
+        let fanMaterial = SCNMaterial()
+        fanMaterial.diffuse.contents = UXColor.lightGray
+        fanMaterial.transparency = 0.7
+        fan.materials = [fanMaterial]
+        let fanNode = SCNNode(geometry: fan)
+        fanNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.01)
+        fanNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(fanNode)
+        
+        // Protective grille
+        let grille = SCNTorus(ringRadius: CGFloat(min(asset.size.x, asset.size.y)) * 0.4, pipeRadius: 0.01)
+        let grilleMaterial = SCNMaterial()
+        grilleMaterial.diffuse.contents = UXColor.darkGray
+        grilleMaterial.metalness.contents = 0.9
+        grille.materials = [grilleMaterial]
+        let grilleNode = SCNNode(geometry: grille)
+        grilleNode.position = SCNVector3(0, CGFloat(asset.size.y/2), CGFloat(asset.size.z/2) + 0.02)
+        grilleNode.eulerAngles = SCNVector3(Float.pi/2, 0, 0)
+        group.addChildNode(grilleNode)
+    }
+    
+    private func createBubbleMachine(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        // Main machine body
+        let body = SCNBox(width: CGFloat(asset.size.x), 
+                         height: CGFloat(asset.size.y), 
+                         length: CGFloat(asset.size.z), 
+                         chamferRadius: 0.05)
+        let bodyMaterial = SCNMaterial()
+        bodyMaterial.diffuse.contents = UXColor.systemTeal
+        bodyMaterial.roughness.contents = 0.3
+        bodyMaterial.metalness.contents = 0.2
+        body.materials = [bodyMaterial]
+        let bodyNode = SCNNode(geometry: body)
+        bodyNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(bodyNode)
+        
+        // Bubble output holes
+        let numHoles = 6
+        for i in 0..<numHoles {
+            let angle = Float(i) * 2 * Float.pi / Float(numHoles)
+            let radius = CGFloat(asset.size.x) * 0.3
+            let holeX = radius * cos(CGFloat(angle))
+            let holeZ = radius * sin(CGFloat(angle))
+            
+            let hole = SCNCylinder(radius: 0.01, height: 0.02)
+            let holeMaterial = SCNMaterial()
+            holeMaterial.diffuse.contents = UXColor.black
+            hole.materials = [holeMaterial]
+            let holeNode = SCNNode(geometry: hole)
+            holeNode.position = SCNVector3(holeX, CGFloat(asset.size.y) + 0.01, holeZ)
+            group.addChildNode(holeNode)
+        }
+        
+        // Fluid reservoir (transparent)
+        let reservoir = SCNBox(width: CGFloat(asset.size.x) * 0.6, 
+                              height: CGFloat(asset.size.y) * 0.3, 
+                              length: CGFloat(asset.size.z) * 0.6, 
+                              chamferRadius: 0.02)
+        let reservoirMaterial = SCNMaterial()
+        reservoirMaterial.diffuse.contents = UXColor.systemBlue
+        reservoirMaterial.transparency = 0.3
+        reservoir.materials = [reservoirMaterial]
+        let reservoirNode = SCNNode(geometry: reservoir)
+        reservoirNode.position = SCNVector3(0, CGFloat(asset.size.y) * 0.75, 0)
+        group.addChildNode(reservoirNode)
+    }
+    
+    private func createGenericEffectsMachine(asset: StagingAsset, group: SCNNode, material: SCNMaterial) {
+        let machine = SCNBox(width: CGFloat(asset.size.x), 
+                           height: CGFloat(asset.size.y), 
+                           length: CGFloat(asset.size.z), 
+                           chamferRadius: 0.05)
+        machine.materials = [material]
+        let machineNode = SCNNode(geometry: machine)
+        machineNode.position = SCNVector3(0, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(machineNode)
+        
+        // Generic control panel
+        let panel = SCNBox(width: 0.1, height: 0.05, length: 0.01, chamferRadius: 0.005)
+        let panelMaterial = SCNMaterial()
+        panelMaterial.diffuse.contents = UXColor.black
+        panelMaterial.emission.contents = UXColor.systemGreen
+        panelMaterial.emission.intensity = 0.3
+        panel.materials = [panelMaterial]
+        let panelNode = SCNNode(geometry: panel)
+        panelNode.position = SCNVector3(CGFloat(asset.size.x/2) + 0.005, CGFloat(asset.size.y/2), 0)
+        group.addChildNode(panelNode)
+    }
+    
+    func deleteSelectedObjects() {
+        let selectedObjs = studioObjects.filter { $0.isSelected }
+        
+        for obj in selectedObjs {
+            deleteObject(obj)
+        }
+        
+        print("🗑️ Deleted \(selectedObjs.count) selected objects")
+    }
+    
     // MARK: - Debug and Testing Methods
     
     func testSelectionSystem() {
@@ -1028,19 +2275,6 @@ final class VirtualStudioManager: ObservableObject {
         }
     }
     
-    func selectObject(_ objectId: UUID) {
-        // Clear all other selections
-        for obj in studioObjects {
-            obj.setSelected(false)
-        }
-        
-        // Select the target object
-        if let targetObj = studioObjects.first(where: { $0.id == objectId }) {
-            targetObj.setSelected(true)
-            print("✅ Selected object: \(targetObj.name)")
-        }
-    }
-    
     func resetObjectHighlights() {
         print("🔄 Resetting all object highlights...")
         for obj in studioObjects {
@@ -1055,15 +2289,5 @@ final class VirtualStudioManager: ObservableObject {
             obj.setupHighlightAfterGeometry()
         }
         print("✅ Reset highlights for \(studioObjects.count) objects")
-    }
-    
-    func deleteSelectedObjects() {
-        let selectedObjs = studioObjects.filter { $0.isSelected }
-        
-        for obj in selectedObjs {
-            deleteObject(obj)
-        }
-        
-        print("🗑️ Deleted \(selectedObjs.count) selected objects")
     }
 }

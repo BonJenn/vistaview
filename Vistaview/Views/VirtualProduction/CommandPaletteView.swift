@@ -237,6 +237,7 @@ struct CommandPaletteView: View {
         case .camera: return "C"
         case .setPiece: return "P"
         case .light: return "Shift+L"
+        case .staging: return "S"
         }
     }
     
