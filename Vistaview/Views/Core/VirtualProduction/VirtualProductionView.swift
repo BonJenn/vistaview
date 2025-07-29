@@ -7,21 +7,20 @@ struct VirtualProductionView: View {
     // Core States
     @State private var selectedTool: StudioTool = .select
     @State private var selectedObject: StudioObject?
-    @State private var cameraMode: CameraMode = .orbit
     @State private var lastWorldPos: SCNVector3 = SCNVector3(0,0,0)
     
-    // Raycast-inspired UI States
+    // Transform Controller for Blender-style interactions
+    @StateObject private var transformController = TransformController()
+    
+    @State private var cameraMode: CameraMode = .orbit
     @State private var showingCommandPalette = false
     @State private var showingLeftPanel = true
     @State private var showingRightPanel = true
     @State private var searchText = ""
     @State private var selectedObjects: Set<UUID> = []
     @State private var showingAddMenu = false
-    @State private var showingDraggableMenu = true // Make it visible by default
-    @State private var showingObjectBrowser = true // Control visibility of draggable object browser
-    
-    // Transform Controller for Blender-style interactions
-    @StateObject private var transformController = TransformController()
+    @State private var showingDraggableMenu = true 
+    @State private var showingObjectBrowser = true 
     
     // Keyboard Feedback Controller
     @StateObject private var keyboardFeedback = KeyboardFeedbackController()
@@ -55,12 +54,12 @@ struct VirtualProductionView: View {
     @State private var isTrackingCursor = false
 
     // Layout constants (8px grid system)
-    private let spacing1: CGFloat = 4   // Tight spacing
-    private let spacing2: CGFloat = 8   // Standard spacing
-    private let spacing3: CGFloat = 16  // Section spacing
-    private let spacing4: CGFloat = 24  // Panel spacing
-    private let spacing5: CGFloat = 32  // Major section spacing
-    
+    private let spacing1: CGFloat = 4   
+    private let spacing2: CGFloat = 8   
+    private let spacing3: CGFloat = 16  
+    private let spacing4: CGFloat = 24  
+    private let spacing5: CGFloat = 32  
+
     var body: some View {
         mainContent
             .background(.black)
@@ -83,14 +82,15 @@ struct VirtualProductionView: View {
             // NEW: Handle LED Wall camera feed modal notifications
             .onReceive(NotificationCenter.default.publisher(for: .showLEDWallCameraFeedModal)) { notification in
                 if let ledWall = notification.object as? StudioObject {
-                    print("📹 Received request to show camera feed modal for: \(ledWall.name)")
+                    print(" Received request to show camera feed modal for: \(ledWall.name)")
                     selectedLEDWallForFeed = ledWall
                     showingCameraFeedModal = true
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .ledWallCameraFeedDisconnected)) { notification in
                 if let ledWall = notification.object as? StudioObject {
-                    print("🔌 LED Wall camera feed disconnected: \(ledWall.name)")
+                    print(" LED Wall camera feed disconnected: \(ledWall.name)")
+                    
                     // Force view update
                     studioManager.objectWillChange.send()
                 }
@@ -129,22 +129,22 @@ struct VirtualProductionView: View {
             .onKeyPress(.return) { 
                 if transformController.isDistanceScaling {
                     transformController.confirmDistanceScaling()
-                    keyboardFeedback.showFeedback("✓ Scale Locked", color: .green)
+                    keyboardFeedback.showFeedback(" Scale Locked", color: .green)
                     isTrackingCursor = false
                 } else {
                     confirmTransform()
-                    keyboardFeedback.showFeedback("✓ Transform Confirmed", color: .green)
+                    keyboardFeedback.showFeedback(" Transform Confirmed", color: .green)
                 }
                 return .handled
             }
             .onKeyPress(.escape) { 
                 if transformController.isDistanceScaling {
                     transformController.cancelDistanceScaling()
-                    keyboardFeedback.showFeedback("✗ Scale Cancelled", color: .red)
+                    keyboardFeedback.showFeedback(" Scale Cancelled", color: .red)
                     isTrackingCursor = false
                 } else {
                     cancelTransform()
-                    keyboardFeedback.showFeedback("✗ Transform Cancelled", color: .red)
+                    keyboardFeedback.showFeedback(" Transform Cancelled", color: .red)
                 }
                 return .handled
             }
@@ -181,13 +181,11 @@ struct VirtualProductionView: View {
                 return .handled
             }
             .onKeyPress("t") {
-                // Test key - debug selection system
                 studioManager.testSelectionSystem()
                 keyboardFeedback.showFeedback("T - Testing Selection System", color: .yellow)
                 return .handled
             }
             .onKeyPress("h") {
-                // Reset highlights if they're misaligned
                 studioManager.resetObjectHighlights()
                 keyboardFeedback.showFeedback("H - Reset Highlights", color: .cyan)
                 return .handled
@@ -196,21 +194,20 @@ struct VirtualProductionView: View {
                 if newValue == .select { selectedObject = nil }
             }
             .onAppear {
-                print("🎬 Virtual Production: Ready - cameras available for user selection")
+                print(" Virtual Production: Ready - cameras available for user selection")
             }
             // Arrow key support for fine object positioning
             .onKeyPress(.upArrow) {
                 if transformController.isActive {
                     transformController.nudgeObjects(.up)
                     
-                    // Show appropriate feedback based on current axis constraint
                     switch transformController.axis {
                     case .z:
-                        keyboardFeedback.showFeedback("↑ Nudge Forward (Z+)", color: .blue)
+                        keyboardFeedback.showFeedback(" Nudge Forward (Z+)", color: .blue)
                     case .y, .free:
-                        keyboardFeedback.showFeedback("↑ Nudge Up (Y+)", color: .green)
+                        keyboardFeedback.showFeedback(" Nudge Up (Y+)", color: .green)
                     case .x:
-                        keyboardFeedback.showFeedback("↑ No movement (X-axis only)", color: .orange)
+                        keyboardFeedback.showFeedback(" No movement (X-axis only)", color: .orange)
                     }
                     return .handled
                 }
@@ -220,14 +217,13 @@ struct VirtualProductionView: View {
                 if transformController.isActive {
                     transformController.nudgeObjects(.down)
                     
-                    // Show appropriate feedback based on current axis constraint
                     switch transformController.axis {
                     case .z:
-                        keyboardFeedback.showFeedback("↓ Nudge Backward (Z-)", color: .blue)
+                        keyboardFeedback.showFeedback(" Nudge Backward (Z-)", color: .blue)
                     case .y, .free:
-                        keyboardFeedback.showFeedback("↓ Nudge Down (Y-)", color: .green)
+                        keyboardFeedback.showFeedback(" Nudge Down (Y-)", color: .green)
                     case .x:
-                        keyboardFeedback.showFeedback("↓ No movement (X-axis only)", color: .orange)
+                        keyboardFeedback.showFeedback(" No movement (X-axis only)", color: .orange)
                     }
                     return .handled
                 }
@@ -239,9 +235,9 @@ struct VirtualProductionView: View {
                     
                     switch transformController.axis {
                     case .x, .free:
-                        keyboardFeedback.showFeedback("← Nudge Left (X-)", color: .red)
+                        keyboardFeedback.showFeedback(" Nudge Left (X-)", color: .red)
                     default:
-                        keyboardFeedback.showFeedback("← No movement (axis constrained)", color: .orange)
+                        keyboardFeedback.showFeedback(" No movement (axis constrained)", color: .orange)
                     }
                     return .handled
                 }
@@ -253,9 +249,9 @@ struct VirtualProductionView: View {
                     
                     switch transformController.axis {
                     case .x, .free:
-                        keyboardFeedback.showFeedback("→ Nudge Right (X+)", color: .red)
+                        keyboardFeedback.showFeedback(" Nudge Right (X+)", color: .red)
                     default:
-                        keyboardFeedback.showFeedback("→ No movement (axis constrained)", color: .orange)
+                        keyboardFeedback.showFeedback(" No movement (axis constrained)", color: .orange)
                     }
                     return .handled
                 }
@@ -265,7 +261,7 @@ struct VirtualProductionView: View {
             .onKeyPress(.upArrow) {
                 if NSEvent.modifierFlags.contains(.shift) && transformController.isActive {
                     transformController.nudgeObjects(.forward)
-                    keyboardFeedback.showFeedback("⬆ Nudge Forward", color: .blue)
+                    keyboardFeedback.showFeedback(" Nudge Forward", color: .blue)
                     return .handled
                 }
                 return .ignored
@@ -273,7 +269,7 @@ struct VirtualProductionView: View {
             .onKeyPress(.downArrow) {
                 if NSEvent.modifierFlags.contains(.shift) && transformController.isActive {
                     transformController.nudgeObjects(.backward)
-                    keyboardFeedback.showFeedback("⬇ Nudge Backward", color: .blue)
+                    keyboardFeedback.showFeedback(" Nudge Backward", color: .blue)
                     return .handled
                 }
                 return .ignored
@@ -282,25 +278,23 @@ struct VirtualProductionView: View {
             .onKeyPress(.delete) {
                 let selectedObjs = getSelectedStudioObjects()
                 if !selectedObjs.isEmpty {
-                    // Check if any selected objects are locked
                     let lockedObjects = selectedObjs.filter { $0.isLocked }
                     let unlocked = selectedObjs.filter { !$0.isLocked }
                     
                     if !lockedObjects.isEmpty {
-                        keyboardFeedback.showFeedback("⚠️ Cannot delete \(lockedObjects.count) locked object(s)", color: .orange)
-                        print("🔒 Blocked deletion of locked objects: \(lockedObjects.map { $0.name })")
+                        keyboardFeedback.showFeedback(" Cannot delete  locked object(s)", color: .orange)
+                        print(" Blocked deletion of locked objects: \(lockedObjects.map { $0.name })")
                     }
                     
                     if !unlocked.isEmpty {
-                        // Delete immediately - keep it simple
                         for obj in unlocked {
                             studioManager.deleteObject(obj)
                             selectedObjects.remove(obj.id)
                         }
-                        keyboardFeedback.showFeedback("🗑️ Deleted \(unlocked.count) object(s)", color: .red)
+                        keyboardFeedback.showFeedback(" Deleted  object(s)", color: .red)
                     }
                 } else {
-                    keyboardFeedback.showFeedback("⚠️ No objects selected to delete", color: .orange)
+                    keyboardFeedback.showFeedback(" No objects selected to delete", color: .orange)
                 }
                 return .handled
             }
@@ -324,47 +318,55 @@ struct VirtualProductionView: View {
     @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            // Background Layer: 3D viewport (darkest)
             backgroundViewport
             
-            // Blender-style toolbar overlay
             BlenderStyleToolbar(
                 selectedTool: $selectedTool,
                 showingAddMenu: $showingAddMenu,
                 onAddObject: handleAddObject
             )
             
-            // Panel Layer: Side panels with material blur
-            panelLayer
+            HStack(spacing: 0) {
+                if showingLeftPanel {
+                    leftPanel
+                        .frame(width: 280)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+                
+                Spacer()
+                
+                if showingRightPanel {
+                    rightPanel
+                        .frame(width: 320)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.25), value: showingLeftPanel)
+            .animation(.easeInOut(duration: 0.25), value: showingRightPanel)
             
-            // Draggable Object Browser Window
             if showingObjectBrowser {
                 DraggableResizableWindow(title: "Studio Objects") {
                     VisibleObjectBrowser()
-                        .environmentObject(studioManager) // Pass the studio manager
+                        .environmentObject(studioManager) 
                 }
             }
             
-            // Keyboard Feedback Overlay - HIGH PRIORITY
             KeyboardFeedbackOverlay(controller: keyboardFeedback)
-                .zIndex(100) // Ensure it's always on top
+                .zIndex(100) 
             
-            // Floating overlays (highest layer)
             floatingOverlays
             
-            // Transform overlay when in transform mode
             TransformOverlay(
                 controller: transformController,
                 selectedObjects: getSelectedStudioObjects()
             )
-            .zIndex(20) // Ensure transform overlay is always on top
+            .zIndex(20) 
         }
     }
     
     @ViewBuilder
     private var floatingOverlays: some View {
         Group {
-            // Command palette
             if showingCommandPalette {
                 commandPalette
                     .transition(.asymmetric(
@@ -373,7 +375,6 @@ struct VirtualProductionView: View {
                     ))
             }
             
-            // Camera Feed Modal
             if showingCameraFeedModal, let ledWall = selectedLEDWallForFeed {
                 LEDWallCameraFeedModal(
                     ledWall: ledWall,
@@ -393,198 +394,136 @@ struct VirtualProductionView: View {
     // MARK: - Command Palette
     
     private var commandPalette: some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack {
-                Image(systemName: "command")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white)
+        VStack(spacing: 0) {
+            // Enhanced header with glassmorphism
+            HStack(spacing: 12) {
+                Image(systemName: "command.circle.fill")
+                    .font(.system(.title2, design: .default, weight: .semibold))
+                    .foregroundStyle(.white.gradient)
                 
                 Text("Command Palette")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white)
+                    .font(.system(.title2, design: .default, weight: .semibold))
+                    .foregroundStyle(.white)
                 
                 Spacer()
                 
-                Button("✕") {
+                Button {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
                         showingCommandPalette = false
                     }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(.title3, design: .default, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
                 }
-                .foregroundColor(.white.opacity(0.7))
                 .buttonStyle(.plain)
+                .scaleEffect(1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: false)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.white.opacity(0.1), lineWidth: 0.5)
+            )
             
-            // Search field
-            TextField("Search commands...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding(.horizontal, 20)
+            // Search field with modern styling
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(.callout, design: .default, weight: .medium))
+                    .foregroundStyle(.secondary)
+                
+                TextField("Search commands...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body, design: .default, weight: .regular))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.white.opacity(0.1), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
             
-            // Command list
+            // Command list with enhanced styling
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    CommandPaletteItem(title: "Add LED Wall", shortcut: "L", icon: "tv") {
+                VStack(spacing: 8) {
+                    CommandPaletteItem(
+                        title: "Add LED Wall",
+                        shortcut: "L",
+                        icon: "tv.fill"
+                    ) {
                         selectedTool = .ledWall
                         showingCommandPalette = false
                     }
                     
-                    CommandPaletteItem(title: "Add Camera", shortcut: "C", icon: "video") {
+                    CommandPaletteItem(
+                        title: "Add Camera",
+                        shortcut: "C",
+                        icon: "video.fill"
+                    ) {
                         selectedTool = .camera
                         showingCommandPalette = false
                     }
                     
-                    CommandPaletteItem(title: "Add Light", shortcut: "Shift+L", icon: "lightbulb") {
+                    CommandPaletteItem(
+                        title: "Add Light",
+                        shortcut: "⇧L",
+                        icon: "lightbulb.fill"
+                    ) {
                         selectedTool = .light
                         showingCommandPalette = false
                     }
                     
-                    CommandPaletteItem(title: "Toggle Object Browser", shortcut: "B", icon: "cube.box") {
+                    CommandPaletteItem(
+                        title: "Toggle Object Browser",
+                        shortcut: "B",
+                        icon: "cube.box.fill"
+                    ) {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             showingObjectBrowser.toggle()
                         }
                         showingCommandPalette = false
                     }
                     
-                    CommandPaletteItem(title: "Select Tool", shortcut: "V", icon: "cursorarrow") {
+                    CommandPaletteItem(
+                        title: "Select Tool",
+                        shortcut: "V",
+                        icon: "cursorarrow"
+                    ) {
                         selectedTool = .select
                         showingCommandPalette = false
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
             }
             .frame(maxHeight: 300)
-            
-            Spacer()
+            .scrollIndicators(.hidden)
         }
-        .frame(width: 400, height: 450)
-        .background(.regularMaterial)
-        .cornerRadius(12)
+        .frame(width: 450, height: 500)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(.white.opacity(0.2), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.3), radius: 20)
+        .shadow(color: .black.opacity(0.3), radius: 24, x: 0, y: 12)
     }
-    
-    // MARK: - Camera Feed Management
-    
-    private func showCameraFeedModal(for ledWall: StudioObject) {
-        selectedLEDWallForFeed = ledWall
-        showingCameraFeedModal = true
-        print("📹 Showing camera feed modal for LED wall: \(ledWall.name)")
-    }
-    
-    private func handleCameraFeedConnection(feedID: UUID?, ledWall: StudioObject) {
-        Task { @MainActor in
-            if let feedID = feedID {
-                // Connect the camera feed
-                ledWall.connectCameraFeed(feedID)
-                print("✅ Connected camera feed \(feedID) to LED wall: \(ledWall.name)")
-                
-                // Start live feed updates
-                startLiveFeedUpdates(for: ledWall, feedID: feedID)
-            } else {
-                // Disconnect the camera feed
-                ledWall.disconnectCameraFeed()
-                print("🔌 Disconnected camera feed from LED wall: \(ledWall.name)")
-                
-                // Stop live feed updates
-                stopLiveFeedUpdates(for: ledWall)
-            }
-        }
-    }
-    
-    private func startLiveFeedUpdates(for ledWall: StudioObject, feedID: UUID) {
-        guard let cameraFeed = cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }) else {
-            print("❌ Camera feed not found: \(feedID)")
-            return
-        }
-        
-        print("🎬 Starting live feed updates for LED wall: \(ledWall.name)")
-        print("   - Feed device: \(cameraFeed.device.displayName)")
-        print("   - Feed status: \(cameraFeed.connectionStatus.displayText)")
-        
-        Task { @MainActor in
-            ledWall.optimizeLEDWallForVideo()
-            
-            // Test with a color first to ensure the material system works
-            ledWall.testLEDWallWithColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1)) // Green test
-            
-            // Wait a moment, then start actual feed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.startActualFeedUpdates(for: ledWall, feedID: feedID, cameraFeed: cameraFeed)
-            }
-        }
-    }
-    
-    private func startActualFeedUpdates(for ledWall: StudioObject, feedID: UUID, cameraFeed: CameraFeed) {
-        let updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
-            Task { @MainActor in
-                guard ledWall.connectedCameraFeedID == feedID,
-                      ledWall.isDisplayingCameraFeed else {
-                    print("🛑 Stopping timer - connection no longer valid for: \(ledWall.name)")
-                    timer.invalidate()
-                    return
-                }
-                
-                guard let activeFeed = self.cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }),
-                      activeFeed.connectionStatus == .connected else {
-                    print("⚠️ Feed no longer active, stopping updates for: \(ledWall.name)")
-                    timer.invalidate()
-                    return
-                }
-                
-                var updated = false
-                
-                if let nsImage = activeFeed.previewNSImage {
-                    ledWall.updateCameraFeedContent(nsImage: nsImage)
-                    updated = true
-                } else if let previewImage = activeFeed.previewImage {
-                    ledWall.updateCameraFeedContent(cgImage: previewImage)
-                    updated = true
-                } else if let pixelBuffer = activeFeed.currentFrame {
-                    ledWall.updateCameraFeedContent(pixelBuffer: pixelBuffer)
-                    updated = true
-                }
-                
-                self.feedUpdateFrameCount += 1
-                if self.feedUpdateFrameCount % 150 == 1 { // Every ~5 seconds at 30fps
-                    print("📺 LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount)")
-                    print("   - Has NSImage: \(activeFeed.previewNSImage != nil)")
-                    print("   - Has CGImage: \(activeFeed.previewImage != nil)")
-                    print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
-                    print("   - Updated this frame: \(updated)")
-                    print("   - Feed connection status: \(activeFeed.connectionStatus.displayText)")
-                    print("   - Feed frame count: \(activeFeed.frameCount)")
-                    
-                    print("   - Material debug: \(ledWall.debugLEDWallMaterial())")
-                }
-                
-                if !updated && self.feedUpdateFrameCount % 150 == 1 {
-                    print("⚠️ No feed update for LED wall '\(ledWall.name)':")
-                    print("   - Feed has current frame: \(activeFeed.currentFrame != nil)")
-                    print("   - Feed has preview image: \(activeFeed.previewImage != nil)")
-                    print("   - Feed has NSImage: \(activeFeed.previewNSImage != nil)")
-                    print("   - LED wall is displaying camera feed: \(ledWall.isDisplayingCameraFeed)")
-                    print("   - Connected feed ID matches: \(ledWall.connectedCameraFeedID == feedID)")
-                }
-            }
-        }
-        
-        print("✅ Started live feed timer for LED wall: \(ledWall.name)")
-    }
-    
-    private func stopLiveFeedUpdates(for ledWall: StudioObject) {
-        print("🛑 Stopped live feed updates for LED wall: \(ledWall.name)")
-    }
-    
-    // MARK: - Background Viewport
     
     private var backgroundViewport: some View {
         ZStack {
-            // Main 3D Viewport
             Viewport3DView(
                 studioManager: studioManager,
                 selectedTool: $selectedTool,
@@ -603,19 +542,28 @@ struct VirtualProductionView: View {
             .mouseTracking(
                 position: $currentMousePosition,
                 onMouseDown: { position in
-                    handleMouseDown(at: position)
+                    print(" Mouse down at: \(position)")
+                    
+                    if transformController.isDistanceScaling {
+                        print(" Mouse down during distance scaling")
+                    }
                 },
                 onMouseUp: { position in
-                    handleMouseUp(at: position)
+                    print(" Mouse up at: \(position)")
+                    
+                    if transformController.isDistanceScaling {
+                        print(" Mouse up during distance scaling")
+                    }
                 },
                 onMouseDrag: { position in
-                    handleMouseDrag(to: position)
+                    if transformController.isDistanceScaling {
+                        transformController.updateDistanceBasedScaling(currentMousePos: position)
+                    }
                 }
             )
             .onAppear {
             }
             
-            // 3D Compass overlay
             Viewport3DCompass(
                 cameraAzimuth: $cameraAzimuth,
                 cameraElevation: $cameraElevation,
@@ -624,55 +572,53 @@ struct VirtualProductionView: View {
         }
     }
     
-    // MARK: - Transform Actions
-    
     private func startGrabMode() {
         let selectedObjs = getSelectedStudioObjects()
         guard !selectedObjs.isEmpty else { 
-            print("⚠️ No objects selected for grab mode")
-            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            print(" No objects selected for grab mode")
+            keyboardFeedback.showFeedback(" No objects selected", color: .orange)
             return 
         }
         
-        print("🎯 Starting grab mode for \(selectedObjs.count) objects")
+        print(" Starting grab mode for \(selectedObjs.count) objects")
         selectedTool = .select
         transformController.startTransform(.move, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
         transformController.setAxis(.free)
         
-        print("💡 Grab mode active - press X/Y/Z to constrain axis, then click and drag")
+        print(" Grab mode active - press X/Y/Z to constrain axis, then click and drag")
     }
     
     private func startRotateMode() {
         let selectedObjs = getSelectedStudioObjects()
         guard !selectedObjs.isEmpty else { 
-            print("⚠️ No objects selected for rotate mode")
-            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            print(" No objects selected for rotate mode")
+            keyboardFeedback.showFeedback(" No objects selected", color: .orange)
             return 
         }
         
-        print("🔄 Starting rotate mode for \(selectedObjs.count) objects")
+        print(" Starting rotate mode for \(selectedObjs.count) objects")
         selectedTool = .select
         transformController.startTransform(.rotate, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
         transformController.setAxis(.free)
         
-        print("💡 Rotate mode active - press X/Y/Z to constrain axis, then click and drag")
+        print(" Rotate mode active - press X/Y/Z to constrain axis, then click and drag")
     }
     
     private func startDistanceBasedScaleMode() {
         let selectedObjs = getSelectedStudioObjects()
         guard !selectedObjs.isEmpty else { 
-            print("⚠️ No objects selected for distance-based scaling")
-            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            print(" No objects selected for distance-based scaling")
+            keyboardFeedback.showFeedback(" No objects selected", color: .orange)
             return 
         }
         
-        print("📏 Starting distance-based scale mode for \(selectedObjs.count) objects")
+        print(" Starting distance-based scale mode for \(selectedObjs.count) objects")
         selectedTool = .select
         isTrackingCursor = true
         
         transformController.startDistanceBasedScaling(selectedObjs, startPoint: currentMousePosition, scene: studioManager.scene)
         
-        print("💡 Distance scaling active - move cursor closer/farther to scale, Enter to confirm")
+        print(" Distance scaling active - move cursor closer/farther to scale, Enter to confirm")
     }
     
     private func setTransformAxis(_ axis: TransformController.TransformAxis) {
@@ -680,27 +626,27 @@ struct VirtualProductionView: View {
         
         if transformController.isActive {
             transformController.setAxis(axis)
-            print("🎯 Set transform axis to: \(axis.label)")
+            print(" Set transform axis to: \(axis.label)")
         } else if !selectedObjs.isEmpty {
             transformController.startTransform(.move, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
             transformController.setAxis(axis)
-            print("🎯 Started grab mode with axis: \(axis.label)")
+            print(" Started grab mode with axis: \(axis.label)")
         } else {
-            print("⚠️ No objects selected for axis constraint")
-            keyboardFeedback.showFeedback("⚠️ No objects selected", color: .orange)
+            print(" No objects selected for axis constraint")
+            keyboardFeedback.showFeedback(" No objects selected", color: .orange)
         }
     }
     
     private func confirmTransform() {
         if transformController.isActive {
-            print("✅ Confirming transform")
+            print(" Confirming transform")
             transformController.confirmTransform()
         }
     }
     
     private func cancelTransform() {
         if transformController.isActive {
-            print("❌ Cancelling transform")
+            print(" Cancelling transform")
             transformController.cancelTransform()
         }
     }
@@ -712,7 +658,7 @@ struct VirtualProductionView: View {
     private func duplicateSelectedObjects() {
         let selectedObjs = getSelectedStudioObjects()
         guard !selectedObjs.isEmpty else {
-            keyboardFeedback.showFeedback("⚠️ No objects selected to duplicate", color: .orange)
+            keyboardFeedback.showFeedback(" No objects selected to duplicate", color: .orange)
             return
         }
         
@@ -745,13 +691,11 @@ struct VirtualProductionView: View {
         }
         
         selectedObjects = newSelection
-        keyboardFeedback.showFeedback("📋 Duplicated \(selectedObjs.count) object(s)", color: .green)
+        keyboardFeedback.showFeedback(" Duplicated \(selectedObjs.count) object(s)", color: .green)
     }
     
-    // MARK: - Actions
-    
     private func handleObjectDrop(_ asset: any StudioAsset, at dropPoint: CGPoint) {
-        print("🎯 Object drop initiated: \(asset.name)")
+        print(" Object drop initiated: \(asset.name)")
     }
     
     private func handleAddObject(_ toolType: StudioTool, _ asset: any StudioAsset) {
@@ -775,7 +719,7 @@ struct VirtualProductionView: View {
         case let setPieceAsset as SetPieceAsset:
             studioManager.addSetPiece(from: setPieceAsset, at: randomPos)
         default:
-            print("⚠️ Unknown asset type: \(type(of: asset))")
+            print(" Unknown asset type: \(type(of: asset))")
         }
         
         selectedTool = .select 
@@ -812,24 +756,23 @@ struct VirtualProductionView: View {
         }
     }
     
-    // MARK: - Camera Management
-    
     private func refreshCameras() {
         Task {
-            print("🔄 Manually refreshing cameras...")
+            print(" Manually refreshing cameras...")
             await cameraFeedManager.forceRefreshDevices()
             
             let devices = cameraFeedManager.availableDevices
-            print("📹 After refresh - found \(devices.count) devices:")
+            print(" Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
+            
             for device in devices {
-                print("  - \(device.displayName) (\(device.deviceType.rawValue)) - Available: \(device.isAvailable)")
+                print("  Available: \(device.displayName) (\(device.deviceType.rawValue))")
             }
         }
     }
     
     private func debugCameras() {
         Task {
-            print("🧪 Running camera debug session...")
+            print(" Running camera debug session...")
             await cameraFeedManager.debugCameraDetection()
         }
     }
@@ -845,531 +788,786 @@ struct VirtualProductionView: View {
         }
     }
 
-    // MARK: - Panel Views (simplified for space)
-    
-    private var panelLayer: some View {
-        HStack(spacing: 0) {
-            if showingLeftPanel {
-                leftPanel
-                    .frame(width: 280)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
-            
-            Spacer()
-            
-            if showingRightPanel {
-                rightPanel
-                    .frame(width: 320)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.25), value: showingLeftPanel)
-        .animation(.easeInOut(duration: 0.25), value: showingRightPanel)
-    }
-    
     private var leftPanel: some View {
         VStack(spacing: 0) {
-            Text("Studio Tools")
-                .font(.headline)
-                .padding()
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Selected Tool: \(selectedTool.name)")
-                    .font(.caption)
+            HStack {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .font(.system(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(.blue.gradient)
                 
-                Text("Objects: \(studioManager.studioObjects.count)")
-                    .font(.caption)
+                Text("Studio Tools")
+                    .font(.system(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(.primary)
                 
-                Text("Cameras: \(studioManager.virtualCameras.count)")
-                    .font(.caption)
-                
-                Text("Camera Feeds: \(cameraFeedManager.activeFeeds.count)")
-                    .font(.caption)
+                Spacer()
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.white.opacity(0.1), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
             
-            Divider()
-                .padding(.vertical, 8)
-            
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Camera Management:")
-                    .font(.caption.weight(.semibold))
-                
-                if cameraFeedManager.availableDevices.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Click 'Discover Cameras' to find devices")
-                        Text("Connect feeds to LED walls for content")
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(spacing: 12) {
+                        statsCard("Selected Tool", selectedTool.name, .blue, "cursorarrow")
+                        statsCard("Objects", "\(studioManager.studioObjects.count)", .green, "cube.box.fill")
+                        statsCard("Cameras", "\(studioManager.virtualCameras.count)", .orange, "video.fill")
+                        statsCard("Camera Feeds", "\(cameraFeedManager.activeFeeds.count)", .purple, "camera.tv")
                     }
-                    .font(.caption2)
-                    .foregroundColor(.blue.opacity(0.8))
+                    .padding(.horizontal, 12)
                     
-                    Button("Discover Cameras") {
-                        discoverCamerasForVirtual()
-                    }
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.2))
-                    .foregroundColor(.blue)
-                    .cornerRadius(4)
-                } else {
-                    Text("✅ \(cameraFeedManager.availableDevices.count) camera(s) available")
-                        .font(.caption2)
-                        .foregroundColor(.green)
-                    
-                    if cameraFeedManager.activeFeeds.count > 0 {
-                        Text("📺 \(cameraFeedManager.activeFeeds.count) feed(s) active")
-                            .font(.caption2)
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
-            .padding(.horizontal)
-            
-            Divider()
-                .padding(.vertical, 8)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Shortcuts:")
-                    .font(.caption.weight(.semibold))
-                
-                Group {
-                    Text("V - Select")
-                    Text("L - LED Wall")
-                    Text("C - Camera")
-                    Text("B - Object Browser")
-                    Text("D - Drag Menu")
-                    Text("Shift+L - Light")
-                    Text("Shift+A - Add Menu")
-                }
-                .font(.caption2)
-                .foregroundColor(.secondary)
-            }
-            .padding(.horizontal)
-            
-            Divider()
-                .padding(.vertical, 8)
-            
-            if !selectedObjects.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Selected Objects:")
-                        .font(.caption.weight(.semibold))
-                    
-                    ForEach(Array(selectedObjects.prefix(3)), id: \.self) { objectID in
-                        if let object = studioManager.studioObjects.first(where: { $0.id == objectID }) {
-                            HStack {
-                                Circle()
-                                    .fill(colorForObjectType(object.type))
-                                    .frame(width: 8, height: 8)
-                                
-                                Text(object.name)
-                                    .font(.caption2)
-                                    .lineLimit(1)
-                                
-                                Spacer()
+                    PropertySection(title: "Camera Management") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if cameraFeedManager.availableDevices.isEmpty {
+                                VStack(spacing: 8) {
+                                    Text("Click 'Discover Cameras' to find devices")
+                                        .font(.system(.footnote, design: .default, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                    
+                                    Text("Connect feeds to LED walls for content")
+                                        .font(.system(.caption, design: .default, weight: .regular))
+                                        .foregroundStyle(.tertiary)
+                                    
+                                    modernButton("Discover Cameras", icon: "magnifyingglass", color: .blue) {
+                                        discoverCamerasForVirtual()
+                                    }
+                                }
+                            } else {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                        Text("\(cameraFeedManager.availableDevices.count) camera(s) available")
+                                            .font(.system(.footnote, design: .default, weight: .medium))
+                                            .foregroundStyle(.primary)
+                                    }
+                                    
+                                    if cameraFeedManager.activeFeeds.count > 0 {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: "tv.fill")
+                                                .foregroundStyle(.blue)
+                                            Text("\(cameraFeedManager.activeFeeds.count) feed(s) active")
+                                                .font(.system(.footnote, design: .default, weight: .medium))
+                                                .foregroundStyle(.primary)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 12)
                     
-                    if selectedObjects.count > 3 {
-                        Text("... and \(selectedObjects.count - 3) more")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    PropertySection(title: "Shortcuts") {
+                        VStack(spacing: 8) {
+                            shortcutRow("V", "Select")
+                            shortcutRow("L", "LED Wall")
+                            shortcutRow("C", "Camera")
+                            shortcutRow("B", "Object Browser")
+                            shortcutRow("D", "Drag Menu")
+                            shortcutRow("⇧L", "Light")
+                            shortcutRow("⇧A", "Add Menu")
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    
+                    if !selectedObjects.isEmpty {
+                        PropertySection(title: "Selected Objects") {
+                            VStack(spacing: 8) {
+                                ForEach(Array(selectedObjects.prefix(3)), id: \.self) { objectID in
+                                    if let object = studioManager.studioObjects.first(where: { $0.id == objectID }) {
+                                        selectedObjectRow(object)
+                                    }
+                                }
+                                
+                                if selectedObjects.count > 3 {
+                                    Text("... and \(selectedObjects.count - 3) more")
+                                        .font(.system(.caption, design: .default, weight: .regular))
+                                        .foregroundColor(.white.opacity(0.7))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                    }
+                    
+                    PropertySection(title: "Live Production Feeds") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if cameraFeedManager.activeFeeds.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("No active camera feeds")
+                                        .font(.system(.footnote, design: .default, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                    Text("Start cameras in Live Production mode")
+                                        .font(.system(.caption, design: .default, weight: .regular))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            } else {
+                                VStack(spacing: 8) {
+                                    ForEach(cameraFeedManager.activeFeeds.prefix(3)) { feed in
+                                        activeFeedRow(feed)
+                                    }
+                                    
+                                    if cameraFeedManager.activeFeeds.count > 3 {
+                                        Text("... +\(cameraFeedManager.activeFeeds.count - 3) more")
+                                            .font(.system(.caption, design: .default, weight: .regular))
+                                            .foregroundColor(.white.opacity(0.7))
+                                    }
+                                    
+                                    Text(" Right-click LED walls → 'Connect to Camera'")
+                                        .font(.system(.caption, design: .default, weight: .regular))
+                                        .foregroundColor(.blue)
+                                        .padding(.top, 4)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    
+                    PropertySection(title: "Debug Tools") {
+                        VStack(spacing: 8) {
+                            modernButton("Debug Cameras", icon: "camera.metering.unknown", color: .purple) {
+                                debugCameras()
+                            }
+                            
+                            modernButton("Test Camera Access", icon: "camera.circle", color: .blue) {
+                                Task {
+                                    await CameraDebugHelper.testSimpleCameraCapture()
+                                }
+                            }
+                            
+                            modernButton("Test LED Wall Materials", icon: "tv.circle", color: .yellow) {
+                                testLEDWallMaterials()
+                            }
+                            
+                            modernButton("Open Camera Debug", icon: "terminal", color: .purple) {
+                                let debugWindow = NSWindow(
+                                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                                    styleMask: [.titled, .closable, .resizable],
+                                    backing: .buffered,
+                                    defer: false
+                                )
+                                debugWindow.title = "Camera Debug Console"
+                                debugWindow.contentView = NSHostingView(rootView: CameraDebugView())
+                                debugWindow.center()
+                                debugWindow.makeKeyAndOrderFront(nil)
+                            }
+                            
+                            modernButton("Simple Camera Test", icon: "viewfinder.circle", color: .green) {
+                                let testWindow = NSWindow(
+                                    contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
+                                    styleMask: [.titled, .closable, .resizable],
+                                    backing: .buffered,
+                                    defer: false
+                                )
+                                testWindow.title = "Simple Camera Test"
+                                testWindow.contentView = NSHostingView(rootView: SimpleCameraTestView())
+                                testWindow.center()
+                                testWindow.makeKeyAndOrderFront(nil)
+                            }
+                            
+                            modernButton("Run Full Diagnostic", icon: "stethoscope", color: .red) {
+                                Task {
+                                    await CameraSessionDiagnostic.runFullDiagnostic()
+                                }
+                            }
+                            
+                            modernButton("Advanced Debug", icon: "cpu", color: .purple) {
+                                let debugWindow = NSWindow(
+                                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                                    styleMask: [.titled, .closable, .resizable],
+                                    backing: .buffered,
+                                    defer: false
+                                )
+                                debugWindow.title = "Advanced Camera Debug"
+                                debugWindow.contentView = NSHostingView(rootView: AdvancedCameraDebugView())
+                                debugWindow.center()
+                                debugWindow.makeKeyAndOrderFront(nil)
+                            }
+                            
+                            modernButton("State Monitor", icon: "gauge.with.dots.needle.67percent", color: .cyan) {
+                                let monitorWindow = NSWindow(
+                                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+                                    styleMask: [.titled, .closable, .resizable],
+                                    backing: .buffered,
+                                    defer: false
+                                )
+                                monitorWindow.title = "Camera State Monitor"
+                                monitorWindow.contentView = NSHostingView(rootView: CameraStateMonitorView(cameraFeedManager: cameraFeedManager))
+                                monitorWindow.center()
+                                monitorWindow.makeKeyAndOrderFront(nil)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
                 }
-                .padding(.horizontal)
+                .padding(.vertical, 16)
             }
-            
-            Spacer()
-            
-            Button("Debug Cameras") {
-                debugCameras()
-            }
-            .padding()
-            
-            Button("Test Camera Access") {
-                Task {
-                    await CameraDebugHelper.testSimpleCameraCapture()
-                }
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.blue)
-            
-            Button("Test LED Wall Materials") {
-                testLEDWallMaterials()
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.yellow)
-            
-            Button("Simple Camera Test") {
-                let testWindow = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
-                    styleMask: [.titled, .closable, .resizable],
-                    backing: .buffered,
-                    defer: false
-                )
-                testWindow.title = "Simple Camera Test"
-                testWindow.contentView = NSHostingView(rootView: SimpleCameraTestView())
-                testWindow.center()
-                testWindow.makeKeyAndOrderFront(nil)
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.green)
-            
-            Button("Run Full Diagnostic") {
-                Task {
-                    await CameraSessionDiagnostic.runFullDiagnostic()
-                }
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.red)
-            
-            Button("Advanced Debug") {
-                let debugWindow = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
-                    styleMask: [.titled, .closable, .resizable],
-                    backing: .buffered,
-                    defer: false
-                )
-                debugWindow.title = "Advanced Camera Debug"
-                debugWindow.contentView = NSHostingView(rootView: AdvancedCameraDebugView())
-                debugWindow.center()
-                debugWindow.makeKeyAndOrderFront(nil)
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.purple)
-            
-            Button("State Monitor") {
-                let monitorWindow = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
-                    styleMask: [.titled, .closable, .resizable],
-                    backing: .buffered,
-                    defer: false
-                )
-                monitorWindow.title = "Camera State Monitor"
-                monitorWindow.contentView = NSHostingView(rootView: CameraStateMonitorView(cameraFeedManager: cameraFeedManager))
-                monitorWindow.center()
-                monitorWindow.makeKeyAndOrderFront(nil)
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.cyan)
-            
-            // Add test LED wall materials button
-            Button("Test LED Wall Materials") {
-                testLEDWallMaterials()
-            }
-            .padding(.horizontal)
-            .font(.caption)
-            .foregroundColor(.yellow)
+            .scrollIndicators(.hidden)
         }
-        .background(.regularMaterial)
+        .frame(maxHeight: .infinity)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 4)
     }
     
     private var rightPanel: some View {
-        VStack(spacing: 0) {
-            ObjectListPanel(selectedObjects: $selectedObjects)
-                .environmentObject(studioManager)
+        VStack(spacing: 16) {
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "list.bullet.rectangle.portrait.fill")
+                        .font(.system(.title3, design: .default, weight: .semibold))
+                        .foregroundStyle(.green.gradient)
+                    
+                    Text("Scene Objects")
+                        .font(.system(.title3, design: .default, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                )
+                
+                ObjectListPanel(selectedObjects: $selectedObjects)
+                    .environmentObject(studioManager) 
+                    .padding(.top, 12)
+            }
             
-            LEDWallStatusPanel(cameraFeedManager: cameraFeedManager)
-                .environmentObject(studioManager)
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "tv.and.hifispeaker.fill")
+                        .font(.system(.title3, design: .default, weight: .semibold))
+                        .foregroundStyle(.blue.gradient)
+                    
+                    Text("LED Walls")
+                        .font(.system(.title3, design: .default, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                )
+                
+                LEDWallStatusPanel(cameraFeedManager: cameraFeedManager)
+                    .environmentObject(studioManager)
+                    .padding(.top, 12)
+            }
             
             Spacer(minLength: 16)
             
             if !selectedObjects.isEmpty {
-                propertiesPanel
+                enhancedPropertiesPanel
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxHeight: .infinity)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 4)
+    }
+    
+    private var enhancedPropertiesPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(.purple.gradient)
+                
+                Text("Properties")
+                    .font(.system(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(.primary)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.white.opacity(0.1), lineWidth: 0.5)
+            )
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let firstSelected = getSelectedStudioObjects().first {
+                        enhancedTransformSection(for: firstSelected)
+                        enhancedObjectInfoSection(for: firstSelected)
+                        
+                        if selectedObjects.count > 1 {
+                            enhancedMultiSelectionSection
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .scrollIndicators(.hidden)
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.white.opacity(0.1), lineWidth: 0.5)
+            )
+        }
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 2)
+    }
+    
+    private func enhancedTransformSection(for object: StudioObject) -> some View {
+        PropertySection(title: "Transform") {
+            VStack(alignment: .leading, spacing: 8) {
+                PropertyRow(label: "Position", value: (String(format: "(%.2f, %.2f, %.2f)", Float(object.position.x), Float(object.position.y), Float(object.position.z))), icon: "location.fill", color: Color.blue)
+                PropertyRow(label: "Rotation", value: (String(format: "(%.1f°, %.1f°, %.1f°)", Float(object.rotation.x) * 180.0 / Float.pi, Float(object.rotation.y) * 180.0 / Float.pi, Float(object.rotation.z) * 180.0 / Float.pi)), icon: "rotate.3d.fill", color: Color.orange)
+                PropertyRow(label: "Scale", value: (String(format: "(%.2f, %.2f, %.2f)", Float(object.scale.x), Float(object.scale.y), Float(object.scale.z))), icon: "scale.3d", color: Color.green)
             }
         }
     }
     
-    private var propertiesPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            propertiesPanelHeader
-            
-            Divider()
-                .background(.white.opacity(0.2))
-            
-            propertiesPanelContent
+    private func enhancedObjectInfoSection(for object: StudioObject) -> some View {
+        PropertySection(title: "Object Info") {
+            VStack(alignment: .leading, spacing: 8) {
+                PropertyRow(label: "Name", value: object.name, icon: "textformat", color: Color.primary)
+                PropertyRow(label: "Type", value: object.type.name, icon: object.type.icon, color: colorForObjectType(object.type))
+                PropertyRow(label: "Visible", value: object.isVisible ? "Yes" : "No", icon: object.isVisible ? "eye.fill" : "eye.slash.fill", color: object.isVisible ? Color.green : Color.red)
+                PropertyRow(label: "Locked", value: object.isLocked ? "Yes" : "No", icon: object.isLocked ? "lock.fill" : "lock.open.fill", color: object.isLocked ? Color.orange : Color.gray)
+            }
         }
-        .background(.regularMaterial)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(.white.opacity(0.1), lineWidth: 1)
-        )
     }
     
-    private var propertiesPanelHeader: some View {
-        HStack {
-            Image(systemName: "slider.horizontal.3")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+    private var enhancedMultiSelectionSection: some View {
+        PropertySection(title: "Multi-Selection") {
+            Text("+ \(selectedObjects.count - 1) more objects")
+                .font(.system(.footnote, design: .default, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+        }
+    }
+    
+    private struct PropertyRow: View {
+        let label: String
+        let value: String
+        let icon: String
+        let color: Color
+        
+        var body: some View {
+            HStack {
+                Text(label + ":")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.6))
+                    .frame(width: 60, alignment: .leading)
+                
+                Text(value)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white)
+                
+                Spacer()
+            }
+        }
+    }
+    
+    private func statsCard(_ title: String, _ value: String, _ color: Color, _ icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(.callout, design: .default, weight: .semibold))
+                .foregroundStyle(color.gradient)
+                .frame(width: 24, height: 24)
             
-            Text("Properties")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(.caption, design: .default, weight: .medium))
+                    .foregroundStyle(.secondary)
+                
+                Text(value)
+                    .font(.system(.footnote, design: .default, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
             
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.black.opacity(0.8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
     }
     
-    private var propertiesPanelContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let firstSelected = getSelectedStudioObjects().first {
-                    transformSection(for: firstSelected)
-                    objectInfoSection(for: firstSelected)
-                    
-                    if selectedObjects.count > 1 {
-                        multiSelectionSection
-                    }
-                }
+    private func modernSectionCard<Content: View>(
+        title: String,
+        icon: String,
+        color: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(.footnote, design: .default, weight: .semibold))
+                    .foregroundStyle(color.gradient)
+                
+                Text(title)
+                    .font(.system(.footnote, design: .default, weight: .semibold))
+                    .foregroundStyle(.primary)
+                
+                Spacer()
             }
-            .padding(12)
-        }
-        .background(.black.opacity(0.4))
-    }
-    
-    private func transformSection(for object: StudioObject) -> some View {
-        PropertySection(title: "Transform") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Position:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    let pos = object.position
-                    Text("(\(pos.x, specifier: "%.2f"), \(pos.y, specifier: "%.2f"), \(pos.z, specifier: "%.2f"))")
-                        .font(.caption.monospaced())
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                }
-                
-                HStack {
-                    Text("Rotation:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    let rot = object.rotation
-                    let xDeg = Float(rot.x) * 180.0 / Float.pi
-                    let yDeg = Float(rot.y) * 180.0 / Float.pi
-                    let zDeg = Float(rot.z) * 180.0 / Float.pi
-                    Text("(\(xDeg, specifier: "%.1f")°, \(yDeg, specifier: "%.1f")°, \(zDeg, specifier: "%.1f")°)")
-                        .font(.caption.monospaced())
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                }
-                
-                HStack {
-                    Text("Scale:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    let scale = object.scale
-                    Text("(\(scale.x, specifier: "%.2f"), \(scale.y, specifier: "%.2f"), \(scale.z, specifier: "%.2f"))")
-                        .font(.caption.monospaced())
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                }
-            }
-        }
-    }
-    
-    private func objectInfoSection(for object: StudioObject) -> some View {
-        PropertySection(title: "Object Info") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Name:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    Text(object.name)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                }
-                
-                HStack {
-                    Text("Type:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    HStack(spacing: 4) {
-                        Image(systemName: object.type.icon)
-                            .foregroundColor(colorForObjectType(object.type))
-                        Text(object.type.name)
-                    }
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-                    
-                    Spacer()
-                }
-                
-                HStack {
-                    Text("Visible:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.1))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    Image(systemName: object.isVisible ? "eye" : "eye.slash")
-                        .foregroundColor(object.isVisible ? .green : .red)
-                        .font(.caption)
-                    
-                    Spacer()
-                }
-                
-                HStack {
-                    Text("Locked:")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                        .frame(width: 60, alignment: .leading)
-                    
-                    Image(systemName: object.isLocked ? "lock.fill" : "lock.open")
-                        .foregroundColor(object.isLocked ? .orange : .gray)
-                        .font(.caption)
-                    
-                    Spacer()
-                }
-            }
-        }
-    }
-    
-    private var multiSelectionSection: some View {
-        PropertySection(title: "Multi-Selection") {
-            Text("+ \(selectedObjects.count - 1) more objects")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.6))
-        }
-    }
-    
-    // MARK: - Mouse Event Handlers
-    
-    private func handleMouseDown(at position: CGPoint) {
-        print("🖱️ Mouse down at: \(position)")
-        
-        if transformController.isDistanceScaling {
-            print("📏 Mouse down during distance scaling")
-        }
-    }
-    
-    private func handleMouseUp(at position: CGPoint) {
-        print("🖱️ Mouse up at: \(position)")
-        
-        if transformController.isDistanceScaling {
-            print("📏 Mouse up during distance scaling")
-        }
-    }
-    
-    private func handleMouseDrag(to position: CGPoint) {
-        if transformController.isDistanceScaling {
-            transformController.updateDistanceBasedScaling(currentMousePos: position)
-        }
-    }
-    
-    // MARK: - Camera Management (Updated)
-    
-    private func discoverCamerasForVirtual() {
-        Task {
-            print("🎬 Virtual Production: Discovering available cameras...")
-            await cameraFeedManager.getAvailableDevices()
-            let devices = cameraFeedManager.availableDevices
-            print("📹 Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
             
-            for device in devices {
-                print("  📱 Available: \(device.displayName) (\(device.deviceType.rawValue))")
+            content()
+        }
+        .padding(16)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
+    }
+    
+    private func modernButton(_ title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(.caption, design: .default, weight: .medium))
+                    .foregroundStyle(color)
+                
+                Text(title)
+                    .font(.system(.caption, design: .default, weight: .medium))
+                    .foregroundStyle(.primary)
+                
+                Spacer()
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                color.opacity(0.1),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(color.opacity(0.2), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: false)
+    }
+    
+    private func shortcutRow(_ key: String, _ description: String) -> some View {
+        HStack(spacing: 8) {
+            Text(key)
+                .font(.system(.caption, design: .monospaced, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 20)
+                .background(
+                    .quaternary,
+                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(.white.opacity(0.2), lineWidth: 0.5)
+                )
+            
+            Text(description)
+                .font(.system(.caption, design: .default, weight: .regular))
+                .foregroundStyle(.secondary)
+            
+            Spacer()
         }
     }
     
-    // Add this method to test LED wall material updates
+    private func selectedObjectRow(_ object: StudioObject) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(colorForObjectType(object.type).gradient)
+                .frame(width: 8, height: 8)
+            
+            Text(object.name)
+                .font(.system(.caption, design: .default, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            
+            Spacer()
+        }
+    }
+    
+    private func activeFeedRow(_ feed: CameraFeed) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(feed.connectionStatus.color.gradient)
+                .frame(width: 6, height: 6)
+            
+            Text(feed.device.displayName)
+                .font(.system(.caption, design: .default, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            if feed.previewImage != nil {
+                Text("LIVE")
+                    .font(.system(.caption2, design: .default, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        .green.gradient,
+                        in: Capsule()
+                    )
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            feed.id == cameraFeedManager.selectedFeedForLiveProduction?.id 
+                ? .blue.opacity(0.1) 
+                : .clear,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+    }
+    
     private func testLEDWallMaterials() {
         let ledWalls = studioManager.studioObjects.filter { $0.type == .ledWall }
         
         for (index, ledWall) in ledWalls.enumerated() {
             let testColors: [CGColor] = [
-                CGColor(red: 1, green: 0, blue: 0, alpha: 1), // Red
-                CGColor(red: 0, green: 1, blue: 0, alpha: 1), // Green
-                CGColor(red: 0, green: 0, blue: 1, alpha: 1), // Blue
-                CGColor(red: 1, green: 1, blue: 0, alpha: 1)  // Yellow
+                CGColor(red: 1, green: 0, blue: 0, alpha: 1),
+                CGColor(red: 0, green: 1, blue: 0, alpha: 1),
+                CGColor(red: 0, green: 0, blue: 1, alpha: 1),
+                CGColor(red: 1, green: 1, blue: 0, alpha: 1)  
             ]
             
             let color = testColors[index % testColors.count]
             ledWall.testLEDWallWithColor(color)
             
-            print("🎨 Testing LED wall '\(ledWall.name)' with color at index \(index)")
+            print(" Testing LED wall '\(ledWall.name)' with color at index \(index)")
             print("   Debug info: \(ledWall.debugLEDWallMaterial())")
         }
     }
+    
+    private func discoverCamerasForVirtual() {
+        Task {
+            print(" Virtual Production: Discovering available cameras...")
+            await cameraFeedManager.getAvailableDevices()
+            let devices = cameraFeedManager.availableDevices
+            print(" Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
+            
+            for device in devices {
+                print("  Available: \(device.displayName) (\(device.deviceType.rawValue))")
+            }
+        }
+    }
+    
+    private func handleCameraFeedConnection(feedID: UUID?, ledWall: StudioObject) {
+        Task { @MainActor in
+            if let feedID = feedID {
+                // Connect the camera feed
+                ledWall.connectCameraFeed(feedID)
+                print(" Connected camera feed \(feedID) to LED wall: \(ledWall.name)")
+                
+                // Start live feed updates
+                startLiveFeedUpdates(for: ledWall, feedID: feedID)
+            } else {
+                // Disconnect the camera feed
+                ledWall.disconnectCameraFeed()
+                print(" Disconnected camera feed from LED wall: \(ledWall.name)")
+                
+                // Stop live feed updates
+                stopLiveFeedUpdates(for: ledWall)
+            }
+        }
+    }
+    
+    private func startLiveFeedUpdates(for ledWall: StudioObject, feedID: UUID) {
+        guard let cameraFeed = cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }) else {
+            print(" Camera feed not found: \(feedID)")
+            return
+        }
+        
+        print(" Starting live feed updates for LED wall: \(ledWall.name)")
+        print("   - Feed device: \(cameraFeed.device.displayName)")
+        print("   - Feed status: \(cameraFeed.connectionStatus.displayText)")
+        
+        Task { @MainActor in
+            ledWall.optimizeLEDWallForVideo()
+            
+            // Test with a color first to ensure the material system works
+            ledWall.testLEDWallWithColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1)) // Green test
+            
+            // Wait a moment, then start actual feed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.startActualFeedUpdates(for: ledWall, feedID: feedID, cameraFeed: cameraFeed)
+            }
+        }
+    }
+    
+    private func startActualFeedUpdates(for ledWall: StudioObject, feedID: UUID, cameraFeed: CameraFeed) {
+        let updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
+            Task { @MainActor in
+                guard ledWall.connectedCameraFeedID == feedID,
+                      ledWall.isDisplayingCameraFeed else {
+                    print(" Stopping timer - connection no longer valid for: \(ledWall.name)")
+                    timer.invalidate()
+                    return
+                }
+                
+                guard let activeFeed = self.cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }),
+                      activeFeed.connectionStatus == .connected else {
+                    print(" Feed no longer active, stopping updates for: \(ledWall.name)")
+                    timer.invalidate()
+                    return
+                }
+                
+                var updated = false
+                
+                if let nsImage = activeFeed.previewNSImage {
+                    ledWall.updateCameraFeedContent(nsImage: nsImage)
+                    updated = true
+                } else if let previewImage = activeFeed.previewImage {
+                    ledWall.updateCameraFeedContent(cgImage: previewImage)
+                    updated = true
+                } else if let pixelBuffer = activeFeed.currentFrame {
+                    ledWall.updateCameraFeedContent(pixelBuffer: pixelBuffer)
+                    updated = true
+                }
+                
+                self.feedUpdateFrameCount += 1
+                if self.feedUpdateFrameCount % 150 == 1 { // Every ~5 seconds at 30fps
+                    print(" LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount)")
+                    print("   - Has NSImage: \(activeFeed.previewNSImage != nil)")
+                    print("   - Has CGImage: \(activeFeed.previewImage != nil)")
+                    print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
+                    print("   - Updated this frame: \(updated)")
+                    print("   - Feed connection status: \(activeFeed.connectionStatus.displayText)")
+                    print("   - Feed frame count: \(activeFeed.frameCount)")
+                    
+                    print("   - Material debug: \(ledWall.debugLEDWallMaterial())")
+                }
+                
+                if !updated && self.feedUpdateFrameCount % 150 == 1 {
+                    print(" No feed update for LED wall '\(ledWall.name)':")
+                    print("   - Feed has current frame: \(activeFeed.currentFrame != nil)")
+                    print("   - Feed has preview image: \(activeFeed.previewImage != nil)")
+                    print("   - Feed has NSImage: \(activeFeed.previewNSImage != nil)")
+                    print("   - LED wall is displaying camera feed: \(ledWall.isDisplayingCameraFeed)")
+                    print("   - Connected feed ID matches: \(ledWall.connectedCameraFeedID == feedID)")
+                }
+            }
+        }
+        
+        print(" Started live feed timer for LED wall: \(ledWall.name)")
+    }
+    
+    private func stopLiveFeedUpdates(for ledWall: StudioObject) {
+        print(" Stopped live feed updates for LED wall: \(ledWall.name)")
+    }
 }
 
-// MARK: - Scene View (Simplified)
-
 enum CameraMode: String, CaseIterable, Hashable {
-    case orbit, pan, fly}
+    case orbit, pan, fly
+}
 
-// Helper views for properties panel
-struct PropertySection<Content: View>: View {
+struct PropertySection<Content: View> : View {
     let title: String
-    let content: Content
+    let content: () -> Content
     
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(title: String, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
-        self.content = content()
+        self.content = content
     }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
+            Text(title.uppercased())
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(.white.opacity(0.7))
-                .textCase(.uppercase)
             
-            content
+            content()
         }
+        .padding(16)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 0.5)
+        )
     }
 }
 
 struct PropertyRow<Content: View>: View {
     let label: String
-    let content: Content
+    let content: () -> Content
     
-    init(label: String, @ViewBuilder content: () -> Content) {
+    init(label: String, @ViewBuilder content: @escaping () -> Content) {
         self.label = label
-        self.content = content()
+        self.content = content
     }
     
     var body: some View {
         HStack {
             Text(label + ":")
-                .font(.caption)
+                .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.white.opacity(0.6))
                 .frame(width: 60, alignment: .leading)
             
-            content
+            content()
             
             Spacer()
         }
     }
 }
 
-// Helper views for command palette
 struct CommandPaletteItem: View {
     let title: String
     let shortcut: String
