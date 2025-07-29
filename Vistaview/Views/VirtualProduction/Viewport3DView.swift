@@ -110,6 +110,10 @@ struct Viewport3DView: NSViewRepresentable {
         // Store reference to current SCNView for drag operations
         weak var currentSCNView: SCNView?
         
+        // Store context menu point for actions
+        private var currentContextMenuPoint: CGPoint = .zero
+        private var currentContextMenuObject: StudioObject? // Add this to store the clicked object
+        
         // Camera control properties
         private var cameraNode: SCNNode!
         private var cameraDistance: Float = 15.0
@@ -516,25 +520,84 @@ struct Viewport3DView: NSViewRepresentable {
             if let hitResult = hitResults.first,
                let object = parent.studioManager.getObject(from: hitResult.node) {
                 
+                // Store the clicked object for use in actions
+                currentContextMenuObject = object
+                
                 // Object-specific menu
-                menu.addItem(NSMenuItem(title: "Select \(object.name)", action: #selector(selectObject), keyEquivalent: ""))
-                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
-                menu.addItem(NSMenuItem(title: "Focus on Object", action: #selector(focusOnObject), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Duplicate", action: #selector(duplicateObject), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Delete", action: #selector(deleteObject), keyEquivalent: ""))
-                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
-                menu.addItem(NSMenuItem(title: "Reset Transform", action: #selector(resetTransform), keyEquivalent: ""))
+                let selectItem = NSMenuItem(title: "Select \(object.name)", action: #selector(selectClickedObject), keyEquivalent: "")
+                selectItem.target = self
+                menu.addItem(selectItem)
+                
+                // LED Wall specific options
+                if object.type == .ledWall {
+                    // Add separator before LED wall specific options
+                    menu.addItem(NSMenuItem.separator())
+                    
+                    // Connect to Camera option
+                    let connectItem = NSMenuItem(title: "Connect to Camera", action: #selector(connectToCamera), keyEquivalent: "")
+                    connectItem.target = self
+                    connectItem.representedObject = object
+                    menu.addItem(connectItem)
+                    
+                    // Disconnect camera option (if currently connected)
+                    if object.isDisplayingCameraFeed {
+                        let disconnectItem = NSMenuItem(title: "Disconnect Camera", action: #selector(disconnectCamera), keyEquivalent: "")
+                        disconnectItem.target = self
+                        disconnectItem.representedObject = object
+                        menu.addItem(disconnectItem)
+                    }
+                    
+                    menu.addItem(NSMenuItem.separator())
+                }
+                
+                let focusItem = NSMenuItem(title: "Focus on Object", action: #selector(focusOnClickedObject), keyEquivalent: "")
+                focusItem.target = self
+                menu.addItem(focusItem)
+                
+                let duplicateItem = NSMenuItem(title: "Duplicate", action: #selector(duplicateClickedObject), keyEquivalent: "")
+                duplicateItem.target = self
+                menu.addItem(duplicateItem)
+                
+                let deleteItem = NSMenuItem(title: "Delete", action: #selector(deleteClickedObject), keyEquivalent: "")
+                deleteItem.target = self
+                menu.addItem(deleteItem)
+                
+                let resetItem = NSMenuItem(title: "Reset Transform", action: #selector(resetClickedObjectTransform), keyEquivalent: "")
+                resetItem.target = self
+                menu.addItem(resetItem)
                 
             } else {
+                // Clear stored object for empty space menu
+                currentContextMenuObject = nil
+                
                 // Empty space menu
-                menu.addItem(NSMenuItem(title: "Add LED Wall", action: #selector(addLEDWall), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Camera", action: #selector(addCamera), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Set Piece", action: #selector(addSetPiece), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Add Light", action: #selector(addLight), keyEquivalent: ""))
-                // menu.addItem(NSMenuItem.separator())  // Remove separator for now
-                menu.addItem(NSMenuItem(title: "Select All", action: #selector(selectAll), keyEquivalent: ""))
-                menu.addItem(NSMenuItem(title: "Deselect All", action: #selector(deselectAll), keyEquivalent: ""))
+                let addLEDItem = NSMenuItem(title: "Add LED Wall", action: #selector(addLEDWall), keyEquivalent: "")
+                addLEDItem.target = self
+                menu.addItem(addLEDItem)
+                
+                let addCameraItem = NSMenuItem(title: "Add Camera", action: #selector(addCamera), keyEquivalent: "")
+                addCameraItem.target = self
+                menu.addItem(addCameraItem)
+                
+                let addSetPieceItem = NSMenuItem(title: "Add Set Piece", action: #selector(addSetPiece), keyEquivalent: "")
+                addSetPieceItem.target = self
+                menu.addItem(addSetPieceItem)
+                
+                let addLightItem = NSMenuItem(title: "Add Light", action: #selector(addLight), keyEquivalent: "")
+                addLightItem.target = self
+                menu.addItem(addLightItem)
+                
+                let selectAllItem = NSMenuItem(title: "Select All", action: #selector(selectAll), keyEquivalent: "")
+                selectAllItem.target = self
+                menu.addItem(selectAllItem)
+                
+                let deselectAllItem = NSMenuItem(title: "Deselect All", action: #selector(deselectAll), keyEquivalent: "")
+                deselectAllItem.target = self
+                menu.addItem(deselectAllItem)
             }
+            
+            // Store the menu point for use in actions
+            currentContextMenuPoint = point
             
             // Show the menu
             menu.popUp(positioning: nil, at: point, in: scnView)
@@ -666,18 +729,184 @@ struct Viewport3DView: NSViewRepresentable {
             return true
         }
         
-        // Context menu actions
-        @objc private func selectObject() { /* Implement */ }
-        @objc private func focusOnObject() { /* Implement */ }
-        @objc private func duplicateObject() { /* Implement */ }
-        @objc private func deleteObject() { /* Implement */ }
-        @objc private func resetTransform() { /* Implement */ }
-        @objc private func addLEDWall() { /* Implement */ }
-        @objc private func addCamera() { /* Implement */ }
-        @objc private func addSetPiece() { /* Implement */ }
-        @objc private func addLight() { /* Implement */ }
-        @objc private func selectAll() { /* Implement */ }
-        @objc private func deselectAll() { /* Implement */ }
+        // Context menu actions - PROPERLY IMPLEMENTED
+        @objc private func selectClickedObject(_ sender: NSMenuItem) {
+            guard let object = currentContextMenuObject else { return }
+            print("🎯 Context menu: Select object \(object.name)")
+            
+            // Clear other selections
+            for obj in parent.studioManager.studioObjects {
+                obj.setSelected(false)
+            }
+            selectedObjects.removeAll()
+            
+            // Select the clicked object
+            object.setSelected(true)
+            selectedObjects.insert(object.id)
+            parent.selectedObjects = selectedObjects
+        }
+        
+        @objc private func focusOnClickedObject(_ sender: NSMenuItem) {
+            guard let object = currentContextMenuObject else { return }
+            print("🎯 Context menu: Focus on object \(object.name)")
+            
+            // Move camera to focus on the object
+            focusPoint = object.position
+            cameraDistance = 10.0 // Set a good viewing distance
+            updateCameraPosition()
+        }
+        
+        @objc private func duplicateClickedObject(_ sender: NSMenuItem) {
+            guard let object = currentContextMenuObject else { return }
+            print("🎯 Context menu: Duplicate object \(object.name)")
+            
+            // Create duplicate at offset position
+            let offset: Float = 2.0
+            let newPosition = SCNVector3(
+                object.position.x + CGFloat(offset),
+                object.position.y,
+                object.position.z + CGFloat(offset)
+            )
+            
+            // Add based on object type
+            parent.studioManager.addObject(type: object.type, at: newPosition)
+        }
+        
+        @objc private func deleteClickedObject(_ sender: NSMenuItem) {
+            guard let object = currentContextMenuObject else { return }
+            print("🎯 Context menu: Delete object \(object.name)")
+            
+            // Remove from selection if selected
+            selectedObjects.remove(object.id)
+            parent.selectedObjects = selectedObjects
+            
+            // Delete the object
+            parent.studioManager.deleteObject(object)
+        }
+        
+        @objc private func resetClickedObjectTransform(_ sender: NSMenuItem) {
+            guard let object = currentContextMenuObject else { return }
+            print("🎯 Context menu: Reset transform for \(object.name)")
+            
+            // Reset transform to origin
+            object.position = SCNVector3(0, 0, 0)
+            object.rotation = SCNVector3(0, 0, 0)
+            object.scale = SCNVector3(1, 1, 1)
+            object.updateNodeTransform()
+        }
+        
+        @objc private func addLEDWall(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Add LED Wall action")
+            // Add LED wall at the clicked position
+            guard let scnView = currentSCNView else { return }
+            let worldPos = parent.studioManager.worldPosition(from: currentContextMenuPoint, in: scnView)
+            let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
+            
+            if let asset = LEDWallAsset.predefinedWalls.first {
+                parent.studioManager.addLEDWall(from: asset, at: finalPos)
+            }
+        }
+        
+        @objc private func addCamera(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Add Camera action")
+            // Add camera at the clicked position
+            guard let scnView = currentSCNView else { return }
+            let worldPos = parent.studioManager.worldPosition(from: currentContextMenuPoint, in: scnView)
+            let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
+            
+            if let asset = CameraAsset.predefinedCameras.first {
+                let camera = VirtualCamera(name: asset.name, position: finalPos)
+                camera.focalLength = Float(asset.focalLength)
+                parent.studioManager.virtualCameras.append(camera)
+                parent.studioManager.scene.rootNode.addChildNode(camera.node)
+            }
+        }
+        
+        @objc private func addSetPiece(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Add Set Piece action")
+            // Add set piece at the clicked position
+            guard let scnView = currentSCNView else { return }
+            let worldPos = parent.studioManager.worldPosition(from: currentContextMenuPoint, in: scnView)
+            let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
+            
+            if let asset = SetPieceAsset.predefinedPieces.first {
+                parent.studioManager.addSetPiece(from: asset, at: finalPos)
+            }
+        }
+        
+        @objc private func addLight(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Add Light action")
+            // Add light at the clicked position
+            guard let scnView = currentSCNView else { return }
+            let worldPos = parent.studioManager.worldPosition(from: currentContextMenuPoint, in: scnView)
+            let finalPos = snapToGrid ? snapToGridPosition(worldPos) : worldPos
+            
+            if let asset = LightAsset.predefinedLights.first {
+                parent.studioManager.addLight(from: asset, at: finalPos)
+            }
+        }
+        
+        @objc private func selectAll(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Select All action")
+            // Select all objects in the scene
+            selectedObjects.removeAll()
+            for obj in parent.studioManager.studioObjects {
+                obj.setSelected(true)
+                selectedObjects.insert(obj.id)
+            }
+            parent.selectedObjects = selectedObjects
+        }
+        
+        @objc private func deselectAll(_ sender: NSMenuItem) {
+            print("🎯 Context menu: Deselect All action")
+            // Clear all selections
+            for obj in parent.studioManager.studioObjects {
+                obj.setSelected(false)
+            }
+            selectedObjects.removeAll()
+            parent.selectedObjects = selectedObjects
+        }
+        
+        // NEW: LED Wall camera connection actions
+        @objc private func connectToCamera(_ sender: NSMenuItem) {
+            guard let ledWall = sender.representedObject as? StudioObject,
+                  ledWall.type == .ledWall else {
+                print("❌ Connect to camera called on non-LED wall object")
+                return
+            }
+            
+            print("📹 Connect to camera requested for LED wall: \(ledWall.name)")
+            
+            // Trigger the camera feed modal via a notification or callback
+            DispatchQueue.main.async {
+                // Post notification to show the camera feed modal
+                NotificationCenter.default.post(
+                    name: .showLEDWallCameraFeedModal,
+                    object: ledWall
+                )
+            }
+        }
+        
+        @objc private func disconnectCamera(_ sender: NSMenuItem) {
+            guard let ledWall = sender.representedObject as? StudioObject,
+                  ledWall.type == .ledWall else {
+                print("❌ Disconnect camera called on non-LED wall object")
+                return
+            }
+            
+            print("🔌 Disconnect camera requested for LED wall: \(ledWall.name)")
+            
+            // Disconnect the camera feed directly
+            DispatchQueue.main.async {
+                ledWall.disconnectCameraFeed()
+                
+                // Post notification to update any observers
+                NotificationCenter.default.post(
+                    name: .ledWallCameraFeedDisconnected,
+                    object: ledWall
+                )
+            }
+        }
         
         // Enhanced selection handling with better visual feedback
         private func handleSelection(at point: CGPoint, in scnView: SCNView) {

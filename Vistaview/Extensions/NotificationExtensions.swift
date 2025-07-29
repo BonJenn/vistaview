@@ -7,4 +7,8 @@ extension Notification.Name {
     static let toggleCommandPalette = Notification.Name("toggleCommandPalette")
     static let toggleLeftPanel = Notification.Name("toggleLeftPanel")
     static let toggleRightPanel = Notification.Name("toggleRightPanel")
+    
+    // NEW: LED Wall camera feed notifications
+    static let showLEDWallCameraFeedModal = Notification.Name("showLEDWallCameraFeedModal")
+    static let ledWallCameraFeedDisconnected = Notification.Name("ledWallCameraFeedDisconnected")
 }

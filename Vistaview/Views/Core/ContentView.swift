@@ -149,6 +149,7 @@ struct ContentView: View {
                 case .virtual:
                     VirtualProductionView()
                         .environmentObject(productionManager.studioManager)
+                        .environmentObject(productionManager)
                 case .live:
                     EnhancedLiveProductionView(
                         productionManager: productionManager,
@@ -1534,11 +1535,11 @@ struct EffectsView: View {
                                 .frame(height: 50)
                                 .overlay(
                                     VStack {
-                                        Image(systemName: "camera.filters")
-                                        Text(effect)
-                                            .font(.caption2)
-                                    }
-                                    .foregroundColor(.purple)
+                                    Image(systemName: "camera.filters")
+                                    Text(effect)
+                                        .font(.caption2)
+                                }
+                                .foregroundColor(.purple)
                                 )
                                 .cornerRadius(6)
                         }

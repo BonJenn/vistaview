@@ -299,9 +299,11 @@ struct LEDWallCameraFeedModal: View {
     }
     
     private func activeFeedRow(_ feed: CameraFeed) -> some View {
-        Button(action: {
+        let isCurrentlyConnected = ledWall.connectedCameraFeedID == feed.id
+        
+        return Button {
             connectFeed(feed)
-        }) {
+        } label: {
             HStack(spacing: spacing3) {
                 // Feed preview thumbnail
                 Group {
@@ -316,7 +318,7 @@ struct LEDWallCameraFeedModal: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.green, lineWidth: 1)
                             )
-                            .id("thumbnail-\(feed.frameCount)") // Force updates
+                            .id("live-thumbnail-\(feed.id)-\(feed.frameCount)") // Force updates with frame count
                     } else if let previewImage = feed.previewImage {
                         // Fallback to CGImage with forced updates
                         Image(decorative: previewImage, scale: 1.0)
@@ -329,7 +331,7 @@ struct LEDWallCameraFeedModal: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.green, lineWidth: 1)
                             )
-                            .id("thumbnail-cgimage-\(feed.frameCount)") // Force updates
+                            .id("live-cgimage-thumbnail-\(feed.id)-\(feed.frameCount)") // Force updates
                     } else {
                         Rectangle()
                             .fill(Color.black)
@@ -391,7 +393,7 @@ struct LEDWallCameraFeedModal: View {
                     }
                     
                     // Already connected indicator
-                    if ledWall.connectedCameraFeedID == feed.id {
+                    if isCurrentlyConnected {
                         Text("Connected")
                             .font(.system(.caption2, design: .default, weight: .semibold))
                             .foregroundColor(.green)
@@ -411,11 +413,11 @@ struct LEDWallCameraFeedModal: View {
                 }
             }
             .padding(.all, spacing3)
-            .background(ledWall.connectedCameraFeedID == feed.id ? Color.green.opacity(0.1) : Color.blue.opacity(0.05))
+            .background(isCurrentlyConnected ? Color.green.opacity(0.1) : Color.blue.opacity(0.05))
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(ledWall.connectedCameraFeedID == feed.id ? Color.green : Color.blue.opacity(0.3), lineWidth: 1)
+                    .stroke(isCurrentlyConnected ? Color.green : Color.blue.opacity(0.3), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

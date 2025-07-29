@@ -297,12 +297,16 @@ final class CameraFeed: ObservableObject, Identifiable {
             return
         }
         
-        // FIXED: Force new NSImage creation to ensure SwiftUI detects changes
-        let newNSImage = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+        // ENHANCED: Create NSImage with explicit size to ensure proper SceneKit handling
+        let newNSImage = NSImage(size: NSSize(width: width, height: height))
+        newNSImage.addRepresentation(NSBitmapImageRep(cgImage: cgImage))
+        
+        // Also keep the direct CGImage method as backup
+        let directNSImage = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
         
         // Update both images - force new object references to trigger SwiftUI updates
         previewImage = cgImage
-        previewNSImage = newNSImage
+        previewNSImage = newNSImage // Use the enhanced NSImage
         
         // CRITICAL: Force SwiftUI to detect the change by triggering objectWillChange manually
         objectWillChange.send()
@@ -311,7 +315,8 @@ final class CameraFeed: ObservableObject, Identifiable {
         if frameCount <= 5 {
             print("✅ Successfully converted frame \(frameCount) to images for \(device.displayName)")
             print("   - CGImage: \(cgImage.width)x\(cgImage.height)")
-            print("   - NSImage: \(newNSImage.size)")
+            print("   - NSImage (enhanced): \(newNSImage.size)")
+            print("   - NSImage (direct): \(directNSImage.size)")
             print("   - Triggered objectWillChange for SwiftUI update")
         }
         
@@ -321,7 +326,8 @@ final class CameraFeed: ObservableObject, Identifiable {
             print("   - CVPixelBuffer format: \(CVPixelBufferGetPixelFormatType(pixelBuffer))")
             print("   - Color space: \(cgImage.colorSpace?.name as? String ?? "unknown")")
             print("   - Alpha info: \(cgImage.alphaInfo.rawValue)")
-            print("   - Created NSImage: \(newNSImage.size)")
+            print("   - Enhanced NSImage: \(newNSImage.size)")
+            print("   - NSImage representations: \(newNSImage.representations.count)")
         }
     }
     

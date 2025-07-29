@@ -26,9 +26,13 @@ struct VirtualProductionView: View {
     // Keyboard Feedback Controller
     @StateObject private var keyboardFeedback = KeyboardFeedbackController()
     
-    // Camera Feed Management
-    @StateObject private var cameraDeviceManager = CameraDeviceManager()
-    @StateObject private var cameraFeedManager: CameraFeedManager
+    // Camera Feed Management - USE SHARED MANAGER
+    @EnvironmentObject var productionManager: UnifiedProductionManager
+    
+    // Computed property to access shared camera feed manager
+    private var cameraFeedManager: CameraFeedManager {
+        return productionManager.cameraFeedManager
+    }
     
     // Modal states
     @State private var showingCameraFeedModal = false
@@ -57,14 +61,6 @@ struct VirtualProductionView: View {
     private let spacing4: CGFloat = 24  // Panel spacing
     private let spacing5: CGFloat = 32  // Major section spacing
     
-    init() {
-        let deviceManager = CameraDeviceManager()
-        let feedManager = CameraFeedManager(cameraDeviceManager: deviceManager)
-        
-        self._cameraDeviceManager = StateObject(wrappedValue: deviceManager)
-        self._cameraFeedManager = StateObject(wrappedValue: feedManager)
-    }
-    
     var body: some View {
         mainContent
             .background(.black)
@@ -82,6 +78,21 @@ struct VirtualProductionView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleRightPanel)) { _ in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     showingRightPanel.toggle()
+                }
+            }
+            // NEW: Handle LED Wall camera feed modal notifications
+            .onReceive(NotificationCenter.default.publisher(for: .showLEDWallCameraFeedModal)) { notification in
+                if let ledWall = notification.object as? StudioObject {
+                    print("📹 Received request to show camera feed modal for: \(ledWall.name)")
+                    selectedLEDWallForFeed = ledWall
+                    showingCameraFeedModal = true
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .ledWallCameraFeedDisconnected)) { notification in
+                if let ledWall = notification.object as? StudioObject {
+                    print("🔌 LED Wall camera feed disconnected: \(ledWall.name)")
+                    // Force view update
+                    studioManager.objectWillChange.send()
                 }
             }
             // Blender-style keyboard shortcuts with visual feedback
@@ -495,31 +506,36 @@ struct VirtualProductionView: View {
         print("   - Feed device: \(cameraFeed.device.displayName)")
         print("   - Feed status: \(cameraFeed.connectionStatus.displayText)")
         
-        // Optimize LED wall material for video content first
         Task { @MainActor in
             ledWall.optimizeLEDWallForVideo()
+            
+            // Test with a color first to ensure the material system works
+            ledWall.testLEDWallWithColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1)) // Green test
+            
+            // Wait a moment, then start actual feed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.startActualFeedUpdates(for: ledWall, feedID: feedID, cameraFeed: cameraFeed)
+            }
         }
-        
-        // Use a more efficient update mechanism with CADisplayLink-like behavior
+    }
+    
+    private func startActualFeedUpdates(for ledWall: StudioObject, feedID: UUID, cameraFeed: CameraFeed) {
         let updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
             Task { @MainActor in
-                // Check if connection is still valid
                 guard ledWall.connectedCameraFeedID == feedID,
                       ledWall.isDisplayingCameraFeed else {
-                    print("🛑 Stopping timer - connection no longer valid")
+                    print("🛑 Stopping timer - connection no longer valid for: \(ledWall.name)")
                     timer.invalidate()
                     return
                 }
                 
-                // Check if feed is still active
                 guard let activeFeed = self.cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }),
                       activeFeed.connectionStatus == .connected else {
-                    print("⚠️ Feed no longer active, stopping updates")
+                    print("⚠️ Feed no longer active, stopping updates for: \(ledWall.name)")
                     timer.invalidate()
                     return
                 }
                 
-                // Update LED wall with latest frame - prioritize NSImage for better compatibility
                 var updated = false
                 
                 if let nsImage = activeFeed.previewNSImage {
@@ -533,7 +549,6 @@ struct VirtualProductionView: View {
                     updated = true
                 }
                 
-                // Debug logging every few seconds
                 self.feedUpdateFrameCount += 1
                 if self.feedUpdateFrameCount % 150 == 1 { // Every ~5 seconds at 30fps
                     print("📺 LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount)")
@@ -542,19 +557,26 @@ struct VirtualProductionView: View {
                     print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
                     print("   - Updated this frame: \(updated)")
                     print("   - Feed connection status: \(activeFeed.connectionStatus.displayText)")
+                    print("   - Feed frame count: \(activeFeed.frameCount)")
                     
-                    // Debug material state
                     print("   - Material debug: \(ledWall.debugLEDWallMaterial())")
+                }
+                
+                if !updated && self.feedUpdateFrameCount % 150 == 1 {
+                    print("⚠️ No feed update for LED wall '\(ledWall.name)':")
+                    print("   - Feed has current frame: \(activeFeed.currentFrame != nil)")
+                    print("   - Feed has preview image: \(activeFeed.previewImage != nil)")
+                    print("   - Feed has NSImage: \(activeFeed.previewNSImage != nil)")
+                    print("   - LED wall is displaying camera feed: \(ledWall.isDisplayingCameraFeed)")
+                    print("   - Connected feed ID matches: \(ledWall.connectedCameraFeedID == feedID)")
                 }
             }
         }
         
-        // Store timer reference for cleanup (you might want to add this to the class)
         print("✅ Started live feed timer for LED wall: \(ledWall.name)")
     }
     
     private func stopLiveFeedUpdates(for ledWall: StudioObject) {
-        // Timer will auto-invalidate when the connection check fails
         print("🛑 Stopped live feed updates for LED wall: \(ledWall.name)")
     }
     
@@ -591,7 +613,6 @@ struct VirtualProductionView: View {
                 }
             )
             .onAppear {
-                // Initialize camera orientation tracking if needed
             }
             
             // 3D Compass overlay
@@ -649,7 +670,6 @@ struct VirtualProductionView: View {
         selectedTool = .select
         isTrackingCursor = true
         
-        // Start distance-based scaling with current mouse position
         transformController.startDistanceBasedScaling(selectedObjs, startPoint: currentMousePosition, scene: studioManager.scene)
         
         print("💡 Distance scaling active - move cursor closer/farther to scale, Enter to confirm")
@@ -659,11 +679,9 @@ struct VirtualProductionView: View {
         let selectedObjs = getSelectedStudioObjects()
         
         if transformController.isActive {
-            // Already in transform mode, just change axis
             transformController.setAxis(axis)
             print("🎯 Set transform axis to: \(axis.label)")
         } else if !selectedObjs.isEmpty {
-            // Start grab mode first, then set axis
             transformController.startTransform(.move, objects: selectedObjs, startPoint: .zero, scene: studioManager.scene)
             transformController.setAxis(axis)
             print("🎯 Started grab mode with axis: \(axis.label)")
@@ -733,14 +751,10 @@ struct VirtualProductionView: View {
     // MARK: - Actions
     
     private func handleObjectDrop(_ asset: any StudioAsset, at dropPoint: CGPoint) {
-        // This is called when an object is dropped from the draggable menu
-        // The actual drop handling is done in Viewport3DView's performDragOperation
         print("🎯 Object drop initiated: \(asset.name)")
     }
     
     private func handleAddObject(_ toolType: StudioTool, _ asset: any StudioAsset) {
-        // Generate a random position for demo - in real implementation,
-        // this would use the 3D cursor or mouse position
         let randomPos = SCNVector3(
             Float.random(in: -5...5),
             Float.random(in: 0...3),
@@ -764,7 +778,7 @@ struct VirtualProductionView: View {
             print("⚠️ Unknown asset type: \(type(of: asset))")
         }
         
-        selectedTool = .select // Return to select mode after adding
+        selectedTool = .select 
     }
     
     private func addCameraFromAsset(_ asset: CameraAsset, at position: SCNVector3) {
@@ -859,7 +873,6 @@ struct VirtualProductionView: View {
                 .font(.headline)
                 .padding()
             
-            // Quick stats
             VStack(alignment: .leading, spacing: 4) {
                 Text("Selected Tool: \(selectedTool.name)")
                     .font(.caption)
@@ -878,7 +891,6 @@ struct VirtualProductionView: View {
             Divider()
                 .padding(.vertical, 8)
             
-            // UPDATED: Camera discovery guidance for Virtual Production
             VStack(alignment: .leading, spacing: 6) {
                 Text("Camera Management:")
                     .font(.caption.weight(.semibold))
@@ -917,7 +929,6 @@ struct VirtualProductionView: View {
             Divider()
                 .padding(.vertical, 8)
             
-            // Keyboard shortcuts info
             VStack(alignment: .leading, spacing: 2) {
                 Text("Shortcuts:")
                     .font(.caption.weight(.semibold))
@@ -939,7 +950,6 @@ struct VirtualProductionView: View {
             Divider()
                 .padding(.vertical, 8)
             
-            // Selection info
             if !selectedObjects.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Selected Objects:")
@@ -977,7 +987,6 @@ struct VirtualProductionView: View {
             }
             .padding()
             
-            // Add camera test button
             Button("Test Camera Access") {
                 Task {
                     await CameraDebugHelper.testSimpleCameraCapture()
@@ -987,24 +996,13 @@ struct VirtualProductionView: View {
             .font(.caption)
             .foregroundColor(.blue)
             
-            // Add camera debug view button
-            Button("Open Camera Debug") {
-                let debugWindow = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
-                    styleMask: [.titled, .closable, .resizable],
-                    backing: .buffered,
-                    defer: false
-                )
-                debugWindow.title = "Camera Debug Console"
-                debugWindow.contentView = NSHostingView(rootView: CameraDebugView())
-                debugWindow.center()
-                debugWindow.makeKeyAndOrderFront(nil)
+            Button("Test LED Wall Materials") {
+                testLEDWallMaterials()
             }
             .padding(.horizontal)
             .font(.caption)
-            .foregroundColor(.purple)
+            .foregroundColor(.yellow)
             
-            // Add simple camera test button
             Button("Simple Camera Test") {
                 let testWindow = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
@@ -1021,7 +1019,6 @@ struct VirtualProductionView: View {
             .font(.caption)
             .foregroundColor(.green)
             
-            // Add full diagnostic button
             Button("Run Full Diagnostic") {
                 Task {
                     await CameraSessionDiagnostic.runFullDiagnostic()
@@ -1031,7 +1028,6 @@ struct VirtualProductionView: View {
             .font(.caption)
             .foregroundColor(.red)
             
-            // Add advanced camera debug
             Button("Advanced Debug") {
                 let debugWindow = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
@@ -1048,7 +1044,6 @@ struct VirtualProductionView: View {
             .font(.caption)
             .foregroundColor(.purple)
             
-            // Add state monitor
             Button("State Monitor") {
                 let monitorWindow = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
@@ -1064,19 +1059,28 @@ struct VirtualProductionView: View {
             .padding(.horizontal)
             .font(.caption)
             .foregroundColor(.cyan)
+            
+            // Add test LED wall materials button
+            Button("Test LED Wall Materials") {
+                testLEDWallMaterials()
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.yellow)
         }
         .background(.regularMaterial)
     }
     
     private var rightPanel: some View {
         VStack(spacing: 0) {
-            // Object List Panel
             ObjectListPanel(selectedObjects: $selectedObjects)
+                .environmentObject(studioManager)
+            
+            LEDWallStatusPanel(cameraFeedManager: cameraFeedManager)
                 .environmentObject(studioManager)
             
             Spacer(minLength: 16)
             
-            // Properties Panel (if object selected)
             if !selectedObjects.isEmpty {
                 propertiesPanel
             }
@@ -1085,13 +1089,11 @@ struct VirtualProductionView: View {
     
     private var propertiesPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             propertiesPanelHeader
             
             Divider()
                 .background(.white.opacity(0.2))
             
-            // Properties content
             propertiesPanelContent
         }
         .background(.regularMaterial)
@@ -1139,7 +1141,6 @@ struct VirtualProductionView: View {
     private func transformSection(for object: StudioObject) -> some View {
         PropertySection(title: "Transform") {
             VStack(alignment: .leading, spacing: 8) {
-                // Position
                 HStack {
                     Text("Position:")
                         .font(.caption)
@@ -1154,7 +1155,6 @@ struct VirtualProductionView: View {
                     Spacer()
                 }
                 
-                // Rotation
                 HStack {
                     Text("Rotation:")
                         .font(.caption)
@@ -1172,7 +1172,6 @@ struct VirtualProductionView: View {
                     Spacer()
                 }
                 
-                // Scale
                 HStack {
                     Text("Scale:")
                         .font(.caption)
@@ -1193,7 +1192,6 @@ struct VirtualProductionView: View {
     private func objectInfoSection(for object: StudioObject) -> some View {
         PropertySection(title: "Object Info") {
             VStack(alignment: .leading, spacing: 8) {
-                // Name
                 HStack {
                     Text("Name:")
                         .font(.caption)
@@ -1207,7 +1205,6 @@ struct VirtualProductionView: View {
                     Spacer()
                 }
                 
-                // Type
                 HStack {
                     Text("Type:")
                         .font(.caption)
@@ -1225,7 +1222,6 @@ struct VirtualProductionView: View {
                     Spacer()
                 }
                 
-                // Visibility
                 HStack {
                     Text("Visible:")
                         .font(.caption)
@@ -1239,7 +1235,6 @@ struct VirtualProductionView: View {
                     Spacer()
                 }
                 
-                // Lock status
                 HStack {
                     Text("Locked:")
                         .font(.caption)
@@ -1270,7 +1265,6 @@ struct VirtualProductionView: View {
         print("🖱️ Mouse down at: \(position)")
         
         if transformController.isDistanceScaling {
-            // In distance scaling mode, mouse down can be used for fine adjustment
             print("📏 Mouse down during distance scaling")
         }
     }
@@ -1279,21 +1273,18 @@ struct VirtualProductionView: View {
         print("🖱️ Mouse up at: \(position)")
         
         if transformController.isDistanceScaling {
-            // Could auto-confirm on mouse up if desired
             print("📏 Mouse up during distance scaling")
         }
     }
     
     private func handleMouseDrag(to position: CGPoint) {
         if transformController.isDistanceScaling {
-            // Update scaling based on drag position
             transformController.updateDistanceBasedScaling(currentMousePos: position)
         }
     }
     
     // MARK: - Camera Management (Updated)
     
-    // NEW: Manual camera discovery - only discover devices, don't start feeds
     private func discoverCamerasForVirtual() {
         Task {
             print("🎬 Virtual Production: Discovering available cameras...")
@@ -1301,10 +1292,29 @@ struct VirtualProductionView: View {
             let devices = cameraFeedManager.availableDevices
             print("📹 Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
             
-            // Just log what's available - don't auto-start anything
             for device in devices {
                 print("  📱 Available: \(device.displayName) (\(device.deviceType.rawValue))")
             }
+        }
+    }
+    
+    // Add this method to test LED wall material updates
+    private func testLEDWallMaterials() {
+        let ledWalls = studioManager.studioObjects.filter { $0.type == .ledWall }
+        
+        for (index, ledWall) in ledWalls.enumerated() {
+            let testColors: [CGColor] = [
+                CGColor(red: 1, green: 0, blue: 0, alpha: 1), // Red
+                CGColor(red: 0, green: 1, blue: 0, alpha: 1), // Green
+                CGColor(red: 0, green: 0, blue: 1, alpha: 1), // Blue
+                CGColor(red: 1, green: 1, blue: 0, alpha: 1)  // Yellow
+            ]
+            
+            let color = testColors[index % testColors.count]
+            ledWall.testLEDWallWithColor(color)
+            
+            print("🎨 Testing LED wall '\(ledWall.name)' with color at index \(index)")
+            print("   Debug info: \(ledWall.debugLEDWallMaterial())")
         }
     }
 }

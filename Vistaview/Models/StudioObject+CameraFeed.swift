@@ -2,6 +2,7 @@ import Foundation
 import SceneKit
 import CoreGraphics
 import CoreVideo
+import QuartzCore
 
 // MARK: - Static variables for debugging
 private var ledWallUpdateCount = 0
@@ -14,11 +15,21 @@ extension StudioObject {
     /// This is useful when you need to ensure SceneKit picks up material changes
     @MainActor
     func refreshLEDWallMaterial() {
-        guard type == .ledWall,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { return }
+        guard type == .ledWall else { return }
         
-        // Force SceneKit to refresh the material by accessing rendering properties
+        // Find the actual screen node in the LED wall hierarchy
+        guard let screenNode = findScreenNode() else {
+            print("❌ Could not find screen node for LED wall: \(name)")
+            return
+        }
+        
+        guard let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            print("❌ Could not find screen geometry/material for LED wall: \(name)")
+            return
+        }
+        
+        // Force SceneKit to refresh the material by touching rendering properties
         geometry.firstMaterial?.isDoubleSided = true
         
         // Ensure optimal settings for video content
@@ -32,29 +43,91 @@ extension StudioObject {
         material.emission.magnificationFilter = .linear
         material.emission.minificationFilter = .linear
         
-        // Force a render update
+        // Force a render update by touching transform matrices
         material.diffuse.contentsTransform = SCNMatrix4Identity
         material.emission.contentsTransform = SCNMatrix4Identity
+        
+        // CRITICAL: Force SceneKit to notice the change
+        screenNode.geometry = screenNode.geometry // This forces a refresh
+        
+        print("✅ Force refreshed LED wall material for: \(name)")
+    }
+    
+    /// Find the screen node within the LED wall structure
+    private func findScreenNode() -> SCNNode? {
+        // LED walls have a group structure: main node -> group node -> screen node
+        // First, look for any child node named "screen"
+        if let screenNode = node.childNodes.first(where: { findScreenInNode($0) != nil }) {
+            return findScreenInNode(screenNode)
+        }
+        
+        // Fallback: look for the first node with geometry (the actual screen surface)
+        return findFirstGeometryNode(in: node)
+    }
+    
+    private func findScreenInNode(_ searchNode: SCNNode) -> SCNNode? {
+        // Direct screen node
+        if searchNode.name == "screen" {
+            return searchNode
+        }
+        
+        // Look in children
+        for child in searchNode.childNodes {
+            if child.name == "screen" {
+                return child
+            }
+            // Recursively search deeper
+            if let found = findScreenInNode(child) {
+                return found
+            }
+        }
+        
+        return nil
+    }
+    
+    private func findFirstGeometryNode(in searchNode: SCNNode) -> SCNNode? {
+        // If this node has plane geometry (LED wall screen), use it
+        if let geometry = searchNode.geometry as? SCNPlane {
+            return searchNode
+        }
+        
+        // Search children for plane geometry
+        for child in searchNode.childNodes {
+            if let geometry = child.geometry as? SCNPlane {
+                return child
+            }
+            // Recursively search deeper
+            if let found = findFirstGeometryNode(in: child) {
+                return found
+            }
+        }
+        
+        return nil
     }
     
     /// Debug information about the LED wall's current material state
     func debugLEDWallMaterial() -> String {
-        guard type == .ledWall,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { 
-            return "No material found" 
+        guard type == .ledWall else { return "Not an LED wall" }
+        
+        guard let screenNode = findScreenNode() else {
+            return "❌ LED Wall '\(name)': No screen node found"
         }
         
-        var debug = "LED Wall Material Debug for '\(name)':\n"
+        guard let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            return "❌ LED Wall '\(name)': No geometry or material found"
+        }
+        
+        var debug = "🔍 LED Wall Material Debug for '\(name)':\n"
+        debug += "  - Screen node found: ✅ '\(screenNode.name ?? "unnamed")'\n"
         debug += "  - Has diffuse content: \(material.diffuse.contents != nil)\n"
         debug += "  - Diffuse content type: \(Swift.type(of: material.diffuse.contents))\n"
         debug += "  - Has emission content: \(material.emission.contents != nil)\n"
         debug += "  - Emission intensity: \(material.emission.intensity)\n"
         debug += "  - Lighting model: \(material.lightingModel.rawValue)\n"
         debug += "  - Double sided: \(material.isDoubleSided)\n"
-        debug += "  - Magnification filter: \(material.diffuse.magnificationFilter.rawValue)\n"
-        debug += "  - Wrap S: \(material.diffuse.wrapS.rawValue)\n"
-        debug += "  - Wrap T: \(material.diffuse.wrapT.rawValue)\n"
+        debug += "  - Screen node position: \(screenNode.position)\n"
+        debug += "  - Screen node geometry: \(screenNode.geometry?.description ?? "none")\n"
         
         return debug
     }
@@ -62,13 +135,27 @@ extension StudioObject {
     /// Ensure LED wall material is optimally configured for video content
     @MainActor
     func optimizeLEDWallForVideo() {
-        guard type == .ledWall,
-              let geometry = node.geometry else { return }
+        guard type == .ledWall else { return }
+        
+        guard let screenNode = findScreenNode() else {
+            print("❌ Cannot optimize - no screen node found for: \(name)")
+            return
+        }
+        
+        // Ensure we have geometry
+        if screenNode.geometry == nil {
+            let plane = SCNPlane(width: 4, height: 3) // Default size
+            screenNode.geometry = plane
+            print("📐 Created default plane geometry for: \(name)")
+        }
+        
+        guard let geometry = screenNode.geometry else { return }
         
         // Ensure we have a material
         if geometry.materials.isEmpty {
             let material = SCNMaterial()
             geometry.materials = [material]
+            print("🎨 Created new material for: \(name)")
         }
         
         guard let material = geometry.materials.first else { return }
@@ -100,15 +187,24 @@ extension StudioObject {
         material.blendMode = .alpha
         material.transparencyMode = .aOne
         
+        // Set initial content to black
+        material.diffuse.contents = NSColor.black
+        material.emission.contents = NSColor.black
+        
         print("✅ Optimized LED wall material for video: \(name)")
     }
     
     /// Test the LED wall with a solid color (useful for debugging)
     @MainActor
     func testLEDWallWithColor(_ color: CGColor) {
-        guard type == .ledWall,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { return }
+        guard type == .ledWall else { return }
+        
+        guard let screenNode = findScreenNode(),
+              let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            print("❌ Cannot test color - screen node/material not found for: \(name)")
+            return
+        }
         
         let platformColor = NSColor(cgColor: color) ?? NSColor.red
         
@@ -124,15 +220,20 @@ extension StudioObject {
         refreshLEDWallMaterial()
     }
     
-    /// Update LED wall with camera feed content - IMPROVED VERSION
+    /// Update LED wall with camera feed content - ENHANCED VERSION
     @MainActor
     func updateCameraFeedContent(pixelBuffer: CVPixelBuffer) {
         guard type == .ledWall,
-              isDisplayingCameraFeed,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { 
-            print("❌ Cannot update camera feed - LED wall not properly configured")
-            return 
+              isDisplayingCameraFeed else {
+            print("❌ Cannot update camera feed - LED wall not properly configured: \(name)")
+            return
+        }
+        
+        guard let screenNode = findScreenNode(),
+              let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            print("❌ Cannot update camera feed - screen node/material not found for: \(name)")
+            return
         }
         
         // Convert CVPixelBuffer to NSImage for better SceneKit compatibility on macOS
@@ -140,7 +241,7 @@ extension StudioObject {
         let context = CIContext(options: [.cacheIntermediates: false])
         
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            print("❌ Failed to convert pixel buffer to CGImage")
+            print("❌ Failed to convert pixel buffer to CGImage for: \(name)")
             return
         }
         
@@ -152,21 +253,34 @@ extension StudioObject {
         material.emission.intensity = 0.8 // Bright like LED wall
         material.lightingModel = .constant // Unlit/emissive
         
+        // CRITICAL: Force SceneKit to notice the change
+        screenNode.geometry = screenNode.geometry
+        
         // Force material update
         refreshLEDWallMaterial()
         
-        print("✅ LED wall '\(name)' updated with CVPixelBuffer content via NSImage")
+        ledWallUpdateCount += 1
+        if ledWallUpdateCount % 150 == 1 {
+            print("✅ LED wall '\(name)' updated with CVPixelBuffer content (update #\(ledWallUpdateCount))")
+            print("   - Image size: \(cgImage.width)x\(cgImage.height)")
+            print("   - NSImage size: \(nsImage.size)")
+        }
     }
     
-    /// Update LED wall with camera feed CGImage - IMPROVED VERSION
+    /// Update LED wall with camera feed CGImage - ENHANCED VERSION
     @MainActor
     func updateCameraFeedContent(cgImage: CGImage) {
         guard type == .ledWall,
-              isDisplayingCameraFeed,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { 
-            print("❌ Cannot update camera feed - LED wall not properly configured")
-            return 
+              isDisplayingCameraFeed else {
+            print("❌ Cannot update camera feed - LED wall not properly configured: \(name)")
+            return
+        }
+        
+        guard let screenNode = findScreenNode(),
+              let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            print("❌ Cannot update camera feed - screen node/material not found for: \(name)")
+            return
         }
         
         // Convert CGImage to NSImage for SceneKit on macOS
@@ -178,6 +292,9 @@ extension StudioObject {
         material.emission.intensity = 0.8 // Bright like LED wall
         material.lightingModel = .constant // Unlit/emissive for glow effect
         
+        // CRITICAL: Force SceneKit to notice the change
+        screenNode.geometry = screenNode.geometry
+        
         // Force refresh to ensure SceneKit picks up the change
         refreshLEDWallMaterial()
         
@@ -187,8 +304,7 @@ extension StudioObject {
             print("📺 LED wall '\(name)' updated with CGImage content (update #\(ledWallUpdateCount))")
             print("   - Image size: \(cgImage.width)x\(cgImage.height)")
             print("   - NSImage size: \(nsImage.size)")
-            print("   - Material emission intensity: \(material.emission.intensity)")
-            print("   - Lighting model: \(material.lightingModel.rawValue)")
+            print("   - Material updated successfully")
         }
     }
     
@@ -196,11 +312,16 @@ extension StudioObject {
     @MainActor
     func updateCameraFeedContent(nsImage: NSImage) {
         guard type == .ledWall,
-              isDisplayingCameraFeed,
-              let geometry = node.geometry,
-              let material = geometry.materials.first else { 
-            print("❌ Cannot update camera feed - LED wall not properly configured")
-            return 
+              isDisplayingCameraFeed else {
+            print("❌ Cannot update camera feed - LED wall not properly configured: \(name)")
+            return
+        }
+        
+        guard let screenNode = findScreenNode(),
+              let geometry = screenNode.geometry,
+              let material = geometry.materials.first else {
+            print("❌ Cannot update camera feed - screen node/material not found for: \(name)")
+            return
         }
         
         // Direct NSImage assignment - most reliable on macOS
@@ -213,6 +334,9 @@ extension StudioObject {
         material.isDoubleSided = true
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
+        
+        // CRITICAL: Force SceneKit to notice the change
+        screenNode.geometry = screenNode.geometry
         
         // Force refresh
         refreshLEDWallMaterial()
