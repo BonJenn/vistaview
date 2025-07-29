@@ -12,14 +12,14 @@ extension StudioObject {
 
     /// Force an immediate material refresh for LED walls
     /// This is useful when you need to ensure SceneKit picks up material changes
+    @MainActor
     func refreshLEDWallMaterial() {
         guard type == .ledWall,
               let geometry = node.geometry,
               let material = geometry.materials.first else { return }
         
-        // Force SceneKit to refresh by touching the transform
-        material.diffuse.contentsTransform = SCNMatrix4Identity
-        material.emission.contentsTransform = SCNMatrix4Identity
+        // Force SceneKit to refresh the material by accessing rendering properties
+        geometry.firstMaterial?.isDoubleSided = true
         
         // Ensure optimal settings for video content
         material.diffuse.wrapS = .clamp
@@ -31,6 +31,10 @@ extension StudioObject {
         material.emission.wrapT = .clamp
         material.emission.magnificationFilter = .linear
         material.emission.minificationFilter = .linear
+        
+        // Force a render update
+        material.diffuse.contentsTransform = SCNMatrix4Identity
+        material.emission.contentsTransform = SCNMatrix4Identity
     }
     
     /// Debug information about the LED wall's current material state
@@ -56,6 +60,7 @@ extension StudioObject {
     }
     
     /// Ensure LED wall material is optimally configured for video content
+    @MainActor
     func optimizeLEDWallForVideo() {
         guard type == .ledWall,
               let geometry = node.geometry else { return }
@@ -68,9 +73,9 @@ extension StudioObject {
         
         guard let material = geometry.materials.first else { return }
         
-        // Configure for optimal video display
-        material.lightingModel = .physicallyBased
-        material.isDoubleSided = true
+        // Configure for optimal video display on macOS
+        material.lightingModel = .constant // Unlit for LED-like appearance
+        material.isDoubleSided = true // Show on both sides
         
         // Set up texture filtering for smooth video
         material.diffuse.magnificationFilter = .linear
@@ -78,40 +83,49 @@ extension StudioObject {
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
         
-        // Configure emission properties for LED-like appearance
+        // Configure emission properties for LED-like brightness
         material.emission.magnificationFilter = .linear
         material.emission.minificationFilter = .linear
         material.emission.wrapS = .clamp
         material.emission.wrapT = .clamp
+        material.emission.intensity = 0.8 // Bright like real LED wall
         
         // Disable unnecessary properties for better performance
         material.ambient.contents = nil
         material.specular.contents = nil
         material.reflective.contents = nil
+        material.normal.contents = nil
+        
+        // Enable transparency handling if needed
+        material.blendMode = .alpha
+        material.transparencyMode = .aOne
         
         print("✅ Optimized LED wall material for video: \(name)")
     }
     
     /// Test the LED wall with a solid color (useful for debugging)
+    @MainActor
     func testLEDWallWithColor(_ color: CGColor) {
         guard type == .ledWall,
               let geometry = node.geometry,
               let material = geometry.materials.first else { return }
         
-        #if os(macOS)
         let platformColor = NSColor(cgColor: color) ?? NSColor.red
-        #else
-        let platformColor = UIColor(cgColor: color) ?? UIColor.red
-        #endif
         
+        // Apply test color
         material.diffuse.contents = platformColor
         material.emission.contents = platformColor
         material.emission.intensity = 0.5
+        material.lightingModel = .constant
         
         print("🎨 Applied test color to LED wall: \(name)")
+        
+        // Force refresh
+        refreshLEDWallMaterial()
     }
     
-    /// Update LED wall with camera feed content
+    /// Update LED wall with camera feed content - IMPROVED VERSION
+    @MainActor
     func updateCameraFeedContent(pixelBuffer: CVPixelBuffer) {
         guard type == .ledWall,
               isDisplayingCameraFeed,
@@ -121,37 +135,31 @@ extension StudioObject {
             return 
         }
         
-        print("🎬 Updating LED wall '\(name)' with pixel buffer content")
-        
-        // Convert pixel buffer to texture content
-        #if os(macOS)
-        // On macOS, we can use the CVPixelBuffer directly
-        material.diffuse.contents = pixelBuffer
-        material.emission.contents = pixelBuffer
-        material.emission.intensity = 0.6 // Make it brighter like a real LED wall
-        
-        // Ensure the material is set to unlit so it glows
-        material.lightingModel = .constant
-        #else
-        // On iOS, convert to UIImage if needed
+        // Convert CVPixelBuffer to NSImage for better SceneKit compatibility on macOS
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-            let uiImage = UIImage(cgImage: cgImage)
-            material.diffuse.contents = uiImage
-            material.emission.contents = uiImage
-            material.emission.intensity = 0.6
-            material.lightingModel = .constant
+        let context = CIContext(options: [.cacheIntermediates: false])
+        
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            print("❌ Failed to convert pixel buffer to CGImage")
+            return
         }
-        #endif
+        
+        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        
+        // Update material with NSImage
+        material.diffuse.contents = nsImage
+        material.emission.contents = nsImage
+        material.emission.intensity = 0.8 // Bright like LED wall
+        material.lightingModel = .constant // Unlit/emissive
         
         // Force material update
         refreshLEDWallMaterial()
         
-        print("✅ LED wall material updated with camera content")
+        print("✅ LED wall '\(name)' updated with CVPixelBuffer content via NSImage")
     }
     
-    /// Update LED wall with camera feed CGImage
+    /// Update LED wall with camera feed CGImage - IMPROVED VERSION
+    @MainActor
     func updateCameraFeedContent(cgImage: CGImage) {
         guard type == .ledWall,
               isDisplayingCameraFeed,
@@ -161,20 +169,16 @@ extension StudioObject {
             return 
         }
         
-        #if os(macOS)
+        // Convert CGImage to NSImage for SceneKit on macOS
         let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        
+        // Update material properties
         material.diffuse.contents = nsImage
         material.emission.contents = nsImage
-        #else
-        let uiImage = UIImage(cgImage: cgImage)
-        material.diffuse.contents = uiImage
-        material.emission.contents = uiImage
-        #endif
+        material.emission.intensity = 0.8 // Bright like LED wall
+        material.lightingModel = .constant // Unlit/emissive for glow effect
         
-        material.emission.intensity = 0.6 // Bright like LED wall
-        material.lightingModel = .constant // Unlit/emissive
-        
-        // Force refresh
+        // Force refresh to ensure SceneKit picks up the change
         refreshLEDWallMaterial()
         
         // Debug log occasionally
@@ -182,7 +186,37 @@ extension StudioObject {
         if ledWallUpdateCount % 150 == 1 {
             print("📺 LED wall '\(name)' updated with CGImage content (update #\(ledWallUpdateCount))")
             print("   - Image size: \(cgImage.width)x\(cgImage.height)")
+            print("   - NSImage size: \(nsImage.size)")
             print("   - Material emission intensity: \(material.emission.intensity)")
+            print("   - Lighting model: \(material.lightingModel.rawValue)")
         }
+    }
+    
+    /// Update LED wall with NSImage directly (most compatible for SceneKit on macOS)
+    @MainActor
+    func updateCameraFeedContent(nsImage: NSImage) {
+        guard type == .ledWall,
+              isDisplayingCameraFeed,
+              let geometry = node.geometry,
+              let material = geometry.materials.first else { 
+            print("❌ Cannot update camera feed - LED wall not properly configured")
+            return 
+        }
+        
+        // Direct NSImage assignment - most reliable on macOS
+        material.diffuse.contents = nsImage
+        material.emission.contents = nsImage
+        material.emission.intensity = 0.8 // Bright like LED wall
+        material.lightingModel = .constant // Unlit/emissive
+        
+        // Ensure material is set up for video
+        material.isDoubleSided = true
+        material.diffuse.wrapS = .clamp
+        material.diffuse.wrapT = .clamp
+        
+        // Force refresh
+        refreshLEDWallMaterial()
+        
+        print("📺 LED wall '\(name)' updated with NSImage content: \(nsImage.size)")
     }
 }

@@ -187,12 +187,16 @@ struct ContentView: View {
     // MARK: - Actions
     
     private func switchToVirtualMode() {
+        print("ContentView: Switching to Virtual Studio mode")
         productionMode = .virtual
+        productionManager.switchToVirtualMode()
         productionManager.saveCurrentStudioState()
     }
     
     private func switchToLiveMode() {
+        print("ContentView: Switching to Live Production mode") 
         productionMode = .live
+        productionManager.switchToLiveMode()
         productionManager.syncVirtualToLive()
     }
     
@@ -313,7 +317,7 @@ struct LeftPanelView: View {
             Group {
                 switch selectedTab {
                 case 0:
-                    CameraSourceView(viewModel: productionManager.streamingViewModel)
+                    CameraSourceView(viewModel: productionManager.streamingViewModel, productionManager: productionManager)
                 case 1:
                     VirtualSourceView(productionManager: productionManager)
                 case 2:
@@ -321,7 +325,7 @@ struct LeftPanelView: View {
                 case 3:
                     EffectsView()
                 default:
-                    CameraSourceView(viewModel: productionManager.streamingViewModel)
+                    CameraSourceView(viewModel: productionManager.streamingViewModel, productionManager: productionManager)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -354,17 +358,37 @@ struct CenterPanelView: View {
 struct MainPreviewView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @State private var isInitializing = true
+    @State private var showDebugFeed = false // Toggle for testing
     
     var body: some View {
         VStack {
             HStack {
                 Text("Output Preview")
                     .font(.headline)
-                    .foregroundColor(.white)
                 Spacer()
+                
+                // Debug toggle for testing camera feeds
+                Button("Debug Feed") {
+                    showDebugFeed.toggle()
+                }
+                .font(.caption)
+                .foregroundColor(.blue)
                 
                 // Enhanced status indicators with animations
                 HStack(spacing: 16) {
+                    // Camera status - NOW USING SHARED MANAGER
+                    if let selectedFeed = productionManager.cameraFeedManager.selectedFeedForLiveProduction {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(selectedFeed.connectionStatus.color)
+                                .frame(width: 8, height: 8)
+                            
+                            Text(selectedFeed.device.displayName)
+                                .font(.caption)
+                                .foregroundColor(selectedFeed.connectionStatus.color)
+                        }
+                    }
+                    
                     // Virtual Studio Status with animation
                     if productionManager.isVirtualStudioActive {
                         HStack(spacing: 6) {
@@ -405,13 +429,20 @@ struct MainPreviewView: View {
             
             // Main video output with enhanced loading state
             ZStack {
-                CameraPreview(viewModel: productionManager.streamingViewModel)
-                    .background(Color.black)
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .opacity(productionManager.streamingViewModel.cameraSetup ? 1.0 : 0.3)
-                    .animation(.easeInOut(duration: 0.5), value: productionManager.streamingViewModel.cameraSetup)
+                if showDebugFeed || productionManager.cameraFeedManager.selectedFeedForLiveProduction != nil {
+                    // Show the camera feed directly
+                    DirectCameraFeedPreview(cameraFeedManager: productionManager.cameraFeedManager)
+                        .aspectRatio(16/9, contentMode: .fit)
+                } else {
+                    // Original HaishinKit preview
+                    CameraPreview(viewModel: productionManager.streamingViewModel)
+                        .background(Color.black)
+                        .aspectRatio(16/9, contentMode: .fit)
+                        .opacity(productionManager.streamingViewModel.cameraSetup ? 1.0 : 0.3)
+                        .animation(.easeInOut(duration: 0.5), value: productionManager.streamingViewModel.cameraSetup)
+                }
                 
-                if !productionManager.streamingViewModel.cameraSetup {
+                if !productionManager.streamingViewModel.cameraSetup && !showDebugFeed && productionManager.cameraFeedManager.selectedFeedForLiveProduction == nil {
                     VStack(spacing: 16) {
                         // Skeleton loading animation
                         VStack(spacing: 8) {
@@ -428,20 +459,26 @@ struct MainPreviewView: View {
                         
                         Spacer()
                         
-                        // Enhanced loading indicator
+                        // UPDATED: Better messaging for camera selection
                         VStack(spacing: 12) {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.2)
+                            Image(systemName: "camera")
+                                .font(.system(size: 48))
+                                .foregroundColor(.white.opacity(0.7))
                             
-                            Text("Initializing Camera...")
+                            Text("No Camera Selected")
                                 .font(.headline)
                                 .foregroundColor(.white)
                             
-                            Text(productionManager.streamingViewModel.statusMessage)
+                            Text("Choose a camera from the sidebar to start your preview")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
                                 .multilineTextAlignment(.center)
+                            
+                            Text("Click 'Camera' tab → Select a device → Click 'START' → Click the feed")
+                                .font(.caption2)
+                                .foregroundColor(.blue.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
                         }
                         .padding(.vertical, 20)
                         .padding(.horizontal, 32)
@@ -467,13 +504,115 @@ struct MainPreviewView: View {
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
         .padding()
         .onAppear {
-            // Simulate initialization delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                withAnimation(.easeOut(duration: 0.5)) {
-                    isInitializing = false
+            print("Preview ready - using shared camera feed manager")
+        }
+    }
+}
+
+struct DirectCameraFeedPreview: View {
+    @ObservedObject var cameraFeedManager: CameraFeedManager
+    @State private var refreshTrigger = UUID() // Force refresh trigger
+    
+    var body: some View {
+        Group {
+            if let selectedFeed = cameraFeedManager.selectedFeedForLiveProduction {
+                // Show the selected camera feed with live updates
+                LiveCameraFeedView(feed: selectedFeed)
+                    .id(refreshTrigger) // Force refresh when trigger changes
+                    .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
+                        // Update trigger to force refresh at ~30fps
+                        if selectedFeed.previewImage != nil {
+                            refreshTrigger = UUID()
+                        }
+                    }
+                    .onAppear {
+                        print("DirectCameraFeedPreview: Selected feed appeared - \(selectedFeed.device.displayName)")
+                    }
+            } else if !cameraFeedManager.activeFeeds.isEmpty {
+                // Show available feeds to select from
+                availableFeedsView
+            } else {
+                // Show camera selection instructions
+                noCameraView
+            }
+        }
+        .background(Color.black)
+        .clipped()
+        .onChange(of: cameraFeedManager.selectedFeedForLiveProduction?.id) { _, newValue in
+            // Immediately update when selection changes
+            print("DirectCameraFeedPreview: Selection changed to: \(newValue?.uuidString ?? "nil")")
+            refreshTrigger = UUID()
+        }
+    }
+    
+    private var availableFeedsView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "camera.on.rectangle")
+                .font(.system(size: 48))
+                .foregroundColor(.white.opacity(0.7))
+            
+            Text("Camera Feeds Available")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Text("Select a camera feed from the sidebar to display it here")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+            
+            // Show available feeds as small previews
+            HStack(spacing: 8) {
+                ForEach(cameraFeedManager.activeFeeds.prefix(3)) { feed in
+                    VStack {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 60, height: 45)
+                            .overlay(
+                                VStack {
+                                    Image(systemName: feed.device.icon)
+                                        .font(.caption)
+                                    Text(feed.device.displayName)
+                                        .font(.caption2)
+                                        .lineLimit(1)
+                                }
+                                .foregroundColor(.white.opacity(0.8))
+                            )
+                            .cornerRadius(4)
+                        
+                        Circle()
+                            .fill(feed.connectionStatus.color)
+                            .frame(width: 4, height: 4)
+                    }
                 }
             }
         }
+        .padding()
+    }
+    
+    private var noCameraView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "camera")
+                .font(.largeTitle)
+                .foregroundColor(.white.opacity(0.7))
+            
+            Text("No Camera Selected")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Text("Choose a camera from the sidebar to start your preview")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+                .multilineTextAlignment(.center)
+            
+            VStack(spacing: 4) {
+                Text("1. Click 'Camera' tab in sidebar")
+                Text("2. Click 'START' on a camera device")
+                Text("3. Click the camera feed to select it")
+            }
+            .font(.caption2)
+            .foregroundColor(.blue.opacity(0.8))
+        }
+        .padding()
     }
 }
 
@@ -813,16 +952,13 @@ struct VirtualSourceView: View {
                     Image(systemName: "cube.transparent")
                         .font(.largeTitle)
                         .foregroundColor(.secondary)
-                    
                     Text("No Virtual Cameras")
                         .font(.headline)
                         .foregroundColor(.secondary)
-                    
                     Text("Add cameras in Virtual Studio mode")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
-                    
                     Spacer()
                 }
             } else {
@@ -842,8 +978,8 @@ struct VirtualSourceView: View {
                                     .overlay(
                                         VStack {
                                             Image(systemName: "video.3d")
-                                            Text(camera.name)
-                                                .font(.caption2)
+                                        Text(camera.name)
+                                            .font(.caption2)
                                         }
                                         .foregroundColor(.blue)
                                     )
@@ -973,21 +1109,15 @@ struct StudioSelectorSheet: View {
     }
 }
 
-// MARK: - Keep all your existing views
+// MARK: - Camera Source View
 
 struct CameraSourceView: View {
     let viewModel: StreamingViewModel
+    @ObservedObject var productionManager: UnifiedProductionManager
     
-    // Add camera feed manager integration
-    @StateObject private var cameraDeviceManager = CameraDeviceManager()
-    @StateObject private var cameraFeedManager: CameraFeedManager
-    
-    init(viewModel: StreamingViewModel) {
+    init(viewModel: StreamingViewModel, productionManager: UnifiedProductionManager) {
         self.viewModel = viewModel
-        let deviceManager = CameraDeviceManager()
-        let feedManager = CameraFeedManager(cameraDeviceManager: deviceManager)
-        self._cameraDeviceManager = StateObject(wrappedValue: deviceManager)
-        self._cameraFeedManager = StateObject(wrappedValue: feedManager)
+        self.productionManager = productionManager
     }
     
     var body: some View {
@@ -1008,8 +1138,59 @@ struct CameraSourceView: View {
                 .cornerRadius(4)
             }
             
+            // Debug info with real-time updates
+            if !productionManager.cameraFeedManager.activeFeeds.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Debug Info:")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                        
+                        Spacer()
+                        
+                        // Live update indicator
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 6, height: 6)
+                            .opacity(productionManager.cameraFeedManager.activeFeeds.contains { $0.previewImage != nil } ? 1.0 : 0.3)
+                    }
+                    
+                    ForEach(productionManager.cameraFeedManager.activeFeeds) { feed in
+                        HStack {
+                            Text("• \(feed.device.displayName):")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                            Text("\(feed.connectionStatus.displayText)")
+                                .font(.caption2)
+                                .foregroundColor(feed.connectionStatus.color)
+                            if feed.previewImage != nil {
+                                Text("📷")
+                                    .font(.caption2)
+                            }
+                            Text("(\(feed.frameCount))")
+                                .font(.caption2)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    
+                    if let selectedFeed = productionManager.cameraFeedManager.selectedFeedForLiveProduction {
+                        Text("Selected: \(selectedFeed.device.displayName)")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+                }
+                .padding(8)
+                .background(Color.black.opacity(0.1))
+                .cornerRadius(6)
+                .onReceive(Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()) { _ in
+                    // Force refresh every second to show live updates
+                    productionManager.cameraFeedManager.objectWillChange.send()
+                }
+            }
+            
             // Available camera devices
-            if cameraFeedManager.availableDevices.isEmpty {
+            if productionManager.cameraFeedManager.availableDevices.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "camera.slash")
                         .font(.largeTitle)
@@ -1018,10 +1199,10 @@ struct CameraSourceView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Button("Detect Cameras") {
-                        refreshCameras()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                            refreshCameras()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 20)
@@ -1030,54 +1211,207 @@ struct CameraSourceView: View {
                     GridItem(.flexible()),
                     GridItem(.flexible())
                 ], spacing: 8) {
-                    ForEach(cameraFeedManager.availableDevices, id: \.id) { device in
+                    ForEach(productionManager.cameraFeedManager.availableDevices, id: \.id) { device in
                         cameraDeviceButton(device)
                     }
                 }
             }
             
             // Active camera feeds
-            if !cameraFeedManager.activeFeeds.isEmpty {
+            if !productionManager.cameraFeedManager.activeFeeds.isEmpty {
                 Divider()
                 
-                Text("Active Feeds")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Text("Active Feeds")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                    
+                    // Add refresh indicator
+                    Text("\(productionManager.cameraFeedManager.activeFeeds.count)")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.2))
+                        .cornerRadius(4)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
                 LazyVGrid(columns: [
                     GridItem(.flexible()),
                     GridItem(.flexible())
                 ], spacing: 8) {
-                    ForEach(cameraFeedManager.activeFeeds) { feed in
+                    ForEach(productionManager.cameraFeedManager.activeFeeds) { feed in
                         activeFeedButton(feed)
+                            .id("active-feed-\(feed.id)-\(feed.frameCount)") // Force refresh
                     }
                 }
+                .id("active-feeds-grid-\(productionManager.cameraFeedManager.activeFeeds.count)") // Force refresh when count changes
             }
             
             Spacer()
         }
         .padding()
         .onAppear {
+            // Only discover available devices without starting them
             Task {
-                await discoverAndStartCameras()
+                await discoverCamerasOnly()
             }
         }
     }
     
+    private func activeFeedButton(_ feed: CameraFeed) -> some View {
+        let isSelectedForLive = productionManager.cameraFeedManager.selectedFeedForLiveProduction?.id == feed.id
+        
+        return Button(action: {
+            // Select this feed for live production
+            Task {
+                print("User clicked feed: \(feed.device.displayName)")
+                
+                // Select the feed
+                await productionManager.cameraFeedManager.selectFeedForLiveProduction(feed)
+                print("Selected feed for live production: \(feed.device.displayName)")
+                
+                // CRITICAL: Force immediate UI updates
+                await MainActor.run {
+                    // Force both objects to trigger UI updates
+                    feed.objectWillChange.send()
+                    productionManager.cameraFeedManager.objectWillChange.send()
+                    productionManager.objectWillChange.send()
+                    
+                    print("Forced UI updates - main preview should now show: \(feed.device.displayName)")
+                }
+                
+                // Also trigger the state refresh
+                await productionManager.refreshCameraFeedStateForMode()
+            }
+        }) {
+            VStack(spacing: 4) {
+                Group {
+                    if let previewImage = feed.previewImage {
+                        // Show the live camera feed
+                        Image(decorative: previewImage, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(16/9, contentMode: .fill)
+                            .frame(height: 60)
+                            .clipped()
+                            .id("sidebar-preview-\(feed.id)-\(feed.frameCount)") // Force refresh
+                            .overlay(
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Circle()
+                                            .fill(Color.green)
+                                            .frame(width: 6, height: 6)
+                                        Text(isSelectedForLive ? "MAIN" : "LIVE")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                        Spacer()
+                                    }
+                                    .padding(4)
+                                    .background(Color.black.opacity(0.7))
+                                }
+                            )
+                    } else {
+                        Rectangle()
+                            .fill(Color.black)
+                            .frame(height: 60)
+                            .overlay(
+                                VStack(spacing: 2) {
+                                    if feed.connectionStatus == .connecting {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(0.7)
+                                        Text("CONNECTING...")
+                                            .font(.caption2)
+                                    } else {
+                                        Image(systemName: "camera.fill")
+                                        Text("STARTING...")
+                                            .font(.caption2)
+                                    }
+                                }
+                                .foregroundColor(.white)
+                            )
+                            .id("sidebar-connecting-\(feed.id)-\(feed.frameCount)") // Force refresh
+                    }
+                }
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelectedForLive ? Color.green : Color.clear, lineWidth: 2)
+                )
+                
+                VStack(spacing: 1) {
+                    Text(feed.device.displayName)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundColor(.primary)
+                    
+                    if isSelectedForLive {
+                        Text("MAIN OUTPUT")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
+                    } else {
+                        Text("Tap to use")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
     private func cameraDeviceButton(_ device: CameraDevice) -> some View {
-        let hasActiveFeed = cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
+        let hasActiveFeed = productionManager.cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
         
         return Button(action: {
             if hasActiveFeed {
                 // Stop the feed
-                if let feed = cameraFeedManager.activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
-                    cameraFeedManager.stopFeed(feed)
+                if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
+                    productionManager.cameraFeedManager.stopFeed(feed)
+                    
+                    // Force UI update after stopping
+                    productionManager.cameraFeedManager.objectWillChange.send()
+                    productionManager.objectWillChange.send()
                 }
             } else {
-                // Start the feed
+                // Start the feed - USER INITIATED
                 Task {
-                    await cameraFeedManager.startFeed(for: device)
+                    print("User clicked START for: \(device.displayName)")
+                    
+                    if let feed = await productionManager.cameraFeedManager.startFeed(for: device) {
+                        print("Started camera feed: \(feed.device.displayName)")
+                        
+                        // CRITICAL: Force immediate UI updates so feed appears in Active Feeds
+                        await MainActor.run {
+                            feed.objectWillChange.send()
+                            productionManager.cameraFeedManager.objectWillChange.send()
+                            productionManager.objectWillChange.send()
+                            
+                            print("Forced UI updates - feed should now appear in Active Feeds section")
+                        }
+                        
+                        // Wait a moment for the feed to stabilize, then try to auto-select it if it's the only one
+                        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                        
+                        await MainActor.run {
+                            // Auto-select this feed if it's the only active feed
+                            if productionManager.cameraFeedManager.activeFeeds.count == 1 && 
+                               productionManager.cameraFeedManager.selectedFeedForLiveProduction == nil {
+                                Task {
+                                    await productionManager.cameraFeedManager.selectFeedForLiveProduction(feed)
+                                    print("Auto-selected the first camera feed for main output")
+                                }
+                            }
+                        }
+                    } else {
+                        print("Failed to start camera feed for: \(device.displayName)")
+                    }
                 }
             }
         }) {
@@ -1108,87 +1442,17 @@ struct CameraSourceView: View {
         .disabled(!device.isAvailable && !hasActiveFeed)
     }
     
-    private func activeFeedButton(_ feed: CameraFeed) -> some View {
-        Button(action: {
-            // Select this feed for live production
-            Task {
-                await cameraFeedManager.selectFeedForLiveProduction(feed)
-                print("📺 Selected feed for live production: \(feed.device.displayName)")
-            }
-        }) {
-            VStack(spacing: 4) {
-                Group {
-                    if let previewImage = feed.previewImage {
-                        Image(decorative: previewImage, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(16/9, contentMode: .fill)
-                            .frame(height: 60)
-                            .clipped()
-                            .overlay(
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        Circle()
-                                            .fill(feed.connectionStatus.color)
-                                            .frame(width: 6, height: 6)
-                                        Text("LIVE")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(.white)
-                                        Spacer()
-                                    }
-                                    .padding(4)
-                                    .background(Color.black.opacity(0.7))
-                                }
-                            )
-                    } else {
-                        Rectangle()
-                            .fill(Color.black)
-                            .frame(height: 60)
-                            .overlay(
-                                VStack(spacing: 2) {
-                                    Image(systemName: "camera.fill")
-                                    Text("STARTING...")
-                                        .font(.caption2)
-                                }
-                                .foregroundColor(.white)
-                            )
-                    }
-                }
-                .cornerRadius(6)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(cameraFeedManager.selectedFeedForLiveProduction?.id == feed.id ? Color.green : Color.clear, lineWidth: 2)
-                )
-                
-                Text(feed.device.displayName)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .foregroundColor(.primary)
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-    
     private func refreshCameras() {
         Task {
-            await cameraFeedManager.forceRefreshDevices()
+            await productionManager.cameraFeedManager.forceRefreshDevices()
         }
     }
     
-    private func discoverAndStartCameras() async {
-        // Auto-discover cameras and start feeds
-        let devices = await cameraFeedManager.getAvailableDevices()
-        print("📹 Live Production: Found \(devices.count) camera devices")
-        
-        // Auto-start the first available camera
-        if let firstCamera = devices.first(where: { $0.isAvailable }) {
-            print("🎥 Auto-starting first camera: \(firstCamera.displayName)")
-            if let feed = await cameraFeedManager.startFeed(for: firstCamera) {
-                await cameraFeedManager.selectFeedForLiveProduction(feed)
-                print("✅ Auto-selected first camera for live production")
-            }
-        }
+    private func discoverCamerasOnly() async {
+        print("Live Production: Discovering cameras (no auto-start)")
+        await productionManager.cameraFeedManager.getAvailableDevices()
+        let devices = productionManager.cameraFeedManager.availableDevices
+        print("Found \(devices.count) camera devices - waiting for user selection")
     }
 }
 
@@ -1384,5 +1648,88 @@ extension View {
                 .animation(.linear(duration: 1.5).repeatForever(autoreverses: false), value: UUID())
         )
         .clipped()
+    }
+}
+
+// MARK: - Live Camera Feed View Component
+
+struct LiveCameraFeedView: View {
+    @ObservedObject var feed: CameraFeed
+    @State private var frameUpdateTrigger = 0
+    
+    var body: some View {
+        Group {
+            if let previewImage = feed.previewImage {
+                // Show the live camera feed
+                Image(decorative: previewImage, scale: 1.0)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .background(Color.black)
+                    .id("live-feed-\(feed.id)-\(frameUpdateTrigger)") // Force updates
+                    .overlay(
+                        VStack {
+                            HStack {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                                
+                                Text("LIVE: \(feed.device.displayName)")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.green)
+                                Spacer()
+                            }
+                            .padding(8)
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(6)
+                            .padding(.top, 8)
+                            .padding(.horizontal, 8)
+                            // Changed multiplier
+                            Spacer()
+                            
+                            HStack {
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("Resolution: \(Int(previewImage.width))×\(Int(previewImage.height))")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.9))
+                                    
+                                    Text("Frame: \(feed.frameCount)")
+                                        .font(.caption2)
+                                        .foregroundColor(.green.opacity(0.8))
+                                }
+                                .padding(6)
+                                .background(Color.black.opacity(0.7))
+                                .cornerRadius(4)
+                            }
+                            .padding(.bottom, 8)
+                            .padding(.horizontal, 8)
+                        }
+                    )
+                    .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
+                        // Force UI updates at 30fps by changing the trigger
+                        frameUpdateTrigger += 1
+                    }
+            } else {
+                // Camera is connecting - show state info
+                Rectangle()
+                    .fill(Color.black)
+                    .overlay(
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
+                            
+                            Text("Connecting to \(feed.device.displayName)...")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            Text(feed.connectionStatus.displayText)
+                                .font(.caption)
+                                .foregroundColor(feed.connectionStatus.color)
+                        }
+                    )
+            }
+        }
     }
 }

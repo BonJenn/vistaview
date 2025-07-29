@@ -9,23 +9,95 @@ import SceneKit
 
 @MainActor
 final class UnifiedProductionManager: ObservableObject {
-    // Core managers
-    let studioManager: VirtualStudioManager
+    // Core Dependencies
     let streamingViewModel: StreamingViewModel
+    let studioManager: VirtualStudioManager
+    let cameraFeedManager: CameraFeedManager
     
-    // Template state
-    @Published var currentTemplate: StudioTemplate = .custom
-    
-    // Studio management state
-    @Published var currentStudioName: String = "Studio 1"
+    // Published States
+    @Published var currentStudioName: String = "Default Studio"
     @Published var hasUnsavedChanges: Bool = false
     @Published var isVirtualStudioActive: Bool = false
     
-    // SAFE: create defaults inside the body, not as default args
+    // Studio Management
+    @Published var availableStudios: [StudioConfiguration] = []
+    @Published var currentStudio: StudioConfiguration?
+    @Published var currentTemplate: StudioTemplate = .custom
+    
     init(studioManager: VirtualStudioManager? = nil,
-         streamingViewModel: StreamingViewModel? = nil) {
+         cameraFeedManager: CameraFeedManager? = nil) {
         self.studioManager = studioManager ?? VirtualStudioManager()
-        self.streamingViewModel = streamingViewModel ?? StreamingViewModel()
+        
+        // Create shared camera device manager and feed manager
+        let deviceManager = CameraDeviceManager()
+        self.cameraFeedManager = cameraFeedManager ?? CameraFeedManager(cameraDeviceManager: deviceManager)
+        
+        self.streamingViewModel = StreamingViewModel()
+        
+        // Set up bidirectional integration
+        setupIntegration()
+        
+        // Initialize with default studio
+        loadDefaultStudio()
+    }
+    
+    private func setupIntegration() {
+        // Connect camera feed manager to streaming view model
+        cameraFeedManager.setStreamingViewModel(streamingViewModel)
+        
+        print("🔗 Unified Production Manager: Integration setup complete")
+    }
+    
+    // MARK: - Mode Switching with State Management
+    
+    func switchToVirtualMode() {
+        print("🎬 Switching to Virtual Production mode...")
+        isVirtualStudioActive = true
+        
+        // Ensure camera feeds are properly managed when switching
+        Task {
+            await refreshCameraFeedStateForMode()
+        }
+    }
+    
+    func switchToLiveMode() {
+        print("📺 Switching to Live Production mode...")
+        
+        // Sync virtual studio changes to live production
+        syncVirtualToLive()
+        
+        // Ensure camera feeds are properly managed when switching
+        Task {
+            await refreshCameraFeedStateForMode()
+        }
+    }
+    
+    /// CRITICAL: Refresh camera feed state when switching modes
+    func refreshCameraFeedStateForMode() async {
+        print("🔄 Refreshing camera feed state for mode switch...")
+        
+        // Force UI updates for all active feeds
+        for feed in cameraFeedManager.activeFeeds {
+            print("   - Refreshing feed: \(feed.device.displayName)")
+            print("     - Status: \(feed.connectionStatus.displayText)")
+            print("     - Has preview: \(feed.previewImage != nil)")
+            print("     - Frame count: \(feed.frameCount)")
+            
+            // Force objectWillChange to trigger UI updates
+            feed.objectWillChange.send()
+        }
+        
+        // If there's a selected feed, ensure it's properly connected
+        if let selectedFeed = cameraFeedManager.selectedFeedForLiveProduction {
+            print("   - Selected feed: \(selectedFeed.device.displayName)")
+            print("     - Forcing UI refresh for selected feed")
+            selectedFeed.objectWillChange.send()
+        }
+        
+        // Force camera feed manager UI update
+        cameraFeedManager.objectWillChange.send()
+        
+        print("✅ Camera feed state refresh complete")
     }
     
     // MARK: - Computed Properties
@@ -38,17 +110,6 @@ final class UnifiedProductionManager: ObservableObject {
         return studioManager.studioObjects.filter { $0.type == .ledWall }
     }
     
-    var availableStudios: [StudioInfo] {
-        return [
-            StudioInfo(id: UUID(), name: "News Studio", description: "Professional news setup", icon: "tv.circle"),
-            StudioInfo(id: UUID(), name: "Talk Show", description: "Interview and discussion", icon: "person.2.circle"),
-            StudioInfo(id: UUID(), name: "Podcast", description: "Audio-first recording", icon: "mic.circle"),
-            StudioInfo(id: UUID(), name: "Concert", description: "Musical performance", icon: "music.note.house"),
-            StudioInfo(id: UUID(), name: "Product Demo", description: "Showcase products", icon: "cube.box.fill"),
-            StudioInfo(id: UUID(), name: "Gaming", description: "Gaming and streaming", icon: "gamecontroller.fill")
-        ]
-    }
-    
     // MARK: - Initialization
     
     func initialize() async {
@@ -59,7 +120,18 @@ final class UnifiedProductionManager: ObservableObject {
     
     // MARK: - Studio Management
     
-    func loadStudio(_ studio: StudioInfo) {
+    func loadDefaultStudio() {
+        currentStudioName = "Default Studio"
+        
+        // Load default studio configuration
+        let defaultStudio = StudioConfiguration(id: UUID(), name: "Default Studio", description: "Default studio setup", icon: "tv.circle")
+        currentStudio = defaultStudio
+        availableStudios.append(defaultStudio)
+        
+        hasUnsavedChanges = false
+    }
+    
+    func loadStudio(_ studio: StudioConfiguration) {
         currentStudioName = studio.name
         
         // Load based on studio type
@@ -239,7 +311,7 @@ final class UnifiedProductionManager: ObservableObject {
 
 // MARK: - Supporting Types
 
-struct StudioInfo: Identifiable {
+struct StudioConfiguration: Identifiable {
     let id: UUID
     let name: String
     let description: String

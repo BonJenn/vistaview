@@ -185,7 +185,7 @@ struct VirtualProductionView: View {
                 if newValue == .select { selectedObject = nil }
             }
             .onAppear {
-                setupInitialCameras()
+                print("🎬 Virtual Production: Ready - cameras available for user selection")
             }
             // Arrow key support for fine object positioning
             .onKeyPress(.upArrow) {
@@ -281,27 +281,12 @@ struct VirtualProductionView: View {
                     }
                     
                     if !unlocked.isEmpty {
-                        // Show confirmation for multiple objects
-                        if unlocked.count > 1 {
-                            keyboardFeedback.showFeedback("🗑️ Hold Delete to confirm deletion of \(unlocked.count) objects", color: .yellow)
-                            
-                            // Require holding delete for 1 second for multiple objects
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                // Check if delete is still being held (simplified - in real implementation you'd track key state)
-                                for obj in unlocked {
-                                    studioManager.deleteObject(obj)
-                                    selectedObjects.remove(obj.id)
-                                }
-                                keyboardFeedback.showFeedback("🗑️ Deleted \(unlocked.count) objects", color: .red)
-                            }
-                        } else {
-                            // Single object - delete immediately
-                            for obj in unlocked {
-                                studioManager.deleteObject(obj)
-                                selectedObjects.remove(obj.id)
-                            }
-                            keyboardFeedback.showFeedback("🗑️ Deleted '\(unlocked.first?.name ?? "object")'", color: .red)
+                        // Delete immediately - keep it simple
+                        for obj in unlocked {
+                            studioManager.deleteObject(obj)
+                            selectedObjects.remove(obj.id)
                         }
+                        keyboardFeedback.showFeedback("🗑️ Deleted \(unlocked.count) object(s)", color: .red)
                     }
                 } else {
                     keyboardFeedback.showFeedback("⚠️ No objects selected to delete", color: .orange)
@@ -472,33 +457,6 @@ struct VirtualProductionView: View {
         .shadow(color: .black.opacity(0.3), radius: 20)
     }
     
-    private func setupInitialCameras() {
-        Task {
-            print("🎬 Starting camera discovery...")
-            let devices = await cameraFeedManager.getAvailableDevices()
-            print("📹 Found \(devices.count) camera devices")
-            
-            // Debug: Print all found devices
-            for device in devices {
-                print("  📱 Device: \(device.displayName)")
-                print("    - Type: \(device.deviceType.rawValue)")
-                print("    - Available: \(device.isAvailable)")
-                print("    - Has capture device: \(device.captureDevice != nil)")
-            }
-            
-            // Auto-start feeds for available devices (optional)
-            for device in devices.prefix(2) { // Limit to first 2 cameras
-                if device.isAvailable {
-                    print("🎥 Auto-starting feed for: \(device.displayName)")
-                    await cameraFeedManager.startFeed(for: device)
-                }
-            }
-            
-            // Debug: Check if we have any active feeds
-            print("📺 Active feeds after startup: \(cameraFeedManager.activeFeeds.count)")
-        }
-    }
-    
     // MARK: - Camera Feed Management
     
     private func showCameraFeedModal(for ledWall: StudioObject) {
@@ -537,8 +495,13 @@ struct VirtualProductionView: View {
         print("   - Feed device: \(cameraFeed.device.displayName)")
         print("   - Feed status: \(cameraFeed.connectionStatus.displayText)")
         
-        // Create a timer to update the LED wall with live camera feed content
-        Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
+        // Optimize LED wall material for video content first
+        Task { @MainActor in
+            ledWall.optimizeLEDWallForVideo()
+        }
+        
+        // Use a more efficient update mechanism with CADisplayLink-like behavior
+        let updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
             Task { @MainActor in
                 // Check if connection is still valid
                 guard ledWall.connectedCameraFeedID == feedID,
@@ -556,10 +519,13 @@ struct VirtualProductionView: View {
                     return
                 }
                 
-                // Update LED wall with latest frame
+                // Update LED wall with latest frame - prioritize NSImage for better compatibility
                 var updated = false
                 
-                if let previewImage = activeFeed.previewImage {
+                if let nsImage = activeFeed.previewNSImage {
+                    ledWall.updateCameraFeedContent(nsImage: nsImage)
+                    updated = true
+                } else if let previewImage = activeFeed.previewImage {
                     ledWall.updateCameraFeedContent(cgImage: previewImage)
                     updated = true
                 } else if let pixelBuffer = activeFeed.currentFrame {
@@ -571,14 +537,19 @@ struct VirtualProductionView: View {
                 self.feedUpdateFrameCount += 1
                 if self.feedUpdateFrameCount % 150 == 1 { // Every ~5 seconds at 30fps
                     print("📺 LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount)")
-                    print("   - Has preview image: \(activeFeed.previewImage != nil)")
+                    print("   - Has NSImage: \(activeFeed.previewNSImage != nil)")
+                    print("   - Has CGImage: \(activeFeed.previewImage != nil)")
                     print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
                     print("   - Updated this frame: \(updated)")
                     print("   - Feed connection status: \(activeFeed.connectionStatus.displayText)")
+                    
+                    // Debug material state
+                    print("   - Material debug: \(ledWall.debugLEDWallMaterial())")
                 }
             }
         }
         
+        // Store timer reference for cleanup (you might want to add this to the class)
         print("✅ Started live feed timer for LED wall: \(ledWall.name)")
     }
     
@@ -718,6 +689,45 @@ struct VirtualProductionView: View {
     
     private func getSelectedStudioObjects() -> [StudioObject] {
         return studioManager.studioObjects.filter { selectedObjects.contains($0.id) }
+    }
+    
+    private func duplicateSelectedObjects() {
+        let selectedObjs = getSelectedStudioObjects()
+        guard !selectedObjs.isEmpty else {
+            keyboardFeedback.showFeedback("⚠️ No objects selected to duplicate", color: .orange)
+            return
+        }
+        
+        var newSelection: Set<UUID> = []
+        
+        for object in selectedObjs {
+            let offset: Float = 2.0
+            let newPosition = SCNVector3(
+                object.position.x + CGFloat(offset),
+                object.position.y,
+                object.position.z + CGFloat(offset)
+            )
+            
+            let duplicate = StudioObject(name: "\(object.name) Copy", type: object.type, position: newPosition)
+            duplicate.rotation = object.rotation
+            duplicate.scale = object.scale
+            
+            if let geometry = object.node.geometry?.copy() as? SCNGeometry {
+                duplicate.node.geometry = geometry
+                if let materials = object.node.geometry?.materials {
+                    duplicate.node.geometry?.materials = materials.map { $0.copy() as! SCNMaterial }
+                }
+            }
+            
+            studioManager.studioObjects.append(duplicate)
+            studioManager.scene.rootNode.addChildNode(duplicate.node)
+            duplicate.setupHighlightAfterGeometry()
+            
+            newSelection.insert(duplicate.id)
+        }
+        
+        selectedObjects = newSelection
+        keyboardFeedback.showFeedback("📋 Duplicated \(selectedObjs.count) object(s)", color: .green)
     }
     
     // MARK: - Actions
@@ -868,6 +878,45 @@ struct VirtualProductionView: View {
             Divider()
                 .padding(.vertical, 8)
             
+            // UPDATED: Camera discovery guidance for Virtual Production
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Camera Management:")
+                    .font(.caption.weight(.semibold))
+                
+                if cameraFeedManager.availableDevices.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Click 'Discover Cameras' to find devices")
+                        Text("Connect feeds to LED walls for content")
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.blue.opacity(0.8))
+                    
+                    Button("Discover Cameras") {
+                        discoverCamerasForVirtual()
+                    }
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.2))
+                    .foregroundColor(.blue)
+                    .cornerRadius(4)
+                } else {
+                    Text("✅ \(cameraFeedManager.availableDevices.count) camera(s) available")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                    
+                    if cameraFeedManager.activeFeeds.count > 0 {
+                        Text("📺 \(cameraFeedManager.activeFeeds.count) feed(s) active")
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            .padding(.horizontal)
+            
+            Divider()
+                .padding(.vertical, 8)
+            
             // Keyboard shortcuts info
             VStack(alignment: .leading, spacing: 2) {
                 Text("Shortcuts:")
@@ -923,10 +972,98 @@ struct VirtualProductionView: View {
             
             Spacer()
             
-            Button("Refresh Cameras") {
-                refreshCameras()
+            Button("Debug Cameras") {
+                debugCameras()
             }
             .padding()
+            
+            // Add camera test button
+            Button("Test Camera Access") {
+                Task {
+                    await CameraDebugHelper.testSimpleCameraCapture()
+                }
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.blue)
+            
+            // Add camera debug view button
+            Button("Open Camera Debug") {
+                let debugWindow = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                    styleMask: [.titled, .closable, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                debugWindow.title = "Camera Debug Console"
+                debugWindow.contentView = NSHostingView(rootView: CameraDebugView())
+                debugWindow.center()
+                debugWindow.makeKeyAndOrderFront(nil)
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.purple)
+            
+            // Add simple camera test button
+            Button("Simple Camera Test") {
+                let testWindow = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
+                    styleMask: [.titled, .closable, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                testWindow.title = "Simple Camera Test"
+                testWindow.contentView = NSHostingView(rootView: SimpleCameraTestView())
+                testWindow.center()
+                testWindow.makeKeyAndOrderFront(nil)
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.green)
+            
+            // Add full diagnostic button
+            Button("Run Full Diagnostic") {
+                Task {
+                    await CameraSessionDiagnostic.runFullDiagnostic()
+                }
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.red)
+            
+            // Add advanced camera debug
+            Button("Advanced Debug") {
+                let debugWindow = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                    styleMask: [.titled, .closable, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                debugWindow.title = "Advanced Camera Debug"
+                debugWindow.contentView = NSHostingView(rootView: AdvancedCameraDebugView())
+                debugWindow.center()
+                debugWindow.makeKeyAndOrderFront(nil)
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.purple)
+            
+            // Add state monitor
+            Button("State Monitor") {
+                let monitorWindow = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+                    styleMask: [.titled, .closable, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                monitorWindow.title = "Camera State Monitor"
+                monitorWindow.contentView = NSHostingView(rootView: CameraStateMonitorView(cameraFeedManager: cameraFeedManager))
+                monitorWindow.center()
+                monitorWindow.makeKeyAndOrderFront(nil)
+            }
+            .padding(.horizontal)
+            .font(.caption)
+            .foregroundColor(.cyan)
         }
         .background(.regularMaterial)
     }
@@ -1151,6 +1288,23 @@ struct VirtualProductionView: View {
         if transformController.isDistanceScaling {
             // Update scaling based on drag position
             transformController.updateDistanceBasedScaling(currentMousePos: position)
+        }
+    }
+    
+    // MARK: - Camera Management (Updated)
+    
+    // NEW: Manual camera discovery - only discover devices, don't start feeds
+    private func discoverCamerasForVirtual() {
+        Task {
+            print("🎬 Virtual Production: Discovering available cameras...")
+            await cameraFeedManager.getAvailableDevices()
+            let devices = cameraFeedManager.availableDevices
+            print("📹 Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
+            
+            // Just log what's available - don't auto-start anything
+            for device in devices {
+                print("  📱 Available: \(device.displayName) (\(device.deviceType.rawValue))")
+            }
         }
     }
 }

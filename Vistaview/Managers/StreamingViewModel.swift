@@ -42,9 +42,32 @@ class StreamingViewModel: ObservableObject {
         #endif
     }
     
+    func setupCameraWithDevice(_ videoDevice: AVCaptureDevice) async {
+        statusMessage = "Setting up selected camera..."
+        print("🎥 Setting up camera with specific device: \(videoDevice.localizedName)")
+        
+        do {
+            print("✅ Using selected camera: \(videoDevice.localizedName)")
+            statusMessage = "Connecting to: \(videoDevice.localizedName)"
+            
+            // Attach camera to mixer - this should work with the device directly
+            print("📹 Attaching selected camera to mixer...")
+            try await mixer.attachVideo(videoDevice)
+            
+            cameraSetup = true
+            statusMessage = "✅ Camera ready: \(videoDevice.localizedName)"
+            print("✅ Camera setup successful with selected device!")
+            
+        } catch {
+            statusMessage = "❌ Camera error: \(error.localizedDescription)"
+            print("❌ Camera setup error with selected device:", error)
+            cameraSetup = false
+        }
+    }
+    
     func setupCamera() async {
         statusMessage = "Setting up camera..."
-        print("🎥 Starting camera setup...")
+        print("🎥 Starting automatic camera setup...")
         
         do {
             // Configure mixer first
@@ -168,6 +191,31 @@ class StreamingViewModel: ObservableObject {
             print("❌ Stop streaming error:", error)
             isPublishing = false
         }
+    }
+    
+    // Add a new method to reset the mixer and use a specific device
+    func resetAndSetupWithDevice(_ videoDevice: AVCaptureDevice) async {
+        print("🔄 Resetting StreamingViewModel to use device: \(videoDevice.localizedName)")
+        
+        // Stop any existing streaming
+        if isPublishing {
+            await stop()
+        }
+        
+        // Reset the mixer
+        await mixer.setFrameRate(30)
+        await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
+        
+        // Re-add stream as output
+        do {
+            try await mixer.addOutput(stream)
+            print("✅ Re-added stream to mixer")
+        } catch {
+            print("❌ Error re-adding stream to mixer: \(error)")
+        }
+        
+        // Now setup with the specific device
+        await setupCameraWithDevice(videoDevice)
     }
 }
 

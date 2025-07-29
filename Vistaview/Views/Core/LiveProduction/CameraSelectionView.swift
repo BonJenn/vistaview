@@ -125,10 +125,11 @@ struct CameraSelectionView: View {
             )
         }
         .onAppear {
-            // Automatically discover devices when view appears
-            Task {
-                await cameraFeedManager.getAvailableDevices()
-            }
+            // UPDATED: Only discover devices when explicitly requested, don't auto-start
+            // Task {
+            //     await cameraFeedManager.getAvailableDevices()
+            // }
+            print("📹 Camera selection view ready - waiting for user to select camera")
         }
     }
     
@@ -185,65 +186,9 @@ struct CameraSelectionView: View {
     }
     
     private func cameraPreviewView(_ feed: CameraFeed) -> some View {
-        Group {
-            if let previewImage = feed.previewImage {
-                Image(decorative: previewImage, scale: 1.0)
-                    .resizable()
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .frame(maxHeight: 200)
-                    .background(Color.black)
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.green, lineWidth: 2)
-                    )
-            } else {
-                Rectangle()
-                    .fill(Color.black)
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .frame(maxHeight: 200)
-                    .overlay(
-                        Group {
-                            switch feed.connectionStatus {
-                            case .connecting:
-                                VStack(spacing: spacing2) {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    
-                                    Text("Connecting to camera...")
-                                        .font(.system(.caption, design: .default, weight: .medium))
-                                        .foregroundColor(.white)
-                                }
-                            case .error(let message):
-                                VStack(spacing: spacing2) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(.title, design: .default, weight: .medium))
-                                        .foregroundColor(.orange)
-                                    
-                                    Text("Camera Error")
-                                        .font(.system(.callout, design: .default, weight: .medium))
-                                        .foregroundColor(.white)
-                                    
-                                    Text(message)
-                                        .font(.system(.caption, design: .default, weight: .regular))
-                                        .foregroundColor(.secondary)
-                                        .multilineTextAlignment(.center)
-                                }
-                            default:
-                                VStack(spacing: spacing2) {
-                                    Image(systemName: "camera.fill")
-                                        .font(.system(.title, design: .default, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                    
-                                    Text("No Preview")
-                                        .font(.system(.callout, design: .default, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    )
-                    .cornerRadius(8)
-            }
+        VStack {
+            // Use the specialized live preview view for better performance
+            LiveCameraPreviewView(cameraFeed: feed, maxHeight: 200)
         }
     }
     

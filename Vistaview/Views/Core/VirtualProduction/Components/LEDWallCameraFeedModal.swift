@@ -305,7 +305,20 @@ struct LEDWallCameraFeedModal: View {
             HStack(spacing: spacing3) {
                 // Feed preview thumbnail
                 Group {
-                    if let previewImage = feed.previewImage {
+                    if let nsImage = feed.previewNSImage {
+                        // Use LiveNSImageView wrapper for better live updates
+                        LiveNSImageView(nsImage: nsImage)
+                            .aspectRatio(16/9, contentMode: .fill)
+                            .frame(width: 80, height: 45)
+                            .clipped()
+                            .cornerRadius(6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.green, lineWidth: 1)
+                            )
+                            .id("thumbnail-\(feed.frameCount)") // Force updates
+                    } else if let previewImage = feed.previewImage {
+                        // Fallback to CGImage with forced updates
                         Image(decorative: previewImage, scale: 1.0)
                             .resizable()
                             .aspectRatio(16/9, contentMode: .fill)
@@ -316,19 +329,30 @@ struct LEDWallCameraFeedModal: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.green, lineWidth: 1)
                             )
+                            .id("thumbnail-cgimage-\(feed.frameCount)") // Force updates
                     } else {
                         Rectangle()
                             .fill(Color.black)
                             .frame(width: 80, height: 45)
                             .overlay(
                                 VStack(spacing: 2) {
-                                    Image(systemName: "camera.fill")
-                                        .font(.system(.callout, design: .default, weight: .medium))
-                                        .foregroundColor(.white)
-                                    
-                                    Text("No Preview")
-                                        .font(.system(.caption2, design: .default, weight: .medium))
-                                        .foregroundColor(.white)
+                                    if feed.connectionStatus == .connected {
+                                        ProgressView()
+                                            .scaleEffect(0.5)
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .green))
+                                        
+                                        Text("Loading...")
+                                            .font(.system(.caption2, design: .default, weight: .medium))
+                                            .foregroundColor(.green)
+                                    } else {
+                                        Image(systemName: "camera.fill")
+                                            .font(.system(.callout, design: .default, weight: .medium))
+                                            .foregroundColor(.white)
+                                        
+                                        Text("No Preview")
+                                            .font(.system(.caption2, design: .default, weight: .medium))
+                                            .foregroundColor(.white)
+                                    }
                                 }
                             )
                             .cornerRadius(6)
