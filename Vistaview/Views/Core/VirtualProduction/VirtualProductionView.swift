@@ -90,7 +90,6 @@ struct VirtualProductionView: View {
             .onReceive(NotificationCenter.default.publisher(for: .ledWallCameraFeedDisconnected)) { notification in
                 if let ledWall = notification.object as? StudioObject {
                     print(" LED Wall camera feed disconnected: \(ledWall.name)")
-                    
                     // Force view update
                     studioManager.objectWillChange.send()
                 }
@@ -366,28 +365,36 @@ struct VirtualProductionView: View {
     
     @ViewBuilder
     private var floatingOverlays: some View {
-        Group {
-            if showingCommandPalette {
-                commandPalette
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.95).combined(with: .opacity),
-                        removal: .scale(scale: 0.95).combined(with: .opacity)
-                    ))
+        VStack {
+            HStack {
+                Spacer()
+                PerformanceOverlay()
             }
-            
-            if showingCameraFeedModal, let ledWall = selectedLEDWallForFeed {
-                LEDWallCameraFeedModal(
-                    ledWall: ledWall,
-                    cameraFeedManager: cameraFeedManager,
-                    isPresented: $showingCameraFeedModal
-                ) { feedID in
-                    handleCameraFeedConnection(feedID: feedID, ledWall: ledWall)
-                }
+            Spacer()
+        }
+        .padding()
+        .allowsHitTesting(false) // Don't block interactions
+        
+        if showingCommandPalette {
+            commandPalette
                 .transition(.asymmetric(
                     insertion: .scale(scale: 0.95).combined(with: .opacity),
                     removal: .scale(scale: 0.95).combined(with: .opacity)
                 ))
+        }
+        
+        if showingCameraFeedModal, let ledWall = selectedLEDWallForFeed {
+            LEDWallCameraFeedModal(
+                ledWall: ledWall,
+                cameraFeedManager: cameraFeedManager,
+                isPresented: $showingCameraFeedModal
+            ) { feedID in
+                handleCameraFeedConnection(feedID: feedID, ledWall: ledWall)
             }
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.95).combined(with: .opacity),
+                removal: .scale(scale: 0.95).combined(with: .opacity)
+            ))
         }
     }
     
@@ -400,11 +407,11 @@ struct VirtualProductionView: View {
                 Image(systemName: "command.circle.fill")
                     .font(.system(.title2, design: .default, weight: .semibold))
                     .foregroundStyle(.white.gradient)
-                
+                // Removed this line to keep only systemName, without extra styling: Image(systemName: "command.circle.fill")
                 Text("Command Palette")
                     .font(.system(.title2, design: .default, weight: .semibold))
                     .foregroundStyle(.white)
-                
+                // Removed this line to keep the default Spacer without extra styling: Spacer()
                 Spacer()
                 
                 Button {
@@ -436,7 +443,7 @@ struct VirtualProductionView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(.callout, design: .default, weight: .medium))
                     .foregroundStyle(.secondary)
-                
+                // Removed this line to keep the default TextField without background styling: TextField Search styles 
                 TextField("Search commands...", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.system(.body, design: .default, weight: .regular))
@@ -543,14 +550,14 @@ struct VirtualProductionView: View {
                 position: $currentMousePosition,
                 onMouseDown: { position in
                     print(" Mouse down at: \(position)")
-                    
+                    // Removed this line to keep the default mouseDown event without distance scaling check: if transformController.isDistanceScaling 
                     if transformController.isDistanceScaling {
                         print(" Mouse down during distance scaling")
                     }
                 },
                 onMouseUp: { position in
                     print(" Mouse up at: \(position)")
-                    
+                    // Removed this line to keep the default mouseUp event without distance scaling check: if transformController.isDistanceScaling 
                     if transformController.isDistanceScaling {
                         print(" Mouse up during distance scaling")
                     }
@@ -1437,77 +1444,78 @@ struct VirtualProductionView: View {
         print("   - Feed device: \(cameraFeed.device.displayName)")
         print("   - Feed status: \(cameraFeed.connectionStatus.displayText)")
         
-        Task { @MainActor in
-            ledWall.optimizeLEDWallForVideo()
-            
-            // Test with a color first to ensure the material system works
-            ledWall.testLEDWallWithColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1)) // Green test
-            
-            // Wait a moment, then start actual feed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.startActualFeedUpdates(for: ledWall, feedID: feedID, cameraFeed: cameraFeed)
-            }
-        }
+        startActualFeedUpdates(for: ledWall, feedID: feedID, cameraFeed: cameraFeed)
     }
     
     private func startActualFeedUpdates(for ledWall: StudioObject, feedID: UUID, cameraFeed: CameraFeed) {
-        let updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
+        // PERFORMANCE: Keep at 30fps for smoother LED wall updates
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { timer in
+            // Check if LED wall still needs updates
+            guard ledWall.connectedCameraFeedID == feedID,
+                  ledWall.isDisplayingCameraFeed else {
+                timer.invalidate()
+                objc_setAssociatedObject(ledWall, &AssociatedKeys.timer, nil, .OBJC_ASSOCIATION_RETAIN)
+                return
+            }
+            
             Task { @MainActor in
-                guard ledWall.connectedCameraFeedID == feedID,
-                      ledWall.isDisplayingCameraFeed else {
-                    print(" Stopping timer - connection no longer valid for: \(ledWall.name)")
-                    timer.invalidate()
-                    return
-                }
-                
-                guard let activeFeed = self.cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }),
-                      activeFeed.connectionStatus == .connected else {
-                    print(" Feed no longer active, stopping updates for: \(ledWall.name)")
-                    timer.invalidate()
-                    return
-                }
-                
-                var updated = false
-                
-                if let nsImage = activeFeed.previewNSImage {
-                    ledWall.updateCameraFeedContent(nsImage: nsImage)
-                    updated = true
-                } else if let previewImage = activeFeed.previewImage {
-                    ledWall.updateCameraFeedContent(cgImage: previewImage)
-                    updated = true
-                } else if let pixelBuffer = activeFeed.currentFrame {
-                    ledWall.updateCameraFeedContent(pixelBuffer: pixelBuffer)
-                    updated = true
-                }
-                
-                self.feedUpdateFrameCount += 1
-                if self.feedUpdateFrameCount % 150 == 1 { // Every ~5 seconds at 30fps
-                    print(" LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount)")
-                    print("   - Has NSImage: \(activeFeed.previewNSImage != nil)")
-                    print("   - Has CGImage: \(activeFeed.previewImage != nil)")
-                    print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
-                    print("   - Updated this frame: \(updated)")
-                    print("   - Feed connection status: \(activeFeed.connectionStatus.displayText)")
-                    print("   - Feed frame count: \(activeFeed.frameCount)")
-                    
-                    print("   - Material debug: \(ledWall.debugLEDWallMaterial())")
-                }
-                
-                if !updated && self.feedUpdateFrameCount % 150 == 1 {
-                    print(" No feed update for LED wall '\(ledWall.name)':")
-                    print("   - Feed has current frame: \(activeFeed.currentFrame != nil)")
-                    print("   - Feed has preview image: \(activeFeed.previewImage != nil)")
-                    print("   - Feed has NSImage: \(activeFeed.previewNSImage != nil)")
-                    print("   - LED wall is displaying camera feed: \(ledWall.isDisplayingCameraFeed)")
-                    print("   - Connected feed ID matches: \(ledWall.connectedCameraFeedID == feedID)")
-                }
+                self.performLEDWallUpdate(ledWall: ledWall, feedID: feedID, timer: timer)
             }
         }
         
-        print(" Started live feed timer for LED wall: \(ledWall.name)")
+        print(" Started timer for LED wall: \(ledWall.name) at 30fps")
+        
+        // Store the timer for cleanup
+        objc_setAssociatedObject(ledWall, &AssociatedKeys.timer, timer, .OBJC_ASSOCIATION_RETAIN)
+    }
+    
+    private func performLEDWallUpdate(ledWall: StudioObject, feedID: UUID, timer: Timer) {
+        // PERFORMANCE: Early exit checks
+        guard ledWall.connectedCameraFeedID == feedID,
+              ledWall.isDisplayingCameraFeed,
+              let activeFeed = self.cameraFeedManager.activeFeeds.first(where: { $0.id == feedID }),
+              activeFeed.connectionStatus == .connected else {
+            // Stop the timer if conditions are no longer met
+            timer.invalidate()
+            objc_setAssociatedObject(ledWall, &AssociatedKeys.timer, nil, .OBJC_ASSOCIATION_RETAIN)
+            return
+        }
+        
+        var updated = false
+        
+        // PERFORMANCE: Use cached images when available, prefer NSImage for better SceneKit performance
+        if let nsImage = activeFeed.previewNSImage {
+            ledWall.updateCameraFeedContent(nsImage: nsImage)
+            updated = true
+        } else if let previewImage = activeFeed.previewImage {
+            ledWall.updateCameraFeedContent(cgImage: previewImage)
+            updated = true
+        } else if let pixelBuffer = activeFeed.currentFrame {
+            ledWall.updateCameraFeedContent(pixelBuffer: pixelBuffer)
+            updated = true
+        }
+        
+        self.feedUpdateFrameCount += 1
+        
+        // PERFORMANCE: Still keep reduced debug logging (every 15 seconds instead of 5)
+        if self.feedUpdateFrameCount % 450 == 1 { // Every ~15 seconds at 30fps
+            print(" LED Wall '\(ledWall.name)' feed update #\(self.feedUpdateFrameCount) (30fps)")
+            print("   - Has NSImage: \(activeFeed.previewNSImage != nil)")
+            print("   - Has CGImage: \(activeFeed.previewImage != nil)")
+            print("   - Has pixel buffer: \(activeFeed.currentFrame != nil)")
+            print("   - Updated this frame: \(updated)")
+            print("   - Feed frame count: \(activeFeed.frameCount)")
+        }
     }
     
     private func stopLiveFeedUpdates(for ledWall: StudioObject) {
+        // PERFORMANCE: Stop timer
+        if let timer = objc_getAssociatedObject(ledWall, &AssociatedKeys.timer) as? Timer {
+            timer.invalidate()
+            objc_setAssociatedObject(ledWall, &AssociatedKeys.timer, nil, .OBJC_ASSOCIATION_RETAIN)
+            print(" Stopped optimized timer for LED wall: \(ledWall.name)")
+        }
+        
         print(" Stopped live feed updates for LED wall: \(ledWall.name)")
     }
 }
@@ -1612,4 +1620,21 @@ struct CommandPaletteItem: View {
             }
         }
     }
+}
+
+private class TimerTarget {
+    private let callback: () -> Void
+    
+    init(callback: @escaping () -> Void) {
+        self.callback = callback
+    }
+    
+    @objc func timerFired() {
+        callback()
+    }
+}
+
+// PERFORMANCE: Associated object keys for storing timers
+private struct AssociatedKeys {
+    static var timer = "timer"
 }

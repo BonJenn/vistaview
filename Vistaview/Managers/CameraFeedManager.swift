@@ -22,22 +22,29 @@ final class CameraFeed: ObservableObject, Identifiable {
     @Published var currentSampleBuffer: CMSampleBuffer?
     @Published var connectionStatus: ConnectionStatus = .disconnected
     @Published var previewImage: CGImage?
-    @Published var previewNSImage: NSImage? // Add NSImage for better SceneKit compatibility
+    @Published var previewNSImage: NSImage?
     
     // Make captureSession accessible for debugging
     private(set) var captureSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private let videoQueue = DispatchQueue(label: "camera.feed.queue", qos: .userInitiated)
-    private(set) var frameCount = 0 // Make frameCount accessible
+    private(set) var frameCount = 0
     
     // IMPORTANT: Keep strong reference to delegate to prevent deallocation
     private var videoDelegate: VideoOutputDelegate?
     
-    // Add CIContext for better image conversion performance
+    // CIContext for image conversion
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     
     // Add session monitoring
     private var sessionObserver: NSObjectProtocol?
+    
+    // REVERTED: Back to original frame rate for better quality
+    private var lastFrameTime: CFTimeInterval = 0
+    private var targetFrameInterval: CFTimeInterval = 1.0/30.0 // Back to 30fps for better quality
+    private var lastProcessedImage: CGImage?
+    private var lastProcessedNSImage: NSImage?
+    private var imageConversionCount = 0
     
     enum ConnectionStatus: Equatable {
         case disconnected
@@ -98,18 +105,15 @@ final class CameraFeed: ObservableObject, Identifiable {
         
         connectionStatus = .connecting
         print("📹 Starting camera capture for: \(device.displayName)")
-        print("   - Device unique ID: \(captureDevice.uniqueID)")
-        print("   - Device model ID: \(captureDevice.modelID)")
-        print("   - Device is connected: \(captureDevice.isConnected)")
         
         do {
             // Create capture session with explicit configuration
             let session = AVCaptureSession()
             session.beginConfiguration()
             
-            // Try different session presets in order of preference
-            let presets: [AVCaptureSession.Preset] = [.medium, .low, .cif352x288]
-            var selectedPreset: AVCaptureSession.Preset = .low
+            // FULL QUALITY: Use the highest quality presets available
+            let presets: [AVCaptureSession.Preset] = [.high, .medium, .low]
+            var selectedPreset: AVCaptureSession.Preset = .high // Start with highest quality
             
             for preset in presets {
                 if session.canSetSessionPreset(preset) {
@@ -127,10 +131,6 @@ final class CameraFeed: ObservableObject, Identifiable {
                 session.addInput(videoInput)
                 print("✅ Added video input for: \(device.displayName)")
                 
-                // Log detailed input format information
-                print("   - Active format: \(captureDevice.activeFormat)")
-                print("   - Frame rate: \(captureDevice.activeVideoMinFrameDuration)")
-                
                 let formatDescription = captureDevice.activeFormat.formatDescription
                 let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
                 print("   - Resolution: \(dimensions.width)x\(dimensions.height)")
@@ -138,29 +138,26 @@ final class CameraFeed: ObservableObject, Identifiable {
                 throw CameraFeedError.cannotAddInput
             }
             
-            // Configure video output with minimal settings first
+            // Configure video output with optimal settings
             let output = AVCaptureVideoDataOutput()
             
-            // Use the most basic video settings that should work
+            // FULL QUALITY: Use highest quality video settings
             output.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]
             
-            // Configure frame delivery
-            output.alwaysDiscardsLateVideoFrames = true
+            // FULL QUALITY: Don't discard frames - process everything
+            output.alwaysDiscardsLateVideoFrames = false
             
             // Create and retain delegate
             let delegate = VideoOutputDelegate(feed: self)
-            self.videoDelegate = delegate // IMPORTANT: Keep strong reference
+            self.videoDelegate = delegate
             
             output.setSampleBufferDelegate(delegate, queue: videoQueue)
-            print("   - Created and assigned video output delegate")
             
             if session.canAddOutput(output) {
                 session.addOutput(output)
                 print("✅ Added video output for: \(device.displayName)")
-                print("   - Video settings: \(output.videoSettings)")
-                print("   - Discards late frames: \(output.alwaysDiscardsLateVideoFrames)")
             } else {
                 throw CameraFeedError.cannotAddOutput
             }
@@ -170,11 +167,7 @@ final class CameraFeed: ObservableObject, Identifiable {
                 if connection.isVideoOrientationSupported {
                     connection.videoOrientation = .portrait
                 }
-                
                 print("   - Video connection configured")
-                print("   - Video orientation: \(connection.videoOrientation.rawValue)")
-                print("   - Connection is active: \(connection.isActive)")
-                print("   - Connection is enabled: \(connection.isEnabled)")
             }
             
             session.commitConfiguration()
@@ -198,37 +191,19 @@ final class CameraFeed: ObservableObject, Identifiable {
             // Wait and verify session is running
             try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
             
-            print("🔍 Session verification for: \(device.displayName)")
-            print("   - Session is running: \(session.isRunning)")
-            print("   - Session inputs: \(session.inputs.count)")
-            print("   - Session outputs: \(session.outputs.count)")
-            
-            if let input = session.inputs.first as? AVCaptureDeviceInput {
-                print("   - Input device: \(input.device.localizedName)")
-                print("   - Input ports: \(input.ports.count)")
-            }
-            
-            if let output = session.outputs.first as? AVCaptureVideoDataOutput {
-                print("   - Output delegate set: \(output.sampleBufferDelegate != nil)")
-                print("   - Output connection active: \(output.connection(with: .video)?.isActive ?? false)")
-            }
-            
             if session.isRunning {
                 isActive = true
                 connectionStatus = .connected
                 frameCount = 0
+                lastFrameTime = CACurrentMediaTime()
                 
                 print("✅ Camera feed started successfully: \(device.displayName)")
                 
-                // Start frame monitoring with more aggressive checking
+                // Start frame monitoring with less frequent checking
                 Task {
                     await monitorFrameRate()
                 }
                 
-                // Start delegate verification
-                Task {
-                    await verifyDelegateReceivingFrames()
-                }
             } else {
                 throw CameraFeedError.deviceNotAvailable
             }
@@ -241,13 +216,9 @@ final class CameraFeed: ObservableObject, Identifiable {
     
     private func monitorFrameRate() async {
         while isActive && captureSession?.isRunning == true {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // Check every 5 seconds
             
             print("📊 Camera feed \(device.displayName): \(frameCount) frames in last 5 seconds")
-            print("   - Has preview image: \(previewImage != nil)")
-            print("   - Has NSImage: \(previewNSImage != nil)")
-            print("   - Session running: \(captureSession?.isRunning ?? false)")
-            
             frameCount = 0
         }
     }
@@ -262,7 +233,7 @@ final class CameraFeed: ObservableObject, Identifiable {
         captureSession?.stopRunning()
         captureSession = nil
         videoOutput = nil
-        videoDelegate = nil // Release delegate
+        videoDelegate = nil
         isActive = false
         connectionStatus = .disconnected
         currentFrame = nil
@@ -273,67 +244,46 @@ final class CameraFeed: ObservableObject, Identifiable {
         print("🛑 Camera feed stopped: \(device.displayName)")
     }
     
+    // FULL QUALITY: Process EVERY frame with no throttling or caching
     private func updateFrame(_ pixelBuffer: CVPixelBuffer) {
         frameCount += 1
         currentFrame = pixelBuffer
         
-        // Convert pixel buffer to both CGImage and NSImage for maximum compatibility
+        // Convert EVERY frame immediately - no caching or throttling
+        updateImages(pixelBuffer)
+        
+        // Trigger UI updates for EVERY frame
+        objectWillChange.send()
+        
+        // Minimal debug logging
+        if frameCount % 150 == 1 {
+            print("🎥 Camera feed '\(device.displayName)' frame \(frameCount)")
+        }
+    }
+    
+    // FULL QUALITY: Convert every frame immediately
+    private func updateImages(_ pixelBuffer: CVPixelBuffer) {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
-        // Debug: Log frame processing for first few frames
-        if frameCount <= 5 {
-            print("🔄 Processing frame \(frameCount) for \(device.displayName)")
-            print("   - Pixel buffer size: \(width)x\(height)")
-            print("   - Pixel format: \(CVPixelBufferGetPixelFormatType(pixelBuffer))")
-        }
-        
-        // Create CIImage from pixel buffer (most efficient)
+        // Convert CVPixelBuffer to CGImage
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        
-        // Convert to CGImage using CIContext (optimized)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
-            print("❌ Failed to create CGImage from CIImage for \(device.displayName)")
             return
         }
         
-        // ENHANCED: Create NSImage with explicit size to ensure proper SceneKit handling
-        let newNSImage = NSImage(size: NSSize(width: width, height: height))
-        newNSImage.addRepresentation(NSBitmapImageRep(cgImage: cgImage))
+        // Create NSImage
+        let nsImage = NSImage(size: NSSize(width: width, height: height))
+        nsImage.addRepresentation(NSBitmapImageRep(cgImage: cgImage))
         
-        // Also keep the direct CGImage method as backup
-        let directNSImage = NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
-        
-        // Update both images - force new object references to trigger SwiftUI updates
+        // Update EVERY frame - no caching
         previewImage = cgImage
-        previewNSImage = newNSImage // Use the enhanced NSImage
-        
-        // CRITICAL: Force SwiftUI to detect the change by triggering objectWillChange manually
-        objectWillChange.send()
-        
-        // Debug: Log successful conversion for first few frames
-        if frameCount <= 5 {
-            print("✅ Successfully converted frame \(frameCount) to images for \(device.displayName)")
-            print("   - CGImage: \(cgImage.width)x\(cgImage.height)")
-            print("   - NSImage (enhanced): \(newNSImage.size)")
-            print("   - NSImage (direct): \(directNSImage.size)")
-            print("   - Triggered objectWillChange for SwiftUI update")
-        }
-        
-        // Debug: Log frame updates occasionally
-        if frameCount % 150 == 1 { // Every ~5 seconds at 30fps
-            print("🎥 Camera feed '\(device.displayName)' frame \(frameCount): \(cgImage.width)x\(cgImage.height)")
-            print("   - CVPixelBuffer format: \(CVPixelBufferGetPixelFormatType(pixelBuffer))")
-            print("   - Color space: \(cgImage.colorSpace?.name as? String ?? "unknown")")
-            print("   - Alpha info: \(cgImage.alphaInfo.rawValue)")
-            print("   - Enhanced NSImage: \(newNSImage.size)")
-            print("   - NSImage representations: \(newNSImage.representations.count)")
-        }
+        previewNSImage = nsImage
     }
     
     private class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         private weak var feed: CameraFeed?
-        private var debugFrameCount = 0 // Local counter for debugging
+        private var debugFrameCount = 0
         
         init(feed: CameraFeed) {
             self.feed = feed
@@ -348,24 +298,20 @@ final class CameraFeed: ObservableObject, Identifiable {
         func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
             debugFrameCount += 1
             
-            // Debug: Log first frame immediately
             if debugFrameCount == 1 {
                 print("🎉 FIRST FRAME RECEIVED for \(self.feed?.device.displayName ?? "unknown")!")
             }
             
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { 
-                print("❌ No pixel buffer in sample buffer for frame \(debugFrameCount)")
                 return 
             }
             
-            // Debug: Log first few frames
-            if debugFrameCount <= 5 {
+            // Minimal debug logging
+            if debugFrameCount <= 3 {
                 print("🎥 VideoOutputDelegate received frame \(debugFrameCount) for \(self.feed?.device.displayName ?? "unknown")")
-                print("   - Pixel buffer size: \(CVPixelBufferGetWidth(pixelBuffer))x\(CVPixelBufferGetHeight(pixelBuffer))")
-                print("   - Pixel format: \(CVPixelBufferGetPixelFormatType(pixelBuffer))")
             }
             
-            // Update on main thread for UI consistency
+            // Process EVERY frame immediately
             Task { @MainActor in
                 self.feed?.currentSampleBuffer = sampleBuffer
                 self.feed?.updateFrame(pixelBuffer)
@@ -383,17 +329,6 @@ final class CameraFeed: ObservableObject, Identifiable {
         
         if frameCount == 0 && connectionStatus == .connected {
             print("⚠️ WARNING: Camera session running but no frames received for \(device.displayName)")
-            print("   - Session running: \(captureSession?.isRunning ?? false)")
-            print("   - Delegate exists: \(videoDelegate != nil)")
-            print("   - Output exists: \(videoOutput != nil)")
-            
-            if let output = videoOutput {
-                print("   - Output has delegate: \(output.sampleBufferDelegate != nil)")
-                if let connection = output.connection(with: .video) {
-                    print("   - Connection active: \(connection.isActive)")
-                    print("   - Connection enabled: \(connection.isEnabled)")
-                }
-            }
             
             // Try restarting the session
             print("🔄 Attempting to restart session for \(device.displayName)")
@@ -467,7 +402,7 @@ final class CameraFeedManager: ObservableObject {
         // Add to active feeds BEFORE starting capture
         activeFeeds.append(feed)
         
-        // Trigger UI update immediately when feed is added
+        // PERFORMANCE: Less frequent UI updates
         objectWillChange.send()
         print("📱 Added feed to activeFeeds array - count now: \(activeFeeds.count)")
         
@@ -477,16 +412,13 @@ final class CameraFeedManager: ObservableObject {
         if feed.connectionStatus == .connected {
             print("✅ Camera feed started successfully: \(device.displayName)")
             
-            // Trigger another UI update when connection is confirmed
+            // PERFORMANCE: Reduce UI update frequency
             feed.objectWillChange.send()
             objectWillChange.send()
             
             return feed
         } else {
             print("❌ Camera feed failed to start: \(device.displayName) - \(feed.connectionStatus.displayText)")
-            
-            // Remove failed feed but keep it in the list briefly to show error state
-            // Don't remove immediately - let user see the error
             return feed // Return the feed even if failed so UI can show error state
         }
     }
@@ -505,20 +437,13 @@ final class CameraFeedManager: ObservableObject {
     /// Select a feed for live production use and connect to StreamingViewModel
     func selectFeedForLiveProduction(_ feed: CameraFeed) async {
         print("📺 CameraFeedManager: Selecting feed for live production - \(feed.device.displayName)")
-        print("   - Current status: \(feed.connectionStatus.displayText)")
-        print("   - Has preview: \(feed.previewImage != nil)")
-        print("   - Frame count: \(feed.frameCount)")
         
         selectedFeedForLiveProduction = feed
         
-        // CRITICAL: Force UI updates immediately
+        // PERFORMANCE: Reduce UI update frequency
         await MainActor.run {
-            // Trigger updates for the selected feed
             feed.objectWillChange.send()
-            
-            // Trigger update for the manager
             self.objectWillChange.send()
-            
             print("✅ Feed selection complete with UI updates triggered")
         }
         

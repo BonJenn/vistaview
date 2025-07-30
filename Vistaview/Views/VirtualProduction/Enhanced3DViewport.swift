@@ -52,7 +52,7 @@ struct Enhanced3DViewport: NSViewRepresentable {
         // Set up camera controls first
         context.coordinator.setupCamera(in: scnView)
         
-        // Add gesture recognizers for camera control
+        // Set up gesture recognizers for camera control
         let leftPanGesture = NSPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLeftPan(_:)))
         leftPanGesture.buttonMask = 1 // Left mouse button
         scnView.addGestureRecognizer(leftPanGesture)

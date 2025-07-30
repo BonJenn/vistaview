@@ -1,0 +1,385 @@
+//
+//  VJPreviewProgramPane.swift
+//  Vistaview
+//
+//  VJ-style Preview/Program control pane with stacked layout
+//
+
+import SwiftUI
+import AVFoundation
+
+struct VJPreviewProgramPane: View {
+    @StateObject private var previewProgramManager: PreviewProgramManager
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Binding var mediaFiles: [MediaFile]
+    
+    init(productionManager: UnifiedProductionManager, mediaFiles: Binding<[MediaFile]>) {
+        self.productionManager = productionManager
+        self._mediaFiles = mediaFiles
+        
+        // Initialize the preview/program manager
+        self._previewProgramManager = StateObject(wrappedValue: PreviewProgramManager(
+            cameraFeedManager: productionManager.cameraFeedManager,
+            unifiedProductionManager: productionManager
+        ))
+    }
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Header with controls
+            HStack {
+                Text("Preview/Program")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Take button
+                Button("TAKE") {
+                    previewProgramManager.take()
+                }
+                .font(.caption)
+                .fontWeight(.bold)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.red)
+                .foregroundColor(.white)
+                .cornerRadius(4)
+                
+                // Auto transition button
+                Button("AUTO") {
+                    previewProgramManager.transition(duration: 2.0)
+                }
+                .font(.caption)
+                .fontWeight(.bold)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(previewProgramManager.isTransitioning ? Color.orange : Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(4)
+                .disabled(previewProgramManager.previewSource == .none)
+            }
+            
+            // Preview monitor (top)
+            VStack(spacing: 4) {
+                HStack {
+                    Text("PREVIEW")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.yellow)
+                    
+                    Spacer()
+                    
+                    Text(previewProgramManager.previewSourceDisplayName)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                VJPreviewMonitor(
+                    source: previewProgramManager.previewSource,
+                    image: previewProgramManager.previewImage,
+                    cameraFeedManager: productionManager.cameraFeedManager,
+                    isPreview: true
+                )
+                .frame(height: 80)
+                .background(Color.black)
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.yellow, lineWidth: 2)
+                )
+            }
+            
+            // Program monitor (bottom)
+            VStack(spacing: 4) {
+                HStack {
+                    Text("PROGRAM")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.red)
+                    
+                    Spacer()
+                    
+                    Text(previewProgramManager.programSourceDisplayName)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                VJPreviewMonitor(
+                    source: previewProgramManager.programSource,
+                    image: previewProgramManager.programImage,
+                    cameraFeedManager: productionManager.cameraFeedManager,
+                    isPreview: false
+                )
+                .frame(height: 80)
+                .background(Color.black)
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.red, lineWidth: 2)
+                )
+            }
+            
+            // Crossfader
+            VStack(spacing: 4) {
+                HStack {
+                    Text("CROSSFADE")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                    
+                    Spacer()
+                    
+                    Text("\(Int(previewProgramManager.crossfaderValue * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                }
+                
+                Slider(
+                    value: $previewProgramManager.crossfaderValue,
+                    in: 0...1
+                ) {
+                    Text("Crossfader")
+                } minimumValueLabel: {
+                    Text("PGM")
+                        .font(.caption2)
+                        .foregroundColor(.red)
+                } maximumValueLabel: {
+                    Text("PVW")
+                        .font(.caption2)
+                        .foregroundColor(.yellow)
+                }
+                .accentColor(.blue)
+            }
+            
+            // Source selection buttons
+            VStack(spacing: 6) {
+                Text("Sources")
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+                
+                // Camera sources
+                if !productionManager.cameraFeedManager.activeFeeds.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(productionManager.cameraFeedManager.activeFeeds) { feed in
+                                sourceButton(for: feed.asContentSource(), label: feed.device.displayName, icon: "camera.fill")
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+                
+                // Media sources
+                if !mediaFiles.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(mediaFiles.prefix(5)) { file in
+                                sourceButton(for: file.asContentSource(), label: file.name, icon: file.fileType.icon)
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+                
+                // Virtual sources
+                if !productionManager.availableVirtualCameras.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(productionManager.availableVirtualCameras, id: \.id) { camera in
+                                sourceButton(for: camera.asContentSource(), label: camera.name, icon: "video.3d")
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+            }
+            
+            // Media playback controls (only show if media is selected)
+            if case .media(let file, let player) = previewProgramManager.previewSource {
+                VJMediaPlaybackControls(
+                    previewProgramManager: previewProgramManager,
+                    isPreview: true
+                )
+            }
+            
+            if case .media(let file, let player) = previewProgramManager.programSource {
+                VJMediaPlaybackControls(
+                    previewProgramManager: previewProgramManager,
+                    isPreview: false
+                )
+            }
+        }
+        .padding(12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
+    }
+    
+    private func sourceButton(for source: ContentSource, label: String, icon: String) -> some View {
+        Menu {
+            Button("Load to Preview") {
+                previewProgramManager.loadToPreview(source)
+            }
+            
+            Button("Load to Program") {
+                previewProgramManager.loadToProgram(source)
+            }
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.caption)
+                Text(label)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(width: 60, height: 40)
+            .background(Color.blue.opacity(0.2))
+            .foregroundColor(.blue)
+            .cornerRadius(4)
+        }
+        .menuStyle(BorderlessButtonMenuStyle())
+    }
+}
+
+struct VJPreviewMonitor: View {
+    let source: ContentSource
+    let image: CGImage?
+    @ObservedObject var cameraFeedManager: CameraFeedManager
+    let isPreview: Bool
+    
+    var body: some View {
+        ZStack {
+            // Background
+            Rectangle()
+                .fill(Color.black)
+            
+            // Content based on source type
+            switch source {
+            case .camera(let feed):
+                if let previewImage = feed.previewImage {
+                    Image(decorative: previewImage, scale: 1.0)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    VStack {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.5)
+                        Text("Connecting...")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                    }
+                }
+                
+            case .media(let file, let player):
+                // For media, we'd need a proper video preview implementation
+                VStack {
+                    Image(systemName: file.fileType.icon)
+                        .font(.title2)
+                        .foregroundColor(.white.opacity(0.7))
+                    Text(file.name)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+                
+            case .virtual(let camera):
+                VStack {
+                    Image(systemName: "video.3d")
+                        .font(.title2)
+                        .foregroundColor(.blue.opacity(0.7))
+                    Text(camera.name)
+                        .font(.caption2)
+                        .foregroundColor(.blue.opacity(0.7))
+                        .lineLimit(1)
+                }
+                
+            case .none:
+                VStack {
+                    Image(systemName: isPreview ? "tv" : "dot.radiowaves.left.and.right")
+                        .font(.title2)
+                        .foregroundColor(.gray.opacity(0.5))
+                    Text(isPreview ? "No Preview" : "No Program")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+            }
+        }
+        .clipped()
+    }
+}
+
+struct VJMediaPlaybackControls: View {
+    @ObservedObject var previewProgramManager: PreviewProgramManager
+    let isPreview: Bool
+    
+    private var isPlaying: Bool {
+        isPreview ? previewProgramManager.isPreviewPlaying : previewProgramManager.isProgramPlaying
+    }
+    
+    private var currentTime: TimeInterval {
+        isPreview ? previewProgramManager.previewCurrentTime : previewProgramManager.programCurrentTime
+    }
+    
+    private var duration: TimeInterval {
+        isPreview ? previewProgramManager.previewDuration : previewProgramManager.programDuration
+    }
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            // Progress bar
+            ProgressView(value: duration > 0 ? currentTime / duration : 0.0)
+                .progressViewStyle(LinearProgressViewStyle(tint: isPreview ? .yellow : .red))
+                .frame(height: 4)
+            
+            // Time display and controls
+            HStack {
+                Text(formatTime(currentTime))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                // Play/Pause button
+                Button(action: {
+                    if isPreview {
+                        if isPlaying {
+                            previewProgramManager.pausePreview()
+                        } else {
+                            previewProgramManager.playPreview()
+                        }
+                    } else {
+                        if isPlaying {
+                            previewProgramManager.pauseProgram()
+                        } else {
+                            previewProgramManager.playProgram()
+                        }
+                    }
+                }) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.caption)
+                        .foregroundColor(isPreview ? .yellow : .red)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer()
+                
+                Text(formatTime(duration))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(Color.black.opacity(0.2))
+        .cornerRadius(4)
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+}

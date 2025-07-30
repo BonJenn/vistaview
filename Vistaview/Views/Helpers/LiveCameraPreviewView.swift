@@ -13,6 +13,9 @@ struct LiveCameraPreviewView: View {
     @ObservedObject var cameraFeed: CameraFeed
     let maxHeight: CGFloat
     
+    // Optional PreviewProgramManager for clicking to send to preview
+    var previewProgramManager: PreviewProgramManager? = nil
+    
     // Force updates using a timer
     @State private var refreshTrigger = false
     
@@ -25,9 +28,44 @@ struct LiveCameraPreviewView: View {
                     .background(Color.black)
                     .cornerRadius(8)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.green, lineWidth: 2)
+                        // Add click indicator if preview program manager is available
+                        Group {
+                            if previewProgramManager != nil {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.blue, lineWidth: 2)
+                                    .overlay(
+                                        VStack {
+                                            Spacer()
+                                            HStack {
+                                                Spacer()
+                                                Text("CLICK TO SEND TO PREVIEW")
+                                                    .font(.caption2)
+                                                    .fontWeight(.bold)
+                                                    .foregroundColor(.white)
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 4)
+                                                    .background(Color.blue.opacity(0.8))
+                                                    .cornerRadius(4)
+                                            }
+                                            .padding(.trailing, 8)
+                                            .padding(.bottom, 8)
+                                        }
+                                    )
+                            } else {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.green, lineWidth: 2)
+                            }
+                        }
                     )
+                    .onTapGesture {
+                        // Send camera feed to preview when clicked
+                        if let previewProgramManager = previewProgramManager {
+                            print("🎬 Sending camera feed \(cameraFeed.device.displayName) to PREVIEW")
+                            let cameraSource = cameraFeed.asContentSource()
+                            previewProgramManager.loadToPreview(cameraSource)
+                        }
+                    }
+                    .help(previewProgramManager != nil ? "Click to send this camera feed to Preview pane" : "Live camera feed")
                     .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
                         // Force refresh at ~30fps
                         refreshTrigger.toggle()
