@@ -182,7 +182,8 @@ class EffectManager: ObservableObject {
     @Published var selectedChain: EffectChain?
     @Published var presetChains: [EffectChain] = []
     
-    private let metalDevice: MTLDevice
+    // Expose Metal device for external use
+    let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
     
     // Special source IDs for preview/program outputs

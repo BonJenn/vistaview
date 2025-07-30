@@ -1,6 +1,9 @@
 import SwiftUI
 import HaishinKit
 import AVFoundation
+import Metal
+import MetalKit
+import CoreImage
 #if os(macOS)
 import AppKit
 #else
@@ -294,12 +297,24 @@ struct FinalCutProStyleView: View {
             .frame(minWidth: 600)
             
             // Right Panel - Output & Streaming Controls
-            OutputControlsPanel(
-                productionManager: productionManager,
-                rtmpURL: $rtmpURL,
-                streamKey: $streamKey,
-                selectedPlatform: $selectedPlatform
-            )
+            VStack(spacing: 0) {
+                // Effects List Panel (top section)
+                EffectsListPanel(
+                    effectManager: productionManager.effectManager,
+                    previewProgramManager: previewProgramManager
+                )
+                .frame(height: 300)
+                
+                Divider()
+                
+                // Output Controls (bottom section)
+                OutputControlsPanel(
+                    productionManager: productionManager,
+                    rtmpURL: $rtmpURL,
+                    streamKey: $streamKey,
+                    selectedPlatform: $selectedPlatform
+                )
+            }
             .frame(minWidth: 280, maxWidth: 350)
             .background(Color.gray.opacity(0.03))
         }
@@ -315,9 +330,9 @@ struct PreviewProgramCenterView: View {
     
     var body: some View {
         VStack(spacing: 8) {
-            // Main Preview/Program Display
-            HStack(spacing: 8) {
-                // Preview Monitor (Left - Next Up)
+            // Main Preview/Program Display - Stacked Vertically
+            VStack(spacing: 8) {
+                // Preview Monitor (Top - Next Up)
                 VStack(spacing: 4) {
                     HStack {
                         Text("PREVIEW")
@@ -343,7 +358,7 @@ struct PreviewProgramCenterView: View {
                     )
                 }
                 
-                // Program Monitor (Right - Live Output)
+                // Program Monitor (Bottom - Live Output)
                 VStack(spacing: 4) {
                     HStack {
                         Text("PROGRAM")
@@ -493,6 +508,7 @@ struct PreviewMonitorView: View {
     @ObservedObject var previewProgramManager: PreviewProgramManager
     @State private var frameUpdateTrigger = 0
     @State private var isTargeted = false
+    @State private var processedImage: CGImage?
     
     private var effectCount: Int {
         previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
@@ -504,13 +520,19 @@ struct PreviewMonitorView: View {
             
             switch previewProgramManager.previewSource {
             case .camera(let feed):
-                if let previewImage = feed.previewImage {
+                if let previewImage = processedImage ?? feed.previewImage {
                     Image(decorative: previewImage, scale: 1.0)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .id("preview-camera-\(feed.id)-\(frameUpdateTrigger)")
                         .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
                             frameUpdateTrigger += 1
+                            // Process effects on each frame update
+                            if effectCount > 0 {
+                                processedImage = processImageWithPreviewEffects(feed.previewImage)
+                            } else {
+                                processedImage = nil
+                            }
                         }
                 } else {
                     ProgressView()
@@ -575,8 +597,17 @@ struct PreviewMonitorView: View {
             }
         }
         .dropDestination(for: EffectDragItem.self) { items, location in
-            let handler = PreviewEffectDropHandler(previewProgramManager: previewProgramManager)
-            return handler.handleDrop(items: items)
+            guard let item = items.first else { return false }
+            
+            Task { @MainActor in
+                previewProgramManager.addEffectToPreview(item.effectType)
+                
+                // Visual feedback
+                let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+                feedbackGenerator.perform(.generic, performanceTime: .now)
+            }
+            
+            return true
         } isTargeted: { targeted in
             isTargeted = targeted
         }
@@ -584,6 +615,7 @@ struct PreviewMonitorView: View {
             if effectCount > 0 {
                 Button("Clear Effects") {
                     previewProgramManager.clearPreviewEffects()
+                    processedImage = nil
                 }
                 
                 Button("View Effects") {
@@ -592,26 +624,19 @@ struct PreviewMonitorView: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Preview Effect Drop Handler
-
-struct PreviewEffectDropHandler {
-    let previewProgramManager: PreviewProgramManager
-    
-    func handleDrop(items: [EffectDragItem]) -> Bool {
-        guard let item = items.first else { return false }
-        
-        Task { @MainActor in
-            previewProgramManager.addEffectToPreview(item.effectType)
-            
-            // Visual feedback
-            let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
-            feedbackGenerator.perform(.generic, performanceTime: .now)
+        .onChange(of: effectCount) { _, newCount in
+            if newCount == 0 {
+                processedImage = nil
+            }
         }
+    }
+    
+    private func processImageWithPreviewEffects(_ image: CGImage?) -> CGImage? {
+        guard let image = image,
+              let chain = previewProgramManager.getPreviewEffectChain(),
+              !chain.effects.isEmpty else { return image }
         
-        return true
+        return processImageWithEffectsAsync(image, using: productionManager.effectManager, sourceID: EffectManager.previewSourceID)
     }
 }
 
@@ -620,6 +645,7 @@ struct ProgramMonitorView: View {
     @ObservedObject var previewProgramManager: PreviewProgramManager
     @State private var frameUpdateTrigger = 0
     @State private var isTargeted = false
+    @State private var processedImage: CGImage?
     
     private var effectCount: Int {
         previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
@@ -631,13 +657,19 @@ struct ProgramMonitorView: View {
             
             switch previewProgramManager.programSource {
             case .camera(let feed):
-                if let previewImage = feed.previewImage {
+                if let previewImage = processedImage ?? feed.previewImage {
                     Image(decorative: previewImage, scale: 1.0)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .id("program-camera-\(feed.id)-\(frameUpdateTrigger)")
                         .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
                             frameUpdateTrigger += 1
+                            // Process effects on each frame update
+                            if effectCount > 0 {
+                                processedImage = processImageWithProgramEffects(feed.previewImage)
+                            } else {
+                                processedImage = nil
+                            }
                         }
                 } else {
                     ProgressView()
@@ -707,8 +739,17 @@ struct ProgramMonitorView: View {
             }
         }
         .dropDestination(for: EffectDragItem.self) { items, location in
-            let handler = ProgramEffectDropHandler(previewProgramManager: previewProgramManager)
-            return handler.handleDrop(items: items)
+            guard let item = items.first else { return false }
+            
+            Task { @MainActor in
+                previewProgramManager.addEffectToProgram(item.effectType)
+                
+                // Visual feedback
+                let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+                feedbackGenerator.perform(.generic, performanceTime: .now)
+            }
+            
+            return true
         } isTargeted: { targeted in
             isTargeted = targeted
         }
@@ -716,6 +757,7 @@ struct ProgramMonitorView: View {
             if effectCount > 0 {
                 Button("Clear Effects") {
                     previewProgramManager.clearProgramEffects()
+                    processedImage = nil
                 }
                 
                 Button("View Effects") {
@@ -724,27 +766,71 @@ struct ProgramMonitorView: View {
                 }
             }
         }
+        .onChange(of: effectCount) { _, newCount in
+            if newCount == 0 {
+                processedImage = nil
+            }
+        }
+    }
+    
+    private func processImageWithProgramEffects(_ image: CGImage?) -> CGImage? {
+        guard let image = image,
+              let chain = previewProgramManager.getProgramEffectChain(),
+              !chain.effects.isEmpty else { return image }
+        
+        return processImageWithEffectsAsync(image, using: productionManager.effectManager, sourceID: EffectManager.programSourceID)
     }
 }
 
-// MARK: - Program Effect Drop Handler
+// MARK: - Image Processing Helper
 
-struct ProgramEffectDropHandler {
-    let previewProgramManager: PreviewProgramManager
+@MainActor
+func processImageWithEffectsAsync(_ image: CGImage, using effectManager: EffectManager, sourceID: String) -> CGImage? {
+    // Convert CGImage to MTLTexture
+    let textureLoader = MTKTextureLoader(device: effectManager.metalDevice)
     
-    func handleDrop(items: [EffectDragItem]) -> Bool {
-        guard let item = items.first else { return false }
+    do {
+        let inputTexture = try textureLoader.newTexture(cgImage: image, options: [
+            MTKTextureLoader.Option.textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
+            MTKTextureLoader.Option.textureStorageMode: NSNumber(value: MTLStorageMode.shared.rawValue)
+        ])
         
-        Task { @MainActor in
-            previewProgramManager.addEffectToProgram(item.effectType)
-            
-            // Visual feedback
-            let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
-            feedbackGenerator.perform(.generic, performanceTime: .now)
+        // Apply effects
+        let processedTexture = effectManager.applyEffects(to: inputTexture, for: sourceID)
+        
+        // Convert back to CGImage with proper coordinate handling
+        if let outputTexture = processedTexture {
+            return createCGImageFromTexture(outputTexture, device: effectManager.metalDevice)
         }
         
-        return true
+        return image
+    } catch {
+        print("Error processing image with effects: \(error)")
+        return image
     }
+}
+
+// Helper function to properly convert Metal texture back to CGImage
+@MainActor
+func createCGImageFromTexture(_ texture: MTLTexture, device: MTLDevice) -> CGImage? {
+    // Create a CIImage from the Metal texture with proper coordinate handling
+    let ciImage = CIImage(mtlTexture: texture, options: [
+        .colorSpace: CGColorSpaceCreateDeviceRGB()
+    ])
+    
+    guard let image = ciImage else { return nil }
+    
+    // Apply a transform to correct the coordinate system (flip vertically)
+    let flippedImage = image.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -image.extent.height))
+    
+    // Create a CIContext and render to CGImage
+    let context = CIContext(mtlDevice: device, options: [
+        .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+        .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+    ])
+    
+    // Render with proper bounds
+    return context.createCGImage(flippedImage, from: flippedImage.extent)
 }
 
 // MARK: - Other Views (keeping simple versions for now)

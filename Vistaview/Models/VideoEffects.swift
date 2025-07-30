@@ -3,6 +3,7 @@ import Metal
 import MetalKit
 import MetalPerformanceShaders
 import SwiftUI
+import CoreImage
 
 // MARK: - Effect Categories
 
@@ -246,6 +247,69 @@ class ColorAdjustmentEffect: BaseVideoEffect {
             range: 0.1...3.0
         )
     }
+    
+    override func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer, device: MTLDevice) -> MTLTexture? {
+        guard isEnabled else { return texture }
+        
+        let brightness = parameters["brightness"]?.value ?? 0.0
+        let contrast = parameters["contrast"]?.value ?? 1.0
+        let saturation = parameters["saturation"]?.value ?? 1.0
+        let gamma = parameters["gamma"]?.value ?? 1.0
+        
+        // Create output texture
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width,
+            height: texture.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        
+        guard let outputTexture = device.makeTexture(descriptor: descriptor) else {
+            return texture
+        }
+        
+        // Apply color adjustments using Core Image with proper coordinate handling
+        let ciImage = CIImage(mtlTexture: texture, options: [
+            .colorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        guard let inputImage = ciImage else { return texture }
+        
+        var processedImage = inputImage
+        
+        // Apply brightness, contrast, and saturation
+        let colorFilter = CIFilter(name: "CIColorControls")!
+        colorFilter.setValue(processedImage, forKey: "inputImage")
+        colorFilter.setValue(brightness, forKey: "inputBrightness")
+        colorFilter.setValue(contrast, forKey: "inputContrast")
+        colorFilter.setValue(saturation, forKey: "inputSaturation")
+        
+        if let output = colorFilter.outputImage {
+            processedImage = output
+        }
+        
+        // Apply gamma
+        if gamma != 1.0 {
+            let gammaFilter = CIFilter(name: "CIGammaAdjust")!
+            gammaFilter.setValue(processedImage, forKey: "inputImage")
+            gammaFilter.setValue(gamma, forKey: "inputPower")
+            if let output = gammaFilter.outputImage {
+                processedImage = output
+            }
+        }
+        
+        // Render back to Metal texture with proper coordinate handling
+        let context = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        // Render with correct bounds and coordinate system
+        let renderBounds = CGRect(x: 0, y: 0, width: texture.width, height: texture.height)
+        context.render(processedImage, to: outputTexture, commandBuffer: commandBuffer, bounds: renderBounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        
+        return outputTexture
+    }
 }
 
 // MARK: - Vintage Effect
@@ -277,6 +341,78 @@ class VintageEffect: BaseVideoEffect {
             defaultValue: 0.1,
             range: -0.5...0.5
         )
+    }
+    
+    override func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer, device: MTLDevice) -> MTLTexture? {
+        guard isEnabled else { return texture }
+        
+        let sepiaIntensity = parameters["sepia"]?.value ?? 0.7
+        let vignetteIntensity = parameters["vignette"]?.value ?? 0.3
+        let warmth = parameters["warmth"]?.value ?? 0.1
+        
+        // Create output texture
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width,
+            height: texture.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        
+        guard let outputTexture = device.makeTexture(descriptor: descriptor) else {
+            return texture
+        }
+        
+        // Apply vintage effect using Core Image with proper coordinate handling
+        let ciImage = CIImage(mtlTexture: texture, options: [
+            .colorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        guard let inputImage = ciImage else { return texture }
+        
+        var processedImage = inputImage
+        
+        // Apply sepia tone
+        if sepiaIntensity > 0.0 {
+            let sepiaFilter = CIFilter(name: "CISepiaTone")!
+            sepiaFilter.setValue(processedImage, forKey: "inputImage")
+            sepiaFilter.setValue(sepiaIntensity, forKey: "inputIntensity")
+            if let sepiaOutput = sepiaFilter.outputImage {
+                processedImage = sepiaOutput
+            }
+        }
+        
+        // Apply warmth (temperature adjustment)
+        if warmth != 0.0 {
+            let tempFilter = CIFilter(name: "CITemperatureAndTint")!
+            tempFilter.setValue(processedImage, forKey: "inputImage")
+            tempFilter.setValue(CIVector(x: CGFloat(6500 + warmth * 2000), y: 0), forKey: "inputNeutral")
+            tempFilter.setValue(CIVector(x: 6500, y: 0), forKey: "inputTargetNeutral")
+            if let tempOutput = tempFilter.outputImage {
+                processedImage = tempOutput
+            }
+        }
+        
+        // Apply vignette
+        if vignetteIntensity > 0.0 {
+            let vignetteFilter = CIFilter(name: "CIVignette")!
+            vignetteFilter.setValue(processedImage, forKey: "inputImage")
+            vignetteFilter.setValue(vignetteIntensity, forKey: "inputIntensity")
+            vignetteFilter.setValue(1.0, forKey: "inputRadius")
+            if let vignetteOutput = vignetteFilter.outputImage {
+                processedImage = vignetteOutput
+            }
+        }
+        
+        // Render back to Metal texture with proper coordinate handling
+        let context = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        let renderBounds = CGRect(x: 0, y: 0, width: texture.width, height: texture.height)
+        context.render(processedImage, to: outputTexture, commandBuffer: commandBuffer, bounds: renderBounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        
+        return outputTexture
     }
 }
 
@@ -315,6 +451,65 @@ class BlackWhiteEffect: BaseVideoEffect {
             defaultValue: 0.114,
             range: 0.0...1.0
         )
+    }
+    
+    override func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer, device: MTLDevice) -> MTLTexture? {
+        guard isEnabled else { return texture }
+        
+        let intensity = parameters["intensity"]?.value ?? 1.0
+        let contrast = parameters["contrast"]?.value ?? 1.1
+        
+        // Create output texture
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width,
+            height: texture.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        
+        guard let outputTexture = device.makeTexture(descriptor: descriptor) else {
+            return texture
+        }
+        
+        // Apply black and white effect using Core Image with proper coordinate handling
+        let ciImage = CIImage(mtlTexture: texture, options: [
+            .colorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        guard let inputImage = ciImage else { return texture }
+        
+        var processedImage = inputImage
+        
+        // Convert to grayscale
+        let monoFilter = CIFilter(name: "CIColorMonochrome")!
+        monoFilter.setValue(processedImage, forKey: "inputImage")
+        monoFilter.setValue(CIColor(red: 0.7, green: 0.7, blue: 0.7), forKey: "inputColor")
+        monoFilter.setValue(intensity, forKey: "inputIntensity")
+        
+        if let monoOutput = monoFilter.outputImage {
+            processedImage = monoOutput
+            
+            // Apply contrast
+            if contrast != 1.0 {
+                let contrastFilter = CIFilter(name: "CIColorControls")!
+                contrastFilter.setValue(processedImage, forKey: "inputImage")
+                contrastFilter.setValue(contrast, forKey: "inputContrast")
+                if let contrastOutput = contrastFilter.outputImage {
+                    processedImage = contrastOutput
+                }
+            }
+        }
+        
+        // Render back to Metal texture with proper coordinate handling
+        let context = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        let renderBounds = CGRect(x: 0, y: 0, width: texture.width, height: texture.height)
+        context.render(processedImage, to: outputTexture, commandBuffer: commandBuffer, bounds: renderBounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        
+        return outputTexture
     }
 }
 
@@ -408,6 +603,48 @@ class PixelateEffect: BaseVideoEffect {
             range: 2.0...50.0,
             step: 1.0
         )
+    }
+    
+    override func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer, device: MTLDevice) -> MTLTexture? {
+        guard isEnabled else { return texture }
+        
+        let pixelSize = parameters["pixelSize"]?.value ?? 8.0
+        
+        // Create output texture
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width,
+            height: texture.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        
+        guard let outputTexture = device.makeTexture(descriptor: descriptor) else {
+            return texture
+        }
+        
+        // Apply pixelate effect using Core Image with proper coordinate handling
+        let ciImage = CIImage(mtlTexture: texture, options: [
+            .colorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        guard let inputImage = ciImage else { return texture }
+        
+        let pixelateFilter = CIFilter(name: "CIPixellate")!
+        pixelateFilter.setValue(inputImage, forKey: "inputImage")
+        pixelateFilter.setValue(pixelSize, forKey: "inputScale")
+        
+        guard let processedImage = pixelateFilter.outputImage else { return texture }
+        
+        // Render back to Metal texture with proper coordinate handling
+        let context = CIContext(mtlDevice: device, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        let renderBounds = CGRect(x: 0, y: 0, width: texture.width, height: texture.height)
+        context.render(processedImage, to: outputTexture, commandBuffer: commandBuffer, bounds: renderBounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        
+        return outputTexture
     }
 }
 

@@ -9,6 +9,9 @@ import Foundation
 import SwiftUI
 import AVFoundation
 import CoreVideo
+import Metal
+import MetalKit
+import CoreImage
 
 /// Represents a media file that can be loaded into preview/program
 struct MediaFile: Identifiable, Equatable {
@@ -393,18 +396,18 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func updatePreviewFromCamera(_ feed: CameraFeed) {
-        // Set up observer for camera feed updates
-        previewImage = feed.previewImage
+        // Set up observer for camera feed updates with effects processing
+        previewImage = processImageWithEffects(feed.previewImage, for: .preview)
         
-        // TODO: Set up continuous updates from camera feed
+        // TODO: Set up continuous updates from camera feed with effects
         print("📹 Camera feed connected to preview: \(feed.device.displayName)")
     }
     
     private func updateProgramFromCamera(_ feed: CameraFeed) {
-        // Set up observer for camera feed updates
-        programImage = feed.previewImage
+        // Set up observer for camera feed updates with effects processing
+        programImage = processImageWithEffects(feed.previewImage, for: .program)
         
-        // TODO: Set up continuous updates from camera feed
+        // TODO: Set up continuous updates from camera feed with effects
         print("📹 Camera feed connected to program: \(feed.device.displayName)")
     }
     
@@ -445,6 +448,64 @@ final class PreviewProgramManager: ObservableObject {
             programPlayer?.removeTimeObserver(observer)
             programTimeObserver = nil
         }
+    }
+    
+    private func processImageWithEffects(_ image: CGImage?, for output: OutputType) -> CGImage? {
+        guard let image = image else { return nil }
+        
+        // Convert CGImage to MTLTexture
+        guard let texture = createMTLTexture(from: image) else { return image }
+        
+        // Apply effects based on output type
+        let processedTexture: MTLTexture?
+        switch output {
+        case .preview:
+            processedTexture = effectManager.applyPreviewEffects(to: texture)
+        case .program:
+            processedTexture = effectManager.applyProgramEffects(to: texture)
+        }
+        
+        // Convert back to CGImage
+        return createCGImage(from: processedTexture ?? texture)
+    }
+    
+    private func createMTLTexture(from cgImage: CGImage) -> MTLTexture? {
+        let textureLoader = MTKTextureLoader(device: effectManager.metalDevice)
+        
+        do {
+            let texture = try textureLoader.newTexture(cgImage: cgImage, options: [
+                MTKTextureLoader.Option.textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                MTKTextureLoader.Option.textureStorageMode: MTLStorageMode.shared.rawValue
+            ])
+            return texture
+        } catch {
+            print("Error creating MTLTexture: \(error)")
+            return nil
+        }
+    }
+    
+    private func createCGImage(from texture: MTLTexture) -> CGImage? {
+        // Create a CIImage from the Metal texture with proper coordinate handling
+        let ciImage = CIImage(mtlTexture: texture, options: [
+            .colorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        guard let image = ciImage else { return nil }
+        
+        // Apply a transform to correct the coordinate system (flip vertically)
+        let flippedImage = image.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -image.extent.height))
+        
+        // Create a CIContext and render to CGImage
+        let context = CIContext(mtlDevice: effectManager.metalDevice, options: [
+            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+        ])
+        
+        return context.createCGImage(flippedImage, from: flippedImage.extent)
+    }
+    
+    enum OutputType {
+        case preview, program
     }
     
     // MARK: - Effect Integration
