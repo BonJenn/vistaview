@@ -11,16 +11,19 @@ import AVFoundation
 struct VJPreviewProgramPane: View {
     @StateObject private var previewProgramManager: PreviewProgramManager
     @ObservedObject var productionManager: UnifiedProductionManager
+    @ObservedObject var effectManager: EffectManager
     @Binding var mediaFiles: [MediaFile]
     
-    init(productionManager: UnifiedProductionManager, mediaFiles: Binding<[MediaFile]>) {
+    init(productionManager: UnifiedProductionManager, effectManager: EffectManager, mediaFiles: Binding<[MediaFile]>) {
         self.productionManager = productionManager
+        self.effectManager = effectManager
         self._mediaFiles = mediaFiles
         
-        // Initialize the preview/program manager
+        // Initialize the preview/program manager with effect manager
         self._previewProgramManager = StateObject(wrappedValue: PreviewProgramManager(
             cameraFeedManager: productionManager.cameraFeedManager,
-            unifiedProductionManager: productionManager
+            unifiedProductionManager: productionManager,
+            effectManager: effectManager
         ))
     }
     
@@ -80,6 +83,8 @@ struct VJPreviewProgramPane: View {
                     source: previewProgramManager.previewSource,
                     image: previewProgramManager.previewImage,
                     cameraFeedManager: productionManager.cameraFeedManager,
+                    effectManager: effectManager,
+                    previewProgramManager: previewProgramManager,
                     isPreview: true
                 )
                 .frame(height: 80)
@@ -111,6 +116,8 @@ struct VJPreviewProgramPane: View {
                     source: previewProgramManager.programSource,
                     image: previewProgramManager.programImage,
                     cameraFeedManager: productionManager.cameraFeedManager,
+                    effectManager: effectManager,
+                    previewProgramManager: previewProgramManager,
                     isPreview: false
                 )
                 .frame(height: 80)
@@ -247,7 +254,17 @@ struct VJPreviewMonitor: View {
     let source: ContentSource
     let image: CGImage?
     @ObservedObject var cameraFeedManager: CameraFeedManager
+    @ObservedObject var effectManager: EffectManager
+    @ObservedObject var previewProgramManager: PreviewProgramManager
     let isPreview: Bool
+    
+    @State private var isTargeted = false
+    
+    private var effectCount: Int {
+        isPreview ? 
+            (previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0) :
+            (previewProgramManager.getProgramEffectChain()?.effects.count ?? 0)
+    }
     
     var body: some View {
         ZStack {
@@ -306,8 +323,84 @@ struct VJPreviewMonitor: View {
                         .foregroundColor(.gray.opacity(0.5))
                 }
             }
+            
+            // Drop target overlay
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .cornerRadius(8)
+                            .padding(4)
+                    }
+                }
+            }
         }
         .clipped()
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            handleEffectDrop(items)
+            return true
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
+        .contextMenu {
+            if effectCount > 0 {
+                Button("Clear Effects") {
+                    if isPreview {
+                        previewProgramManager.clearPreviewEffects()
+                    } else {
+                        previewProgramManager.clearProgramEffects()
+                    }
+                }
+                
+                Button("View Effects") {
+                    let chain = isPreview ? 
+                        previewProgramManager.getPreviewEffectChain() :
+                        previewProgramManager.getProgramEffectChain()
+                    effectManager.selectedChain = chain
+                }
+            }
+        }
+    }
+    
+    private func handleEffectDrop(_ items: [EffectDragItem]) -> Bool {
+        guard let item = items.first else { return false }
+        
+        if isPreview {
+            previewProgramManager.addEffectToPreview(item.effectType)
+        } else {
+            previewProgramManager.addEffectToProgram(item.effectType)
+        }
+        
+        // Visual feedback
+        let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+        feedbackGenerator.perform(.generic, performanceTime: .now)
+        
+        return true
     }
 }
 

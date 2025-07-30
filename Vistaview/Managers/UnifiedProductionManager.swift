@@ -13,6 +13,7 @@ final class UnifiedProductionManager: ObservableObject {
     let streamingViewModel: StreamingViewModel
     let studioManager: VirtualStudioManager
     let cameraFeedManager: CameraFeedManager
+    let effectManager: EffectManager
     
     // Published States
     @Published var currentStudioName: String = "Default Studio"
@@ -33,6 +34,7 @@ final class UnifiedProductionManager: ObservableObject {
         self.cameraFeedManager = cameraFeedManager ?? CameraFeedManager(cameraDeviceManager: deviceManager)
         
         self.streamingViewModel = StreamingViewModel()
+        self.effectManager = EffectManager()
         
         // Set up bidirectional integration
         setupIntegration()

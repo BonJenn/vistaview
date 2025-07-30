@@ -102,6 +102,7 @@ final class PreviewProgramManager: ObservableObject {
     // Dependencies
     private let cameraFeedManager: CameraFeedManager
     private let unifiedProductionManager: UnifiedProductionManager
+    private let effectManager: EffectManager
     
     // Timers for updating playback time
     private var previewTimeObserver: Any?
@@ -122,9 +123,10 @@ final class PreviewProgramManager: ObservableObject {
         return getDisplayName(for: programSource)
     }
     
-    init(cameraFeedManager: CameraFeedManager, unifiedProductionManager: UnifiedProductionManager) {
+    init(cameraFeedManager: CameraFeedManager, unifiedProductionManager: UnifiedProductionManager, effectManager: EffectManager) {
         self.cameraFeedManager = cameraFeedManager
         self.unifiedProductionManager = unifiedProductionManager
+        self.effectManager = effectManager
     }
     
     deinit {
@@ -443,6 +445,44 @@ final class PreviewProgramManager: ObservableObject {
             programPlayer?.removeTimeObserver(observer)
             programTimeObserver = nil
         }
+    }
+    
+    // MARK: - Effect Integration
+    
+    func addEffectToPreview(_ effectType: String) {
+        effectManager.addEffectToPreview(effectType)
+        print("✨ Added \(effectType) effect to Preview output")
+    }
+    
+    func addEffectToProgram(_ effectType: String) {
+        effectManager.addEffectToProgram(effectType)
+        print("✨ Added \(effectType) effect to Program output")
+    }
+    
+    func addEffectToPreview(_ effect: any VideoEffect) {
+        effectManager.addEffectToPreview(effect)
+        print("✨ Added \(effect.name) effect to Preview output")
+    }
+    
+    func addEffectToProgram(_ effect: any VideoEffect) {
+        effectManager.addEffectToProgram(effect)
+        print("✨ Added \(effect.name) effect to Program output")
+    }
+    
+    func getPreviewEffectChain() -> EffectChain? {
+        return effectManager.getPreviewEffectChain()
+    }
+    
+    func getProgramEffectChain() -> EffectChain? {
+        return effectManager.getProgramEffectChain()
+    }
+    
+    func clearPreviewEffects() {
+        effectManager.clearPreviewEffects()
+    }
+    
+    func clearProgramEffects() {
+        effectManager.clearProgramEffects()
     }
 }
 

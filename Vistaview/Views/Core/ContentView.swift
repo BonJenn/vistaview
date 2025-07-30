@@ -30,10 +30,11 @@ struct ContentView: View {
         let productionManager = UnifiedProductionManager()
         self._productionManager = StateObject(wrappedValue: productionManager)
         
-        // Initialize preview/program manager with the production manager
+        // Initialize preview/program manager with the production manager and effect manager
         self._previewProgramManager = StateObject(wrappedValue: PreviewProgramManager(
             cameraFeedManager: productionManager.cameraFeedManager,
-            unifiedProductionManager: productionManager
+            unifiedProductionManager: productionManager,
+            effectManager: productionManager.effectManager
         ))
     }
     
@@ -409,18 +410,225 @@ struct PreviewProgramCenterView: View {
     }
 }
 
-// MARK: - Program Monitor
+// MARK: - Simple Effects View
 
-struct ProgramMonitorView: View {
+struct EffectsSourceView: View {
+    @ObservedObject var effectManager: EffectManager
+    
+    init(effectManager: EffectManager) {
+        self.effectManager = effectManager
+    }
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Effects & Filters")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            ScrollView {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 8) {
+                    ForEach(effectManager.effectsLibrary.availableEffects, id: \.id) { effect in
+                        EffectDragButton(effect: effect)
+                    }
+                }
+            }
+            
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+struct EffectDragButton: View {
+    let effect: any VideoEffect
+    @State private var dragOffset = CGSize.zero
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Rectangle()
+                .fill(effect.category.color.opacity(0.2))
+                .frame(height: 50)
+                .overlay(
+                    VStack(spacing: 2) {
+                        Image(systemName: effect.icon)
+                            .font(.title2)
+                            .foregroundColor(effect.category.color)
+                        Text(effect.name)
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(effect.category.color)
+                    }
+                    .padding(4)
+                )
+                .cornerRadius(6)
+                .scaleEffect(dragOffset != .zero ? 0.95 : 1.0)
+                .shadow(color: effect.category.color.opacity(0.3), radius: dragOffset != .zero ? 8 : 2)
+        }
+        .draggable(EffectDragItem(effectType: effect.name)) {
+            VStack(spacing: 2) {
+                Image(systemName: effect.icon)
+                    .font(.title2)
+                Text(effect.name)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+            }
+            .padding(8)
+            .background(effect.category.color.opacity(0.8))
+            .foregroundColor(.white)
+            .cornerRadius(8)
+            .shadow(radius: 4)
+        }
+    }
+}
+
+// MARK: - Monitor Views
+
+struct PreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @ObservedObject var previewProgramManager: PreviewProgramManager
     @State private var frameUpdateTrigger = 0
+    @State private var isTargeted = false
+    
+    private var effectCount: Int {
+        previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
+    }
     
     var body: some View {
         ZStack {
             Color.black
             
-            // Show content based on program source
+            switch previewProgramManager.previewSource {
+            case .camera(let feed):
+                if let previewImage = feed.previewImage {
+                    Image(decorative: previewImage, scale: 1.0)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .id("preview-camera-\(feed.id)-\(frameUpdateTrigger)")
+                        .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
+                            frameUpdateTrigger += 1
+                        }
+                } else {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                }
+                
+            case .none:
+                VStack(spacing: 16) {
+                    Image(systemName: "eye")
+                        .font(.system(size: 48))
+                        .foregroundColor(.yellow.opacity(0.7))
+                    
+                    Text("Preview")
+                        .font(.headline)
+                        .foregroundColor(.yellow)
+                    
+                    Text("Select sources from the sidebar\nto preview before going live")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                
+            default:
+                Text("Preview")
+                    .foregroundColor(.white)
+            }
+            
+            // Drop target overlay
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .cornerRadius(8)
+                            .padding(4)
+                    }
+                }
+            }
+        }
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            let handler = PreviewEffectDropHandler(previewProgramManager: previewProgramManager)
+            return handler.handleDrop(items: items)
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
+        .contextMenu {
+            if effectCount > 0 {
+                Button("Clear Effects") {
+                    previewProgramManager.clearPreviewEffects()
+                }
+                
+                Button("View Effects") {
+                    let chain = previewProgramManager.getPreviewEffectChain()
+                    productionManager.effectManager.selectedChain = chain
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Preview Effect Drop Handler
+
+struct PreviewEffectDropHandler {
+    let previewProgramManager: PreviewProgramManager
+    
+    func handleDrop(items: [EffectDragItem]) -> Bool {
+        guard let item = items.first else { return false }
+        
+        Task { @MainActor in
+            previewProgramManager.addEffectToPreview(item.effectType)
+            
+            // Visual feedback
+            let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+            feedbackGenerator.perform(.generic, performanceTime: .now)
+        }
+        
+        return true
+    }
+}
+
+struct ProgramMonitorView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @ObservedObject var previewProgramManager: PreviewProgramManager
+    @State private var frameUpdateTrigger = 0
+    @State private var isTargeted = false
+    
+    private var effectCount: Int {
+        previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black
+            
             switch previewProgramManager.programSource {
             case .camera(let feed):
                 if let previewImage = feed.previewImage {
@@ -432,37 +640,11 @@ struct ProgramMonitorView: View {
                             frameUpdateTrigger += 1
                         }
                 } else {
-                    VStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        Text("Connecting...")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                    }
-                }
-                
-            case .media(let file, let player):
-                VStack {
-                    Image(systemName: file.fileType.icon)
-                        .font(.system(size: 48))
-                        .foregroundColor(.white.opacity(0.7))
-                    Text(file.name)
-                        .font(.headline)
-                        .foregroundColor(.white)
-                }
-                
-            case .virtual(let camera):
-                VStack {
-                    Image(systemName: "video.3d")
-                        .font(.system(size: 48))
-                        .foregroundColor(.blue.opacity(0.7))
-                    Text(camera.name)
-                        .font(.headline)
-                        .foregroundColor(.blue)
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 }
                 
             case .none:
-                // Fallback to existing camera feed or default
                 if let selectedFeed = productionManager.cameraFeedManager.selectedFeedForLiveProduction {
                     LiveCameraFeedView(feed: selectedFeed)
                 } else {
@@ -482,84 +664,90 @@ struct ProgramMonitorView: View {
                     }
                     .padding()
                 }
+                
+            default:
+                Text("Program")
+                    .foregroundColor(.white)
             }
-        }
-    }
-}
-
-// MARK: - Preview Monitor
-
-struct PreviewMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    @ObservedObject var previewProgramManager: PreviewProgramManager
-    @State private var frameUpdateTrigger = 0
-    
-    var body: some View {
-        ZStack {
-            Color.black
             
-            // Show content based on preview source
-            switch previewProgramManager.previewSource {
-            case .camera(let feed):
-                if let previewImage = feed.previewImage {
-                    Image(decorative: previewImage, scale: 1.0)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .id("preview-camera-\(feed.id)-\(frameUpdateTrigger)")
-                        .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
-                            frameUpdateTrigger += 1
+            // Drop target overlay
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.red.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
                         }
-                } else {
-                    VStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        Text("Connecting...")
-                            .font(.caption)
+                    )
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
                             .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.red)
+                            .cornerRadius(8)
+                            .padding(4)
                     }
                 }
-                
-            case .media(let file, let player):
-                VStack {
-                    Image(systemName: file.fileType.icon)
-                        .font(.system(size: 48))
-                        .foregroundColor(.white.opacity(0.7))
-                    Text(file.name)
-                        .font(.headline)
-                        .foregroundColor(.white)
+            }
+        }
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            let handler = ProgramEffectDropHandler(previewProgramManager: previewProgramManager)
+            return handler.handleDrop(items: items)
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
+        .contextMenu {
+            if effectCount > 0 {
+                Button("Clear Effects") {
+                    previewProgramManager.clearProgramEffects()
                 }
                 
-            case .virtual(let camera):
-                VStack {
-                    Image(systemName: "video.3d")
-                        .font(.system(size: 48))
-                        .foregroundColor(.blue.opacity(0.7))
-                    Text(camera.name)
-                        .font(.headline)
-                        .foregroundColor(.blue)
-                }
-                
-            case .none:
-                VStack(spacing: 16) {
-                    Image(systemName: "eye")
-                        .font(.system(size: 48))
-                        .foregroundColor(.yellow.opacity(0.7))
-                    
-                    Text("Preview")
-                        .font(.headline)
-                        .foregroundColor(.yellow)
-                    
-                    Text("Select sources from the sidebar\nto preview before going live")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                        .multilineTextAlignment(.center)
+                Button("View Effects") {
+                    let chain = previewProgramManager.getProgramEffectChain()
+                    productionManager.effectManager.selectedChain = chain
                 }
             }
         }
     }
 }
 
-// MARK: - Sources Panel
+// MARK: - Program Effect Drop Handler
+
+struct ProgramEffectDropHandler {
+    let previewProgramManager: PreviewProgramManager
+    
+    func handleDrop(items: [EffectDragItem]) -> Bool {
+        guard let item = items.first else { return false }
+        
+        Task { @MainActor in
+            previewProgramManager.addEffectToProgram(item.effectType)
+            
+            // Visual feedback
+            let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+            feedbackGenerator.perform(.generic, performanceTime: .now)
+        }
+        
+        return true
+    }
+}
+
+// MARK: - Other Views (keeping simple versions for now)
 
 struct SourcesPanel: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -604,7 +792,7 @@ struct SourcesPanel: View {
                 case 2:
                     VirtualSourceView(productionManager: productionManager)
                 case 3:
-                    EffectsSourceView()
+                    EffectsSourceView(effectManager: productionManager.effectManager)
                 default:
                     CamerasSourceView(
                         productionManager: productionManager,
@@ -616,8 +804,6 @@ struct SourcesPanel: View {
         }
     }
 }
-
-// MARK: - Camera Sources View
 
 struct CamerasSourceView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -700,8 +886,6 @@ struct CamerasSourceView: View {
     }
 }
 
-// MARK: - Camera Device Button
-
 struct CameraDeviceButton: View {
     let device: CameraDevice
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -720,7 +904,6 @@ struct CameraDeviceButton: View {
                 Task {
                     if let newFeed = await productionManager.cameraFeedManager.startFeed(for: device) {
                         print("Started camera feed: \(newFeed.device.displayName)")
-                        // Feed will appear in "Live Camera Feeds" section automatically
                         
                         await MainActor.run {
                             newFeed.objectWillChange.send()
@@ -759,8 +942,6 @@ struct CameraDeviceButton: View {
     }
 }
 
-// MARK: - Live Camera Feed Button (for sidebar)
-
 struct LiveCameraFeedButton: View {
     @ObservedObject var feed: CameraFeed
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -775,7 +956,6 @@ struct LiveCameraFeedButton: View {
     
     var body: some View {
         Button(action: {
-            // Clicking a live feed puts it in Preview
             loadFeedToPreview(feed)
         }) {
             VStack(spacing: 4) {
@@ -867,7 +1047,7 @@ struct LiveCameraFeedButton: View {
     }
 }
 
-// MARK: - Media Source View
+// MARK: - Missing Components
 
 struct MediaSourceView: View {
     @Binding var mediaFiles: [MediaFile]
@@ -881,7 +1061,7 @@ struct MediaSourceView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 Button(action: { showingFilePicker = true }) {
-                    Image(systemName: "plus.circle.fill")
+                    Image(systemName: "plus.circle")
                         .foregroundColor(.blue)
                 }
             }
@@ -897,11 +1077,6 @@ struct MediaSourceView: View {
                         .font(.headline)
                         .foregroundColor(.secondary)
                     
-                    Text("Click + to add videos, images, or audio files")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                    
                     Button("Add Files") {
                         showingFilePicker = true
                     }
@@ -915,7 +1090,21 @@ struct MediaSourceView: View {
                     GridItem(.flexible())
                 ], spacing: 8) {
                     ForEach(mediaFiles) { file in
-                        MediaFileButton(file: file)
+                        VStack {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(height: 60)
+                                .overlay(
+                                    VStack {
+                                        Image(systemName: file.fileType.icon)
+                                        Text(file.name)
+                                            .font(.caption2)
+                                            .lineLimit(2)
+                                    }
+                                    .foregroundColor(.secondary)
+                                )
+                                .cornerRadius(6)
+                        }
                     }
                 }
             }
@@ -925,30 +1114,6 @@ struct MediaSourceView: View {
         .padding()
     }
 }
-
-struct MediaFileButton: View {
-    let file: MediaFile
-    
-    var body: some View {
-        VStack {
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(height: 60)
-                .overlay(
-                    VStack {
-                        Image(systemName: file.fileType.icon)
-                        Text(file.name)
-                            .font(.caption2)
-                            .lineLimit(2)
-                    }
-                    .foregroundColor(.secondary)
-                )
-                .cornerRadius(6)
-        }
-    }
-}
-
-// MARK: - Virtual Source View
 
 struct VirtualSourceView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1029,50 +1194,6 @@ struct VirtualCameraButton: View {
     }
 }
 
-// MARK: - Effects Source View
-
-struct EffectsSourceView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("Effects & Filters")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 8) {
-                ForEach(["Blur", "Sharpen", "Vintage", "B&W", "Sepia", "Contrast"], id: \.self) { effect in
-                    Button(action: {
-                        // Apply effect
-                    }) {
-                        VStack {
-                            Rectangle()
-                                .fill(Color.purple.opacity(0.2))
-                                .frame(height: 50)
-                                .overlay(
-                                    VStack {
-                                        Image(systemName: "camera.filters")
-                                        Text(effect)
-                                            .font(.caption2)
-                                    }
-                                    .foregroundColor(.purple)
-                                )
-                                .cornerRadius(6)
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-            
-            Spacer()
-        }
-        .padding()
-    }
-}
-
-// MARK: - Timeline Controls View
-
 struct TimelineControlsView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     
@@ -1088,7 +1209,6 @@ struct TimelineControlsView: View {
             }
             .padding(.horizontal)
             
-            // Layer visualization
             HStack(spacing: 8) {
                 ForEach(0..<4) { index in
                     VStack {
@@ -1096,17 +1216,9 @@ struct TimelineControlsView: View {
                             .fill(index == 0 ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2))
                             .frame(height: 40)
                             .overlay(
-                                VStack {
-                                    Text("Layer \(index + 1)")
-                                        .font(.caption2)
-                                        .foregroundColor(index == 0 ? .blue : .secondary)
-                                    
-                                    if index == 0 && productionManager.isVirtualStudioActive {
-                                        Image(systemName: "cube.transparent")
-                                            .font(.caption2)
-                                            .foregroundColor(.blue)
-                                    }
-                                }
+                                Text("Layer \(index + 1)")
+                                    .font(.caption2)
+                                    .foregroundColor(index == 0 ? .blue : .secondary)
                             )
                             .cornerRadius(4)
                         
@@ -1121,8 +1233,6 @@ struct TimelineControlsView: View {
         .padding(.vertical, 8)
     }
 }
-
-// MARK: - Output Controls Panel
 
 struct OutputControlsPanel: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1142,94 +1252,54 @@ struct OutputControlsPanel: View {
             
             ScrollView {
                 VStack(spacing: 16) {
-                    StreamingControlsView(
-                        productionManager: productionManager,
-                        rtmpURL: $rtmpURL,
-                        streamKey: $streamKey,
-                        selectedPlatform: $selectedPlatform
-                    )
-                    
-                    RecordingControlsView()
-                    
-                    AudioControlsView()
-                    
-                    StatisticsView(productionManager: productionManager)
+                    GroupBox("Live Streaming") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Platform:")
+                                    .frame(width: 70, alignment: .leading)
+                                Picker("Platform", selection: $selectedPlatform) {
+                                    Text("YouTube").tag("YouTube")
+                                    Text("Twitch").tag("Twitch")
+                                    Text("Facebook").tag("Facebook")
+                                    Text("Custom").tag("Custom")
+                                }
+                                .pickerStyle(MenuPickerStyle())
+                            }
+                            
+                            HStack {
+                                Text("Server:")
+                                    .frame(width: 70, alignment: .leading)
+                                TextField("rtmp://server", text: $rtmpURL)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                            }
+                            
+                            HStack {
+                                Text("Key:")
+                                    .frame(width: 70, alignment: .leading)
+                                SecureField("Stream key", text: $streamKey)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                            }
+                            
+                            Button(action: {
+                                Task {
+                                    await toggleStreaming()
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
+                                    Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
                 }
                 .padding()
             }
-        }
-    }
-}
-
-// MARK: - Reused Components (simplified versions)
-
-struct StreamingControlsView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    @Binding var rtmpURL: String
-    @Binding var streamKey: String
-    @Binding var selectedPlatform: String
-    
-    var body: some View {
-        GroupBox("Live Streaming") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Platform:")
-                        .frame(width: 70, alignment: .leading)
-                    Picker("Platform", selection: $selectedPlatform) {
-                        Text("YouTube").tag("YouTube")
-                        Text("Twitch").tag("Twitch")
-                        Text("Facebook").tag("Facebook")
-                        Text("Custom").tag("Custom")
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                    .onChange(of: selectedPlatform) { _, platform in
-                        updateRTMPURL(for: platform)
-                    }
-                }
-                
-                HStack {
-                    Text("Server:")
-                        .frame(width: 70, alignment: .leading)
-                    TextField("rtmp://server", text: $rtmpURL)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                }
-                
-                HStack {
-                    Text("Key:")
-                        .frame(width: 70, alignment: .leading)
-                    SecureField("Stream key", text: $streamKey)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                }
-                
-                Button(action: {
-                    Task {
-                        await toggleStreaming()
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
-                        Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                }
-            }
-        }
-    }
-    
-    private func updateRTMPURL(for platform: String) {
-        switch platform {
-        case "Twitch":
-            rtmpURL = "rtmp://live.twitch.tv/live/"
-        case "YouTube":
-            rtmpURL = "rtmp://a.rtmp.youtube.com/live2"
-        case "Facebook":
-            rtmpURL = "rtmps://live-api-s.facebook.com:443/rtmp/"
-        default:
-            rtmpURL = "rtmp://127.0.0.1:1935/stream"
         }
     }
     
@@ -1245,95 +1315,6 @@ struct StreamingControlsView: View {
         }
     }
 }
-
-struct RecordingControlsView: View {
-    var body: some View {
-        GroupBox("Recording") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Format:")
-                        .frame(width: 70, alignment: .leading)
-                    Picker("Format", selection: .constant("MP4")) {
-                        Text("MP4").tag("MP4")
-                        Text("MOV").tag("MOV")
-                    }
-                    .pickerStyle(MenuPickerStyle())
-                }
-                
-                Button(action: {}) {
-                    HStack {
-                        Image(systemName: "record.circle")
-                        Text("Start Recording")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(Color.red.opacity(0.8))
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                }
-            }
-        }
-    }
-}
-
-struct AudioControlsView: View {
-    var body: some View {
-        GroupBox("Audio") {
-            VStack(spacing: 12) {
-                HStack {
-                    Text("Master")
-                    Spacer()
-                    Slider(value: .constant(0.8), in: 0...1)
-                        .frame(width: 100)
-                    Text("80%")
-                        .font(.caption)
-                        .frame(width: 30)
-                }
-                
-                HStack {
-                    Text("Mic")
-                    Spacer()
-                    Slider(value: .constant(0.6), in: 0...1)
-                        .frame(width: 100)
-                    Text("60%")
-                        .font(.caption)
-                        .frame(width: 30)
-                }
-            }
-        }
-    }
-}
-
-struct StatisticsView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    
-    var body: some View {
-        GroupBox("Statistics") {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("FPS:")
-                    Spacer()
-                    Text("30")
-                        .foregroundColor(.green)
-                }
-                HStack {
-                    Text("Bitrate:")
-                    Spacer()
-                    Text("2.5 Mbps")
-                        .foregroundColor(.green)
-                }
-                HStack {
-                    Text("Duration:")
-                    Spacer()
-                    Text(productionManager.streamingViewModel.isPublishing ? "00:05:23" : "00:00:00")
-                }
-            }
-            .font(.caption)
-        }
-    }
-}
-
-// MARK: - Studio Selector Sheet
 
 struct StudioSelectorSheet: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1387,8 +1368,6 @@ struct StudioSelectorSheet: View {
         .frame(width: 600, height: 400)
     }
 }
-
-// MARK: - Live Camera Feed View
 
 struct LiveCameraFeedView: View {
     @ObservedObject var feed: CameraFeed
