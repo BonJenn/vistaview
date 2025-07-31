@@ -7,226 +7,211 @@ struct OutputMappingControlsView: View {
     @State private var showInteractiveCanvas = false
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "rectangle.resize")
-                    .foregroundColor(.blue)
-                Text("Output Mapping")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                
-                Spacer()
-                
-                // Status indicator
-                Circle()
-                    .fill(outputMappingManager.isEnabled ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
-                
-                Text(outputMappingManager.isEnabled ? "ON" : "OFF")
-                    .font(.caption2)
-                    .foregroundColor(outputMappingManager.isEnabled ? .green : .gray)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
-            
-            Divider()
-            
-            // Quick Controls
-            VStack(spacing: 12) {
-                // Enable/Disable Toggle
+        ScrollView {
+            VStack(spacing: 0) {
+                // Header
                 HStack {
-                    Toggle("Enable Output Mapping", isOn: $outputMappingManager.isEnabled)
-                        .toggleStyle(.switch)
+                    Image(systemName: "rectangle.resize")
+                        .foregroundColor(.blue)
+                    Text("Output Mapping")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
                     
                     Spacer()
+                    
+                    // Status indicator
+                    Circle()
+                        .fill(outputMappingManager.isEnabled ? Color.green : Color.gray)
+                        .frame(width: 8, height: 8)
+                    
+                    Text(outputMappingManager.isEnabled ? "ON" : "OFF")
+                        .font(.caption2)
+                        .foregroundColor(outputMappingManager.isEnabled ? .green : .gray)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(NSColor.controlBackgroundColor))
                 
-                if outputMappingManager.isEnabled {
-                    // Current Mapping Status
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Current Mapping:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            if let preset = outputMappingManager.selectedPreset {
-                                Text(preset.name)
+                Divider()
+                
+                // Scrollable Content
+                VStack(spacing: 10) {
+                    // Enable/Disable Toggle
+                    HStack {
+                        Toggle("Enable Output Mapping", isOn: $outputMappingManager.isEnabled)
+                            .toggleStyle(.switch)
+                        
+                        Spacer()
+                    }
+                    
+                    if outputMappingManager.isEnabled {
+                        // Current Mapping Status (Compact)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Mapping:")
                                     .font(.caption)
-                                    .foregroundColor(.blue)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.1))
-                                    .cornerRadius(4)
-                            } else {
-                                Text("Custom")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                if let preset = outputMappingManager.selectedPreset {
+                                    Text(preset.name)
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .background(Color.blue.opacity(0.1))
+                                        .cornerRadius(3)
+                                } else {
+                                    Text("Custom")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                }
                             }
                         }
                         
-                        Text(outputMappingManager.mappingDescription)
+                        // Quick Action Buttons (Compact)
+                        HStack(spacing: 6) {
+                            Button("Fit") {
+                                outputMappingManager.fitToScreen()
+                            }
+                            .buttonStyle(.bordered)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
-                    
-                    // Quick Action Buttons
-                    HStack(spacing: 8) {
-                        Button("Fit Screen") {
-                            outputMappingManager.fitToScreen()
-                        }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-                        
-                        Button("Center") {
-                            outputMappingManager.centerOutput()
-                        }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-                        
-                        Button("Reset") {
-                            outputMappingManager.resetMapping()
-                        }
-                        .buttonStyle(.bordered)
-                        .font(.caption)
-                    }
-                    
-                    // External Display Controls
-                    Divider()
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Image(systemName: "tv")
-                                .foregroundColor(.purple)
-                            Text("External Display")
-                                .font(.caption)
-                                .fontWeight(.medium)
                             
-                            Spacer()
-                            
-                            if externalDisplayManager.isFullScreenActive {
-                                Circle()
-                                    .fill(Color.green)
-                                    .frame(width: 6, height: 6)
-                                Text("ACTIVE")
-                                    .font(.caption2)
-                                    .foregroundColor(.green)
+                            Button("Center") {
+                                outputMappingManager.centerOutput()
                             }
+                            .buttonStyle(.bordered)
+                            .font(.caption2)
+                            
+                            Button("Reset") {
+                                outputMappingManager.resetMapping()
+                            }
+                            .buttonStyle(.bordered)
+                            .font(.caption2)
                         }
                         
-                        if !externalDisplayManager.availableDisplays.isEmpty {
-                            Menu {
-                                ForEach(externalDisplayManager.availableDisplays.filter { !$0.isMain }) { display in
-                                    Button(display.name) {
-                                        if externalDisplayManager.isFullScreenActive {
-                                            externalDisplayManager.stopFullScreenOutput()
-                                        } else {
-                                            externalDisplayManager.startFullScreenOutput(on: display)
+                        Divider()
+                        
+                        // External Display Controls (Compact)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "tv")
+                                    .foregroundColor(.purple)
+                                    .font(.caption)
+                                Text("External Display")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                // Status indicator
+                                HStack(spacing: 2) {
+                                    Circle()
+                                        .fill(externalDisplayManager.isFullScreenActive ? Color.green : Color.gray)
+                                        .frame(width: 4, height: 4)
+                                    Text(externalDisplayManager.isFullScreenActive ? "ON" : "OFF")
+                                        .font(.caption2)
+                                        .foregroundColor(externalDisplayManager.isFullScreenActive ? .green : .gray)
+                                }
+                            }
+                            
+                            // Display selector (Compact)
+                            if !externalDisplayManager.availableDisplays.isEmpty {
+                                Menu {
+                                    ForEach(externalDisplayManager.getExternalDisplays()) { display in
+                                        Button(action: {
+                                            if externalDisplayManager.selectedDisplay?.id == display.id && externalDisplayManager.isFullScreenActive {
+                                                externalDisplayManager.stopFullScreenOutput()
+                                            } else {
+                                                externalDisplayManager.startFullScreenOutput(on: display)
+                                            }
+                                        }) {
+                                            HStack {
+                                                Text(display.name)
+                                                Spacer()
+                                                Text(display.displayDescription)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
                                         }
                                     }
+                                } label: {
+                                    HStack {
+                                        Text(externalDisplayManager.selectedDisplay?.name ?? "Select Display")
+                                            .font(.caption)
+                                            .foregroundColor(externalDisplayManager.selectedDisplay != nil ? .primary : .secondary)
+                                            .lineLimit(1)
+                                        
+                                        Spacer()
+                                        Image(systemName: "chevron.down")
+                                            .font(.caption2)
+                                    }
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .background(Color(NSColor.controlBackgroundColor))
+                                    .cornerRadius(4)
                                 }
+                                .menuStyle(.borderlessButton)
+                                .disabled(externalDisplayManager.getExternalDisplays().isEmpty)
                                 
+                                // Control buttons (Compact)
                                 if externalDisplayManager.isFullScreenActive {
-                                    Divider()
-                                    Button("Stop External Output") {
-                                        externalDisplayManager.stopFullScreenOutput()
+                                    HStack(spacing: 6) {
+                                        Button("Full Screen") {
+                                            externalDisplayManager.toggleFullScreen()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .font(.caption2)
+                                        
+                                        Button("Stop") {
+                                            externalDisplayManager.stopFullScreenOutput()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .font(.caption2)
+                                        .foregroundColor(.red)
                                     }
                                 }
-                            } label: {
-                                HStack {
-                                    Text(externalDisplayManager.selectedDisplay?.name ?? "Select Display")
-                                        .foregroundColor(externalDisplayManager.selectedDisplay != nil ? .primary : .secondary)
-                                    Spacer()
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color(NSColor.controlBackgroundColor))
-                                .cornerRadius(4)
-                            }
-                            .menuStyle(.borderlessButton)
-                        } else {
-                            Text("No external displays detected")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    // Preset Selector
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Presets:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Menu {
-                            if outputMappingManager.presets.isEmpty {
-                                Text("No Presets")
-                                    .disabled(true)
                             } else {
-                                ForEach(outputMappingManager.presets) { preset in
-                                    Button(preset.name) {
-                                        outputMappingManager.applyPreset(preset)
-                                    }
+                                Text("No external displays")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        // Tool Access Buttons (Compact)
+                        VStack(spacing: 6) {
+                            Button(action: { showMappingPanel.toggle() }) {
+                                HStack {
+                                    Image(systemName: "slider.horizontal.3")
+                                        .font(.caption)
+                                    Text("Detailed Controls")
+                                        .font(.caption)
+                                    Spacer()
+                                    Image(systemName: showMappingPanel ? "chevron.up" : "chevron.down")
+                                        .font(.caption2)
                                 }
                             }
+                            .buttonStyle(.bordered)
                             
-                            Divider()
-                            
-                            Button("Save Current as Preset...") {
-                                // This will be handled by the main panel
-                                showMappingPanel = true
+                            Button(action: { showInteractiveCanvas.toggle() }) {
+                                HStack {
+                                    Image(systemName: "viewfinder")
+                                        .font(.caption)
+                                    Text("Visual Editor")
+                                        .font(.caption)
+                                    Spacer()
+                                    Image(systemName: showInteractiveCanvas ? "chevron.up" : "chevron.down")
+                                        .font(.caption2)
+                                }
                             }
-                        } label: {
-                            HStack {
-                                Text(outputMappingManager.selectedPreset?.name ?? "Select Preset")
-                                    .foregroundColor(outputMappingManager.selectedPreset != nil ? .primary : .secondary)
-                                Spacer()
-                                Image(systemName: "chevron.down")
-                                    .font(.caption)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(Color(NSColor.controlBackgroundColor))
-                            .cornerRadius(6)
+                            .buttonStyle(.bordered)
                         }
-                        .menuStyle(.borderlessButton)
-                    }
-                    
-                    Divider()
-                    
-                    // Panel Access Buttons
-                    VStack(spacing: 8) {
-                        Button(action: { showMappingPanel.toggle() }) {
-                            HStack {
-                                Image(systemName: "slider.horizontal.3")
-                                Text("Detailed Controls")
-                                Spacer()
-                                Image(systemName: showMappingPanel ? "chevron.up" : "chevron.down")
-                                    .font(.caption)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Button(action: { showInteractiveCanvas.toggle() }) {
-                            HStack {
-                                Image(systemName: "viewfinder")
-                                Text("Visual Editor")
-                                Spacer()
-                                Image(systemName: showInteractiveCanvas ? "chevron.up" : "chevron.down")
-                                    .font(.caption)
-                            }
-                        }
-                        .buttonStyle(.bordered)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            
-            Spacer()
         }
         .background(Color(NSColor.windowBackgroundColor))
         .popover(isPresented: $showMappingPanel, arrowEdge: .trailing) {

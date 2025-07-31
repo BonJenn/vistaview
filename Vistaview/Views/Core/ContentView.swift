@@ -286,26 +286,27 @@ struct FinalCutProStyleView: View {
                     effectManager: productionManager.effectManager,
                     previewProgramManager: productionManager.previewProgramManager
                 )
-                .frame(height: 200)
+                .frame(height: 180)
                 
                 Divider()
                 
-                // Output Mapping Controls (middle section)
+                // Output Mapping Controls (middle section - flexible height with max limit)
                 OutputMappingControlsView(
                     outputMappingManager: productionManager.outputMappingManager,
                     externalDisplayManager: productionManager.externalDisplayManager
                 )
-                .frame(height: 220)
+                .frame(maxHeight: 300)
                 
                 Divider()
                 
-                // Output Controls (bottom section)
+                // Output Controls (bottom section - takes remaining space)
                 OutputControlsPanel(
                     productionManager: productionManager,
                     rtmpURL: $rtmpURL,
                     streamKey: $streamKey,
                     selectedPlatform: $selectedPlatform
                 )
+                .frame(minHeight: 200)
             }
             .frame(minWidth: 280, maxWidth: 350)
             .background(Color.gray.opacity(0.03))
