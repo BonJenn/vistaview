@@ -88,7 +88,7 @@ final class CameraDeviceManager: ObservableObject {
         
         do {
             // Request camera permissions if not already granted
-            let hasPermission = await AVCaptureDevice.requestAccess(for: .video)
+            let hasPermission = await CameraPermissionHelper.checkAndRequestCameraPermission()
             print("📋 Camera permission status: \(hasPermission)")
             
             guard hasPermission else {
@@ -155,6 +155,13 @@ final class CameraDeviceManager: ObservableObject {
                 }
             }
             
+            // Add default device if not already included
+            if let defaultDevice = AVCaptureDevice.default(for: .video),
+               !deviceIDs.contains(defaultDevice.uniqueID) {
+                allFoundDevices.append(defaultDevice)
+                deviceIDs.insert(defaultDevice.uniqueID)
+            }
+            
             print("📱 Total unique devices found: \(allFoundDevices.count)")
             
             // Convert to CameraDevice objects
@@ -181,15 +188,6 @@ final class CameraDeviceManager: ObservableObject {
                 print("  - macOS version: \(ProcessInfo.processInfo.operatingSystemVersionString)")
                 print("  - App permissions: Camera=\(hasPermission)")
                 
-                // Add mock device for testing if no real devices found
-                let mockDevice = CameraDevice(
-                    deviceID: "mock-camera",
-                    name: "Mock Camera (No devices detected)",
-                    deviceType: .unknown,
-                    isAvailable: false,
-                    captureDevice: nil
-                )
-                devices.append(mockDevice)
                 lastDiscoveryError = "No camera devices detected. Check camera connections and permissions."
             }
             
@@ -207,16 +205,7 @@ final class CameraDeviceManager: ObservableObject {
         } catch {
             lastDiscoveryError = "Device discovery failed: \(error.localizedDescription)"
             print("❌ Device discovery error: \(error)")
-            
-            // Add mock device for testing even on error
-            let mockDevice = CameraDevice(
-                deviceID: "error-mock",
-                name: "Mock Camera (Discovery Error)",
-                deviceType: .unknown,
-                isAvailable: false,
-                captureDevice: nil
-            )
-            availableDevices = [mockDevice]
+            availableDevices = []
         }
         
         isDiscovering = false

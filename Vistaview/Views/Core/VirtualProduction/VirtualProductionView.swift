@@ -944,6 +944,19 @@ struct VirtualProductionView: View {
                                 debugCameras()
                             }
                             
+                            modernButton("Quick Camera Diagnostic", icon: "stethoscope.circle", color: .red) {
+                                let diagnosticWindow = NSWindow(
+                                    contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
+                                    styleMask: [.titled, .closable, .resizable],
+                                    backing: .buffered,
+                                    defer: false
+                                )
+                                diagnosticWindow.title = "Quick Camera Diagnostic"
+                                diagnosticWindow.contentView = NSHostingView(rootView: QuickCameraTestView())
+                                diagnosticWindow.center()
+                                diagnosticWindow.makeKeyAndOrderFront(nil)
+                            }
+                            
                             modernButton("Test Camera Access", icon: "camera.circle", color: .blue) {
                                 Task {
                                     await CameraDebugHelper.testSimpleCameraCapture()

@@ -48,9 +48,13 @@ class CameraDebugHelper {
     static func listAvailableCameras() {
         print("🔍 Listing available cameras...")
         
-        // Get all video devices
+        // Get all video devices - using macOS compatible device types
         let discoverySession = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            deviceTypes: [
+                .builtInWideAngleCamera,
+                .external,
+                .continuityCamera
+            ],
             mediaType: .video,
             position: .unspecified
         )
@@ -62,7 +66,9 @@ class CameraDebugHelper {
             print("   \(index + 1). \(device.localizedName)")
             print("      - Unique ID: \(device.uniqueID)")
             print("      - Model ID: \(device.modelID)")
+            print("      - Device Type: \(device.deviceType.rawValue)")
             print("      - Connected: \(device.isConnected)")
+            print("      - In use: \(device.isInUseByAnotherApplication)")
             print("      - Active format: \(device.activeFormat)")
             
             // Test if we can create input
@@ -72,6 +78,16 @@ class CameraDebugHelper {
             } catch {
                 print("      - ❌ Cannot create input: \(error)")
             }
+        }
+        
+        // Also try the legacy method
+        print("\n🔍 Legacy device enumeration:")
+        let allDevices = AVCaptureDevice.devices()
+        let videoDevices = allDevices.filter { $0.hasMediaType(.video) }
+        print("📱 Found \(videoDevices.count) video devices via legacy method:")
+        
+        for (index, device) in videoDevices.enumerated() {
+            print("   \(index + 1). \(device.localizedName) (\(device.deviceType.rawValue))")
         }
     }
     

@@ -28,7 +28,7 @@ final class CameraFeed: ObservableObject, Identifiable {
     private(set) var captureSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private let videoQueue = DispatchQueue(label: "camera.feed.queue", qos: .userInitiated)
-    private(set) var frameCount = 0
+    @Published private(set) var frameCount = 0  // FIXED: Make frameCount @Published so SwiftUI reacts to changes
     
     // IMPORTANT: Keep strong reference to delegate to prevent deallocation
     private var videoDelegate: VideoOutputDelegate?
@@ -182,22 +182,33 @@ final class CameraFeed: ObservableObject, Identifiable {
                 queue: .main
             ) { _ in
                 print("📹 Session started running notification for: \(self.device.displayName)")
+                // UPDATE STATUS TO CONNECTED WHEN SESSION STARTS
+                Task { @MainActor in
+                    self.connectionStatus = .connected
+                    self.isActive = true
+                    print("✅ Connection status updated to CONNECTED for: \(self.device.displayName)")
+                }
             }
             
             // Start session
             print("🎬 Starting capture session for: \(device.displayName)")
             session.startRunning()
             
-            // Wait and verify session is running
-            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            // Wait a moment for session to start
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             
             if session.isRunning {
-                isActive = true
+                // Set connected status immediately if session is running
                 connectionStatus = .connected
+                isActive = true
                 frameCount = 0
                 lastFrameTime = CACurrentMediaTime()
                 
                 print("✅ Camera feed started successfully: \(device.displayName)")
+                print("✅ Connection status set to CONNECTED")
+                
+                // Force UI update
+                objectWillChange.send()
                 
                 // Start frame monitoring with less frequent checking
                 Task {
@@ -249,14 +260,35 @@ final class CameraFeed: ObservableObject, Identifiable {
         frameCount += 1
         currentFrame = pixelBuffer
         
+        // FORCE CONNECTION STATUS UPDATE ON FIRST FEW FRAMES
+        if frameCount <= 3 && connectionStatus != .connected {
+            print("🔄 FORCING connection status to CONNECTED on frame \(frameCount)")
+            connectionStatus = .connected
+            isActive = true
+        }
+        
         // Convert EVERY frame immediately - no caching or throttling
         updateImages(pixelBuffer)
         
-        // Trigger UI updates for EVERY frame
-        objectWillChange.send()
+        // FORCE UI UPDATE on every frame for first 10 frames
+        if frameCount <= 10 {
+            print("🔄 Forcing UI update for frame \(frameCount) - Status: \(connectionStatus.displayText)")
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+            }
+        } else {
+            // Trigger UI updates for EVERY frame
+            objectWillChange.send()
+        }
         
-        // Minimal debug logging
-        if frameCount % 150 == 1 {
+        // Enhanced debug logging for connection issues
+        if frameCount <= 10 {
+            print("🎥 Camera feed '\(device.displayName)' frame \(frameCount) - INITIAL FRAMES")
+            print("   - Status: \(connectionStatus.displayText)")
+            print("   - Has previewImage: \(previewImage != nil)")
+            print("   - Has previewNSImage: \(previewNSImage != nil)")
+            print("   - isActive: \(isActive)")
+        } else if frameCount % 150 == 1 {
             print("🎥 Camera feed '\(device.displayName)' frame \(frameCount)")
         }
     }
@@ -269,12 +301,24 @@ final class CameraFeed: ObservableObject, Identifiable {
         // Convert CVPixelBuffer to CGImage
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+            if frameCount <= 5 {
+                print("❌ Failed to create CGImage from pixel buffer - frame \(frameCount)")
+            }
             return
         }
         
-        // Create NSImage
+        // Create NSImage with explicit size
         let nsImage = NSImage(size: NSSize(width: width, height: height))
-        nsImage.addRepresentation(NSBitmapImageRep(cgImage: cgImage))
+        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        nsImage.addRepresentation(bitmapRep)
+        
+        // Verify NSImage was created properly
+        if frameCount <= 5 {
+            print("✅ Created images for frame \(frameCount) - Size: \(width)x\(height)")
+            print("   - CGImage valid: \(cgImage.width)x\(cgImage.height)")
+            print("   - NSImage valid: \(nsImage.isValid), Size: \(nsImage.size)")
+            print("   - NSImage representations: \(nsImage.representations.count)")
+        }
         
         // Update EVERY frame - no caching
         previewImage = cgImage
@@ -284,6 +328,7 @@ final class CameraFeed: ObservableObject, Identifiable {
     private class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         private weak var feed: CameraFeed?
         private var debugFrameCount = 0
+        private var lastFrameTime = CACurrentMediaTime()
         
         init(feed: CameraFeed) {
             self.feed = feed
@@ -297,19 +342,37 @@ final class CameraFeed: ObservableObject, Identifiable {
         
         func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
             debugFrameCount += 1
+            let currentTime = CACurrentMediaTime()
             
             if debugFrameCount == 1 {
                 print("🎉 FIRST FRAME RECEIVED for \(self.feed?.device.displayName ?? "unknown")!")
+                print("   - Buffer format: \(CMSampleBufferGetFormatDescription(sampleBuffer) != nil ? "Valid" : "Invalid")")
+                print("   - Has pixel buffer: \(CMSampleBufferGetImageBuffer(sampleBuffer) != nil)")
+                
+                // ENSURE CONNECTION STATUS IS SET TO CONNECTED ON FIRST FRAME
+                Task { @MainActor in
+                    if let feed = self.feed, feed.connectionStatus != .connected {
+                        feed.connectionStatus = .connected
+                        feed.isActive = true
+                        feed.objectWillChange.send()
+                        print("🔄 Updated connection status to CONNECTED on first frame")
+                    }
+                }
             }
             
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { 
+                if debugFrameCount <= 5 {
+                    print("❌ No pixel buffer in sample buffer - frame \(debugFrameCount)")
+                }
                 return 
             }
             
-            // Minimal debug logging
-            if debugFrameCount <= 3 {
-                print("🎥 VideoOutputDelegate received frame \(debugFrameCount) for \(self.feed?.device.displayName ?? "unknown")")
+            // Calculate FPS for first few frames
+            if debugFrameCount <= 10 {
+                let fps = debugFrameCount > 1 ? 1.0 / (currentTime - lastFrameTime) : 0
+                print("🎥 VideoOutputDelegate frame \(debugFrameCount) for \(self.feed?.device.displayName ?? "unknown") - FPS: \(String(format: "%.1f", fps))")
             }
+            lastFrameTime = currentTime
             
             // Process EVERY frame immediately
             Task { @MainActor in
@@ -393,6 +456,15 @@ final class CameraFeedManager: ObservableObject {
         // Check if feed already exists
         if let existingFeed = activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
             print("📹 Feed already exists for \(device.displayName), returning existing feed")
+            
+            // FORCE STATUS CHECK FOR EXISTING FEED
+            if existingFeed.frameCount > 0 && existingFeed.connectionStatus != .connected {
+                print("🔄 Existing feed has frames but wrong status - fixing...")
+                existingFeed.connectionStatus = .connected
+                existingFeed.isActive = true
+                existingFeed.objectWillChange.send()
+            }
+            
             return existingFeed
         }
         
@@ -408,9 +480,23 @@ final class CameraFeedManager: ObservableObject {
         
         await feed.startCapture()
         
+        // FORCE STATUS UPDATE AFTER CAPTURE START
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second
+        
+        if feed.frameCount > 0 && feed.connectionStatus != .connected {
+            print("🔄 Feed has frames but status is wrong - forcing update...")
+            feed.connectionStatus = .connected
+            feed.isActive = true
+            feed.objectWillChange.send()
+            self.objectWillChange.send()
+        }
+        
         // Verify the feed started successfully
-        if feed.connectionStatus == .connected {
+        if feed.connectionStatus == .connected || feed.frameCount > 0 {
             print("✅ Camera feed started successfully: \(device.displayName)")
+            print("   - Final status: \(feed.connectionStatus.displayText)")
+            print("   - Frame count: \(feed.frameCount)")
+            print("   - Has preview: \(feed.previewImage != nil)")
             
             // PERFORMANCE: Reduce UI update frequency
             feed.objectWillChange.send()

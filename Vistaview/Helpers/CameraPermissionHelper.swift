@@ -7,34 +7,30 @@
 
 import Foundation
 import AVFoundation
-import AppKit
 
-@MainActor
+/// Helper class for managing camera permissions
 class CameraPermissionHelper {
     
+    /// Check and request camera permission if needed
     static func checkAndRequestCameraPermission() async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        let currentStatus = AVCaptureDevice.authorizationStatus(for: .video)
         
-        print("📹 Camera permission status: \(status.rawValue)")
-        
-        switch status {
+        switch currentStatus {
         case .authorized:
             print("✅ Camera permission already granted")
             return true
             
-        case .notDetermined:
-            print("❓ Camera permission not determined - requesting...")
-            let granted = await AVCaptureDevice.requestAccess(for: .video)
-            print(granted ? "✅ Camera permission granted!" : "❌ Camera permission denied")
-            return granted
-            
         case .denied:
-            print("❌ Camera permission denied - user needs to enable in System Preferences")
+            print("❌ Camera permission denied")
             return false
             
         case .restricted:
             print("⚠️ Camera permission restricted")
             return false
+            
+        case .notDetermined:
+            print("❓ Camera permission not determined - requesting...")
+            return await AVCaptureDevice.requestAccess(for: .video)
             
         @unknown default:
             print("❓ Unknown camera permission status")
@@ -42,18 +38,13 @@ class CameraPermissionHelper {
         }
     }
     
-    static func showPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Camera Permission Required"
-        alert.informativeText = "Vistaview needs camera access to show live previews. Please enable camera access in System Preferences > Security & Privacy > Camera."
-        alert.addButton(withTitle: "Open System Preferences")
-        alert.addButton(withTitle: "Cancel")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
-                NSWorkspace.shared.open(url)
-            }
-        }
+    /// Get current camera permission status
+    static func getCurrentPermissionStatus() -> AVAuthorizationStatus {
+        return AVCaptureDevice.authorizationStatus(for: .video)
+    }
+    
+    /// Check if camera permission is granted
+    static func isCameraPermissionGranted() -> Bool {
+        return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
     }
 }

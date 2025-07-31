@@ -170,26 +170,34 @@ final class PreviewProgramManager: ObservableObject {
     func loadToPreview(_ source: ContentSource) {
         let displayName = getDisplayName(for: source)
         
-        print("🎬 Loading to preview: \(displayName)")
+        print("🎬 PreviewProgramManager.loadToPreview() called with: \(displayName)")
+        print("🎬 Source type: \(source)")
         
         // Stop current preview if playing
         stopPreview()
         
         switch source {
         case .camera(let feed):
+            print("🎬 PreviewProgramManager: Loading camera feed to preview: \(feed.device.displayName)")
             previewSource = source
             updatePreviewFromCamera(feed)
+            print("🎬 PreviewProgramManager: Preview source set to camera")
             
         case .media(let file, let player):
+            print("🎬 PreviewProgramManager: Loading media file to preview: \(file.name)")
             loadMediaToPreview(file)
             
         case .virtual(let camera):
+            print("🎬 PreviewProgramManager: Loading virtual camera to preview: \(camera.name)")
             previewSource = source
             updatePreviewFromVirtual(camera)
             
         case .none:
+            print("🎬 PreviewProgramManager: Clearing preview")
             clearPreview()
         }
+        
+        print("🎬 PreviewProgramManager: loadToPreview completed. Current preview source: \(previewSourceDisplayName)")
     }
     
     /// Load content into program (goes live immediately)
@@ -221,18 +229,26 @@ final class PreviewProgramManager: ObservableObject {
     /// "Take" - Cut preview to program instantly
     func take() {
         print("✂️ TAKE: Moving preview to program")
+        print("✂️ TAKE DEBUG: Current preview source: \(previewSource)")
+        print("✂️ TAKE DEBUG: Current program source: \(programSource)")
         
         // Stop current program
         stopProgram()
         
         // Move preview content to program
         let previewContent = previewSource
+        print("✂️ TAKE DEBUG: Moving \(previewContent) to program")
+        
         loadToProgram(previewContent)
         
         // Reset crossfader to full program
         crossfaderValue = 0.0
         
+        // Force UI updates
+        objectWillChange.send()
+        
         print("✅ Take complete: Program now showing \(programSourceDisplayName)")
+        print("✅ TAKE DEBUG: Final program source: \(programSource)")
     }
     
     /// Smooth transition from program to preview over time
@@ -396,19 +412,35 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func updatePreviewFromCamera(_ feed: CameraFeed) {
-        // Set up observer for camera feed updates with effects processing
-        previewImage = processImageWithEffects(feed.previewImage, for: .preview)
+        print("📹 CAMERA DEBUG: updatePreviewFromCamera called for: \(feed.device.displayName)")
+        print("📹 CAMERA DEBUG: Feed has image: \(feed.previewImage != nil)")
+        print("📹 CAMERA DEBUG: Feed status: \(feed.connectionStatus.displayText)")
+        print("📹 CAMERA DEBUG: Feed frame count: \(feed.frameCount)")
         
-        // TODO: Set up continuous updates from camera feed with effects
+        // FIXED: The monitor views will display the camera feed directly
+        // We don't need to process images here, just ensure the source is set
+        // The UI will react to the camera feed's published properties automatically
+        
         print("📹 Camera feed connected to preview: \(feed.device.displayName)")
+        
+        // Force immediate UI update to ensure preview monitor updates
+        objectWillChange.send()
     }
     
     private func updateProgramFromCamera(_ feed: CameraFeed) {
-        // Set up observer for camera feed updates with effects processing
-        programImage = processImageWithEffects(feed.previewImage, for: .program)
+        print("📺 CAMERA DEBUG: updateProgramFromCamera called for: \(feed.device.displayName)")
+        print("📺 CAMERA DEBUG: Feed has image: \(feed.previewImage != nil)")
+        print("📺 CAMERA DEBUG: Feed status: \(feed.connectionStatus.displayText)")
+        print("📺 CAMERA DEBUG: Feed frame count: \(feed.frameCount)")
         
-        // TODO: Set up continuous updates from camera feed with effects
-        print("📹 Camera feed connected to program: \(feed.device.displayName)")
+        // FIXED: The monitor views will display the camera feed directly
+        // We don't need to process images here, just ensure the source is set
+        // The UI will react to the camera feed's published properties automatically
+        
+        print("📺 Camera feed connected to program: \(feed.device.displayName)")
+        
+        // Force immediate UI update to ensure program monitor updates
+        objectWillChange.send()
     }
     
     private func updatePreviewFromVirtual(_ camera: VirtualCamera) {
@@ -450,7 +482,10 @@ final class PreviewProgramManager: ObservableObject {
         }
     }
     
-    private func processImageWithEffects(_ image: CGImage?, for output: OutputType) -> CGImage? {
+    // MARK: - Public Methods for Effects Processing
+    
+    /// Process image with effects - made public for view access
+    func processImageWithEffects(_ image: CGImage?, for output: OutputType) -> CGImage? {
         guard let image = image else { return nil }
         
         // Convert CGImage to MTLTexture
@@ -504,6 +539,9 @@ final class PreviewProgramManager: ObservableObject {
         return context.createCGImage(flippedImage, from: flippedImage.extent)
     }
     
+    // MARK: - Public Types
+    
+    /// Output type for effects processing - made public
     enum OutputType {
         case preview, program
     }

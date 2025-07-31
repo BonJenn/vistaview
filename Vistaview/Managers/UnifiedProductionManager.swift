@@ -6,6 +6,7 @@
 import Foundation
 import SwiftUI
 import SceneKit
+import Metal
 
 @MainActor
 final class UnifiedProductionManager: ObservableObject {
@@ -14,6 +15,21 @@ final class UnifiedProductionManager: ObservableObject {
     let studioManager: VirtualStudioManager
     let cameraFeedManager: CameraFeedManager
     let effectManager: EffectManager
+    let outputMappingManager: OutputMappingManager
+    let externalDisplayManager: ExternalDisplayManager
+    
+    // Preview/Program Manager - lazy initialized to avoid circular dependencies
+    private var _previewProgramManager: PreviewProgramManager?
+    var previewProgramManager: PreviewProgramManager {
+        if _previewProgramManager == nil {
+            _previewProgramManager = PreviewProgramManager(
+                cameraFeedManager: cameraFeedManager,
+                unifiedProductionManager: self,
+                effectManager: effectManager
+            )
+        }
+        return _previewProgramManager!
+    }
     
     // Published States
     @Published var currentStudioName: String = "Default Studio"
@@ -36,6 +52,12 @@ final class UnifiedProductionManager: ObservableObject {
         self.streamingViewModel = StreamingViewModel()
         self.effectManager = EffectManager()
         
+        // Initialize output mapping manager with the same Metal device as effects
+        self.outputMappingManager = OutputMappingManager(metalDevice: effectManager.metalDevice)
+        
+        // Initialize external display manager
+        self.externalDisplayManager = ExternalDisplayManager()
+        
         // Set up bidirectional integration
         setupIntegration()
         
@@ -47,7 +69,12 @@ final class UnifiedProductionManager: ObservableObject {
         // Connect camera feed manager to streaming view model
         cameraFeedManager.setStreamingViewModel(streamingViewModel)
         
+        // Connect external display manager to production manager
+        externalDisplayManager.setProductionManager(self)
+        
         print("🔗 Unified Production Manager: Integration setup complete")
+        print("🎯 Output Mapping Manager: Initialized with \(outputMappingManager.presets.count) presets")
+        print("🖥️ External Display Manager: Ready for multi-display output")
     }
     
     // MARK: - Mode Switching with State Management
