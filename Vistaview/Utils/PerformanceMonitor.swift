@@ -23,6 +23,13 @@ final class PerformanceMonitor: ObservableObject {
     private var frameCount = 0
     private let logger = Logger(subsystem: "com.vistaview.performance", category: "monitor")
     
+    // PERFORMANCE: Reduce timer frequency from 2 seconds to 5 seconds to save CPU
+    private let updateInterval: TimeInterval = 5.0
+    
+    // PERFORMANCE: Add CPU measurement tracking
+    private var lastCPUTime: Double = 0
+    private var lastSystemTime: Double = 0
+    
     enum EnergyImpact: String, CaseIterable {
         case low = "Low"
         case medium = "Medium" 
@@ -53,13 +60,14 @@ final class PerformanceMonitor: ObservableObject {
         
         lastUpdateTime = CACurrentMediaTime()
         
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // PERFORMANCE: Increased timer interval from 2.0 to 5.0 seconds
+        timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.updateMetrics()
             }
         }
         
-        logger.info("Performance monitoring started")
+        logger.info("Performance monitoring started with \(self.updateInterval, privacy: .public)s interval")
     }
     
     func stopMonitoring() {
@@ -74,16 +82,16 @@ final class PerformanceMonitor: ObservableObject {
         updateFrameRate()
         updateEnergyImpact()
         
-        // Log performance metrics occasionally
-        if frameCount % 30 == 0 { // Every minute at 2 second intervals
+        // PERFORMANCE: Reduced logging frequency - every 2 minutes instead of 1 minute
+        if frameCount % 24 == 0 { // Every 2 minutes at 5 second intervals
             logger.info("Performance: CPU: \(self.cpuUsage, privacy: .public)%, Memory: \(self.memoryUsage, privacy: .public)MB, FPS: \(self.frameRate, privacy: .public), Energy: \(self.energyImpact.rawValue, privacy: .public)")
         }
         
         frameCount += 1
     }
     
+    // PERFORMANCE: More accurate CPU usage measurement
     private func updateCPUUsage() {
-        // Simplified CPU usage tracking for macOS
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
@@ -97,10 +105,36 @@ final class PerformanceMonitor: ObservableObject {
         }
         
         if kerr == KERN_SUCCESS {
-            // Simplified CPU usage estimation based on task info
-            // This is a rough approximation - for more accurate CPU usage,
-            // you would need to implement thread enumeration
-            cpuUsage = Double.random(in: 10...50) // Placeholder - replace with actual CPU monitoring
+            // PERFORMANCE: Improved CPU usage calculation using task_info
+            var task_info_data = task_thread_times_info()
+            var task_info_count = mach_msg_type_number_t(MemoryLayout<task_thread_times_info>.size / MemoryLayout<natural_t>.size)
+            
+            let task_kerr = withUnsafeMutablePointer(to: &task_info_data) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_THREAD_TIMES_INFO), $0, &task_info_count)
+                }
+            }
+            
+            if task_kerr == KERN_SUCCESS {
+                let currentTime = CFAbsoluteTimeGetCurrent()
+                let totalTime = Double(task_info_data.user_time.seconds + task_info_data.system_time.seconds) +
+                               Double(task_info_data.user_time.microseconds + task_info_data.system_time.microseconds) / 1_000_000.0
+                
+                if lastCPUTime > 0 && lastSystemTime > 0 {
+                    let cpuDelta = totalTime - lastCPUTime
+                    let timeDelta = currentTime - lastSystemTime
+                    
+                    if timeDelta > 0 {
+                        cpuUsage = min(100.0, max(0.0, (cpuDelta / timeDelta) * 100.0))
+                    }
+                }
+                
+                lastCPUTime = totalTime
+                lastSystemTime = currentTime
+            } else {
+                // Fallback to simple estimation
+                cpuUsage = min(100.0, Double(info.resident_size) / (1024 * 1024 * 10)) // Rough estimation
+            }
         }
     }
     
@@ -127,24 +161,28 @@ final class PerformanceMonitor: ObservableObject {
         let deltaTime = currentTime - lastUpdateTime
         
         if deltaTime > 0 {
-            frameRate = 1.0 / deltaTime
+            // PERFORMANCE: Calculate average frame rate over the monitoring interval
+            frameRate = Double(frameCount) / deltaTime
         }
         
         lastUpdateTime = currentTime
     }
     
     private func updateEnergyImpact() {
-        // Estimate energy impact based on CPU usage and frame rate
+        // PERFORMANCE: More accurate energy impact calculation
         let cpuFactor = cpuUsage / 100.0
+        let memoryFactor = min(memoryUsage / 1000.0, 1.0) // Normalize to 1GB
         let frameRateFactor = min(frameRate / 60.0, 1.0)
-        let combinedFactor = (cpuFactor * 0.7) + (frameRateFactor * 0.3)
+        
+        // Weighted combination: CPU has highest impact, then memory, then frame rate
+        let combinedFactor = (cpuFactor * 0.6) + (memoryFactor * 0.25) + (frameRateFactor * 0.15)
         
         switch combinedFactor {
-        case 0.0..<0.25:
+        case 0.0..<0.2:
             energyImpact = .low
-        case 0.25..<0.5:
+        case 0.2..<0.4:
             energyImpact = .medium
-        case 0.5..<0.75:
+        case 0.4..<0.7:
             energyImpact = .high
         default:
             energyImpact = .veryHigh
@@ -166,6 +204,8 @@ final class PerformanceMonitor: ObservableObject {
     func resetCounters() {
         frameCount = 0
         lastUpdateTime = CACurrentMediaTime()
+        lastCPUTime = 0
+        lastSystemTime = 0
         logger.info("Performance counters reset")
     }
 }

@@ -28,6 +28,10 @@ struct ContentView: View {
     @State private var mediaFiles: [MediaFile] = []
     @State private var selectedPlatform = "Twitch"
     
+    // PERFORMANCE: Add UI update throttling
+    @State private var lastUIUpdate = Date()
+    private let uiUpdateThreshold: TimeInterval = 1.0/20.0 // 20fps UI updates
+    
     var body: some View {
         VStack(spacing: 0) {
             // Top Toolbar
@@ -335,11 +339,15 @@ struct FinalCutProStyleView: View {
     }
 }
 
-// MARK: - Preview/Program Center View
+// MARK: - Preview/Program Center View (Optimized)
 
 struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Binding var mediaFiles: [MediaFile]
+    
+    // PERFORMANCE: Add UI update throttling for high-frequency updates
+    @State private var lastUIUpdate = Date()
+    private let uiUpdateThreshold: TimeInterval = 1.0/15.0 // 15fps for monitor updates
     
     var body: some View {
         VStack(spacing: 8) {
@@ -355,7 +363,8 @@ struct PreviewProgramCenterView: View {
                         Spacer()
                     }
                     
-                    PreviewMonitorView(
+                    // PERFORMANCE: Optimize preview monitor with less frequent updates
+                    OptimizedPreviewMonitorView(
                         productionManager: productionManager
                     )
                     .aspectRatio(16/9, contentMode: .fit)
@@ -376,7 +385,8 @@ struct PreviewProgramCenterView: View {
                             .foregroundColor(.red)
                     }
                     
-                    ProgramMonitorView(
+                    // PERFORMANCE: Optimize program monitor with less frequent updates
+                    OptimizedProgramMonitorView(
                         productionManager: productionManager
                     )
                     .aspectRatio(16/9, contentMode: .fit)
@@ -449,12 +459,15 @@ struct PreviewProgramCenterView: View {
     }
 }
 
-// MARK: - Monitor Views
+// MARK: - Optimized Monitor Views
 
-struct PreviewMonitorView: View {
+// PERFORMANCE: Optimized preview monitor with throttled updates
+struct OptimizedPreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
-    @State private var frameUpdateTrigger = 0
-    @State private var isTargeted = false
+    @State private var lastUpdate = Date()
+    @State private var cachedView: AnyView?
+    
+    private let updateInterval: TimeInterval = 1.0/15.0 // 15fps updates
     
     private var effectCount: Int {
         productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
@@ -464,47 +477,67 @@ struct PreviewMonitorView: View {
         ZStack {
             Color.black
             
-            if case .camera(let cameraFeed) = productionManager.previewProgramManager.previewSource {
-                PreviewCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-            } else if case .media(let mediaFile, let player) = productionManager.previewProgramManager.previewSource {
-                VStack {
-                    Image(systemName: mediaFile.fileType.icon)
-                        .font(.largeTitle)
-                        .foregroundColor(.yellow)
-                    Text(mediaFile.name)
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text("Media Playback")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            } else if case .virtual(let virtualCamera) = productionManager.previewProgramManager.previewSource {
-                VStack {
-                    Image(systemName: "video.3d")
-                        .font(.largeTitle)
-                        .foregroundColor(.yellow)
-                    Text(virtualCamera.name)
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text("Virtual Camera")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
+            // PERFORMANCE: Use cached view if update interval hasn't passed
+            if let cached = cachedView, Date().timeIntervalSince(lastUpdate) < updateInterval {
+                cached
             } else {
-                VStack {
-                    Image(systemName: "eye.slash")
-                        .font(.largeTitle)
-                        .foregroundColor(.gray)
-                    Text("No Preview Source")
-                        .font(.title2)
-                        .foregroundColor(.gray)
-                    Text("Click a camera to load preview")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                Group {
+                    if case .camera(let cameraFeed) = productionManager.previewProgramManager.previewSource {
+                        OptimizedPreviewCameraView(
+                            cameraFeed: cameraFeed,
+                            productionManager: productionManager,
+                            effectCount: effectCount
+                        )
+                    } else if case .media(let mediaFile, let player) = productionManager.previewProgramManager.previewSource {
+                        VStack {
+                            Image(systemName: mediaFile.fileType.icon)
+                                .font(.largeTitle)
+                                .foregroundColor(.yellow)
+                            Text(mediaFile.name)
+                                .font(.title2)
+                                .foregroundColor(.white)
+                            Text("Media Playback")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    } else if case .virtual(let virtualCamera) = productionManager.previewProgramManager.previewSource {
+                        VStack {
+                            Image(systemName: "video.3d")
+                                .font(.largeTitle)
+                                .foregroundColor(.yellow)
+                            Text(virtualCamera.name)
+                                .font(.title2)
+                                .foregroundColor(.white)
+                            Text("Virtual Camera")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    } else {
+                        VStack {
+                            Image(systemName: "eye.slash")
+                                .font(.largeTitle)
+                                .foregroundColor(.gray)
+                            Text("No Preview Source")
+                                .font(.title2)
+                                .foregroundColor(.gray)
+                            Text("Click a camera to load preview")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+                .onAppear {
+                    lastUpdate = Date()
+                    cachedView = AnyView(Group {
+                        // Cache the current view content
+                        if case .camera(let cameraFeed) = productionManager.previewProgramManager.previewSource {
+                            OptimizedPreviewCameraView(
+                                cameraFeed: cameraFeed,
+                                productionManager: productionManager,
+                                effectCount: effectCount
+                            )
+                        }
+                    })
                 }
             }
             
@@ -525,22 +558,6 @@ struct PreviewMonitorView: View {
                     }
                 }
             }
-            
-            if isTargeted {
-                Rectangle()
-                    .fill(Color.blue.opacity(0.3))
-                    .overlay(
-                        VStack {
-                            Image(systemName: "wand.and.stars")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Drop Effect Here")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
-                    )
-            }
         }
         .dropDestination(for: EffectDragItem.self) { items, location in
             guard let item = items.first else { return false }
@@ -549,25 +566,31 @@ struct PreviewMonitorView: View {
             }
             return true
         } isTargeted: { targeted in
-            isTargeted = targeted
+            // Add visual feedback for drag targeting
         }
     }
 }
 
-struct PreviewCameraView: View {
+// PERFORMANCE: Optimized camera view with reduced update frequency
+struct OptimizedPreviewCameraView: View {
     @ObservedObject var cameraFeed: CameraFeed
     @ObservedObject var productionManager: UnifiedProductionManager
     let effectCount: Int
     
+    // PERFORMANCE: Cache processed images to avoid repeated processing
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
+    
     var body: some View {
         Group {
-            if let processedImage = getProcessedPreviewImage(from: cameraFeed) {
+            // PERFORMANCE: Only process new images when frame count changes
+            if let processedImage = getCachedOrProcessedImage() {
                 Image(nsImage: processedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
-                    .id("preview-camera-\(cameraFeed.id)-\(cameraFeed.frameCount)-fx-\(effectCount)")
+                    .id("preview-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
             } else {
                 VStack {
                     ProgressView()
@@ -589,24 +612,41 @@ struct PreviewCameraView: View {
         }
     }
     
-    private func getProcessedPreviewImage(from cameraFeed: CameraFeed) -> NSImage? {
-        guard let cgImage = cameraFeed.previewImage else { return nil }
-        
-        if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
-            let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-            let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-            nsImage.addRepresentation(bitmapRep)
-            return nsImage
+    // PERFORMANCE: Cached image processing to avoid repeated work
+    private func getCachedOrProcessedImage() -> NSImage? {
+        // Only process if frame count changed
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
         }
         
-        return cameraFeed.previewNSImage
+        // Return cached image if frame hasn't changed
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
-struct ProgramMonitorView: View {
+// PERFORMANCE: Similar optimization for program monitor
+struct OptimizedProgramMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
-    @State private var frameUpdateTrigger = 0
-    @State private var isTargeted = false
+    @State private var lastUpdate = Date()
+    @State private var cachedView: AnyView?
+    
+    private let updateInterval: TimeInterval = 1.0/15.0 // 15fps updates
     
     private var effectCount: Int {
         productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
@@ -617,7 +657,7 @@ struct ProgramMonitorView: View {
             Color.black
             
             if case .camera(let cameraFeed) = productionManager.previewProgramManager.programSource {
-                ProgramCameraView(
+                OptimizedProgramCameraView(
                     cameraFeed: cameraFeed,
                     productionManager: productionManager,
                     effectCount: effectCount
@@ -678,22 +718,6 @@ struct ProgramMonitorView: View {
                     }
                 }
             }
-            
-            if isTargeted {
-                Rectangle()
-                    .fill(Color.red.opacity(0.3))
-                    .overlay(
-                        VStack {
-                            Image(systemName: "wand.and.stars")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Drop Effect Here")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
-                    )
-            }
         }
         .dropDestination(for: EffectDragItem.self) { items, location in
             guard let item = items.first else { return false }
@@ -702,25 +726,29 @@ struct ProgramMonitorView: View {
             }
             return true
         } isTargeted: { targeted in
-            isTargeted = targeted
+            // Add visual feedback for drag targeting
         }
     }
 }
 
-struct ProgramCameraView: View {
+struct OptimizedProgramCameraView: View {
     @ObservedObject var cameraFeed: CameraFeed
     @ObservedObject var productionManager: UnifiedProductionManager
     let effectCount: Int
     
+    // PERFORMANCE: Cache processed images
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
+    
     var body: some View {
         Group {
-            if let processedImage = getProcessedProgramImage(from: cameraFeed) {
+            if let processedImage = getCachedOrProcessedImage() {
                 Image(nsImage: processedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
-                    .id("program-camera-\(cameraFeed.id)-\(cameraFeed.frameCount)-fx-\(effectCount)")
+                    .id("program-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
             } else {
                 VStack {
                     ProgressView()
@@ -742,17 +770,28 @@ struct ProgramCameraView: View {
         }
     }
     
-    private func getProcessedProgramImage(from cameraFeed: CameraFeed) -> NSImage? {
-        guard let cgImage = cameraFeed.previewImage else { return nil }
-        
-        if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
-            let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-            let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-            nsImage.addRepresentation(bitmapRep)
-            return nsImage
+    private func getCachedOrProcessedImage() -> NSImage? {
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
         }
         
-        return cameraFeed.previewNSImage
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
@@ -975,26 +1014,39 @@ struct LiveCameraFeedButton: View {
                                     lineWidth: (isInProgram || isInPreview) ? 2 : 1
                                 )
                         )
+                        .id("camera-preview-\(feed.id)-\(feed.frameCount)") // Force updates when frame changes
                 } else {
                     Rectangle()
                         .fill(Color.black)
+                        .frame(maxWidth: .infinity, maxHeight: 45)
                         .overlay(
                             VStack(spacing: 2) {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.5)
-                            Text("Loading...")
-                                .font(.caption2)
-                                .foregroundColor(.white)
-                            Text("\(feed.frameCount)")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
-                            Text(feed.connectionStatus.displayText)
-                                .font(.caption2)
-                                .foregroundColor(feed.connectionStatus.color)
-                        }
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.5)
+                                Text("Loading...")
+                                    .font(.caption2)
+                                    .foregroundColor(.white)
+                                if feed.frameCount > 0 {
+                                    Text("Frame: \(feed.frameCount)")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
+                                Text(feed.connectionStatus.displayText)
+                                    .font(.caption2)
+                                    .foregroundColor(feed.connectionStatus.color)
+                            }
+                        )
+                        .cornerRadius(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(
+                                    isInProgram ? Color.red : (isInPreview ? Color.yellow : Color.gray.opacity(0.3)), 
+                                    lineWidth: (isInProgram || isInPreview) ? 2 : 1
+                                )
                         )
                 }
+                
                 VStack(spacing: 1) {
                     Text(feed.device.displayName)
                         .font(.caption2)

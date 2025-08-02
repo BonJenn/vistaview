@@ -28,23 +28,33 @@ final class CameraFeed: ObservableObject, Identifiable {
     private(set) var captureSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private let videoQueue = DispatchQueue(label: "camera.feed.queue", qos: .userInitiated)
-    @Published private(set) var frameCount = 0  // FIXED: Make frameCount @Published so SwiftUI reacts to changes
+    
+    // PERFORMANCE: Add background image processing queue
+    private let imageProcessingQueue = DispatchQueue(label: "camera.imageprocessing.queue", qos: .utility)
+    
+    @Published private(set) var frameCount = 0
     
     // IMPORTANT: Keep strong reference to delegate to prevent deallocation
     private var videoDelegate: VideoOutputDelegate?
     
-    // CIContext for image conversion
-    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    // CIContext for image conversion - reuse instance for efficiency
+    private let ciContext = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: NSNull()])
     
     // Add session monitoring
     private var sessionObserver: NSObjectProtocol?
     
-    // REVERTED: Back to original frame rate for better quality
-    private var lastFrameTime: CFTimeInterval = 0
-    private var targetFrameInterval: CFTimeInterval = 1.0/30.0 // Back to 30fps for better quality
-    private var lastProcessedImage: CGImage?
-    private var lastProcessedNSImage: NSImage?
+    // PERFORMANCE: UI update throttling - only update UI at 15fps instead of 30fps
+    private var lastUIUpdateTime: CFTimeInterval = 0
+    private let uiUpdateInterval: CFTimeInterval = 1.0/15.0 // 15fps for UI updates
+    
+    // PERFORMANCE: Image caching to avoid reprocessing identical frames
+    private var lastProcessedPixelBuffer: CVPixelBuffer?
+    private var cachedCGImage: CGImage?
+    private var cachedNSImage: NSImage?
     private var imageConversionCount = 0
+    
+    // PERFORMANCE: Frame change detection
+    private var lastFrameTimestamp: CFTimeInterval = 0
     
     enum ConnectionStatus: Equatable {
         case disconnected
@@ -111,9 +121,9 @@ final class CameraFeed: ObservableObject, Identifiable {
             let session = AVCaptureSession()
             session.beginConfiguration()
             
-            // FULL QUALITY: Use the highest quality presets available
-            let presets: [AVCaptureSession.Preset] = [.high, .medium, .low]
-            var selectedPreset: AVCaptureSession.Preset = .high // Start with highest quality
+            // PERFORMANCE: Use medium quality for better CPU efficiency while maintaining good visual quality
+            let presets: [AVCaptureSession.Preset] = [.medium, .high, .low]
+            var selectedPreset: AVCaptureSession.Preset = .medium // Start with balanced quality/performance
             
             for preset in presets {
                 if session.canSetSessionPreset(preset) {
@@ -141,13 +151,13 @@ final class CameraFeed: ObservableObject, Identifiable {
             // Configure video output with optimal settings
             let output = AVCaptureVideoDataOutput()
             
-            // FULL QUALITY: Use highest quality video settings
+            // PERFORMANCE: Use optimized pixel format
             output.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]
             
-            // FULL QUALITY: Don't discard frames - process everything
-            output.alwaysDiscardsLateVideoFrames = false
+            // PERFORMANCE: Allow frame dropping to prevent memory buildup
+            output.alwaysDiscardsLateVideoFrames = true
             
             // Create and retain delegate
             let delegate = VideoOutputDelegate(feed: self)
@@ -202,7 +212,7 @@ final class CameraFeed: ObservableObject, Identifiable {
                 connectionStatus = .connected
                 isActive = true
                 frameCount = 0
-                lastFrameTime = CACurrentMediaTime()
+                lastUIUpdateTime = CACurrentMediaTime()
                 
                 print("✅ Camera feed started successfully: \(device.displayName)")
                 print("✅ Connection status set to CONNECTED")
@@ -210,7 +220,7 @@ final class CameraFeed: ObservableObject, Identifiable {
                 // Force UI update
                 objectWillChange.send()
                 
-                // Start frame monitoring with less frequent checking
+                // PERFORMANCE: Less frequent frame monitoring
                 Task {
                     await monitorFrameRate()
                 }
@@ -252,10 +262,15 @@ final class CameraFeed: ObservableObject, Identifiable {
         previewNSImage = nil
         frameCount = 0
         
+        // PERFORMANCE: Clear cached images
+        lastProcessedPixelBuffer = nil
+        cachedCGImage = nil
+        cachedNSImage = nil
+        
         print("🛑 Camera feed stopped: \(device.displayName)")
     }
     
-    // FULL QUALITY: Process EVERY frame with no throttling or caching
+    // PERFORMANCE: Optimized frame processing with throttling and caching
     private func updateFrame(_ pixelBuffer: CVPixelBuffer) {
         frameCount += 1
         currentFrame = pixelBuffer
@@ -267,34 +282,80 @@ final class CameraFeed: ObservableObject, Identifiable {
             isActive = true
         }
         
-        // Convert EVERY frame immediately - no caching or throttling
-        updateImages(pixelBuffer)
+        let currentTime = CACurrentMediaTime()
         
-        // FORCE UI UPDATE on every frame for first 10 frames
-        if frameCount <= 10 {
-            print("🔄 Forcing UI update for frame \(frameCount) - Status: \(connectionStatus.displayText)")
-            DispatchQueue.main.async {
-                self.objectWillChange.send()
+        // PERFORMANCE: Only process images and update UI at 15fps instead of 30fps
+        let shouldUpdateUI = (currentTime - lastUIUpdateTime) >= uiUpdateInterval
+        
+        if shouldUpdateUI {
+            lastUIUpdateTime = currentTime
+            
+            // PERFORMANCE: Check if frame actually changed before processing
+            if shouldProcessNewFrame(pixelBuffer) {
+                // PERFORMANCE: Process images on background thread
+                imageProcessingQueue.async { [weak self] in
+                    self?.updateImagesAsync(pixelBuffer) { [weak self] cgImage, nsImage in
+                        // Update UI on main thread
+                        DispatchQueue.main.async {
+                            self?.previewImage = cgImage
+                            self?.previewNSImage = nsImage
+                            self?.objectWillChange.send()
+                        }
+                    }
+                }
+            } else {
+                // PERFORMANCE: Still trigger UI update but without image processing
+                DispatchQueue.main.async {
+                    self.objectWillChange.send()
+                }
             }
-        } else {
-            // Trigger UI updates for EVERY frame
-            objectWillChange.send()
         }
         
-        // Enhanced debug logging for connection issues
+        // PERFORMANCE: Reduce debug logging frequency
         if frameCount <= 10 {
             print("🎥 Camera feed '\(device.displayName)' frame \(frameCount) - INITIAL FRAMES")
             print("   - Status: \(connectionStatus.displayText)")
             print("   - Has previewImage: \(previewImage != nil)")
             print("   - Has previewNSImage: \(previewNSImage != nil)")
             print("   - isActive: \(isActive)")
-        } else if frameCount % 150 == 1 {
+        } else if frameCount % 300 == 1 { // Log every 10 seconds at 30fps instead of every 5 seconds
             print("🎥 Camera feed '\(device.displayName)' frame \(frameCount)")
         }
     }
     
-    // FULL QUALITY: Convert every frame immediately
-    private func updateImages(_ pixelBuffer: CVPixelBuffer) {
+    // PERFORMANCE: Check if we need to process a new frame (detect changes)
+    private func shouldProcessNewFrame(_ pixelBuffer: CVPixelBuffer) -> Bool {
+        // If no cached frame, always process
+        guard let lastPixelBuffer = lastProcessedPixelBuffer else {
+            lastProcessedPixelBuffer = pixelBuffer
+            return true
+        }
+        
+        // Simple frame change detection using CVPixelBuffer properties
+        let currentWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let currentHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let lastWidth = CVPixelBufferGetWidth(lastPixelBuffer)
+        let lastHeight = CVPixelBufferGetHeight(lastPixelBuffer)
+        
+        // If dimensions changed, definitely process
+        if currentWidth != lastWidth || currentHeight != lastHeight {
+            lastProcessedPixelBuffer = pixelBuffer
+            return true
+        }
+        
+        // PERFORMANCE: Use frame timestamp for better change detection
+        let currentTimestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(currentSampleBuffer!))
+        if abs(currentTimestamp - lastFrameTimestamp) > 0.001 { // More than 1ms difference
+            lastFrameTimestamp = currentTimestamp
+            lastProcessedPixelBuffer = pixelBuffer
+            return true
+        }
+        
+        return false
+    }
+    
+    // PERFORMANCE: Async image processing to keep main thread free
+    private func updateImagesAsync(_ pixelBuffer: CVPixelBuffer, completion: @escaping (CGImage?, NSImage?) -> Void) {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
@@ -304,15 +365,16 @@ final class CameraFeed: ObservableObject, Identifiable {
             if frameCount <= 5 {
                 print("❌ Failed to create CGImage from pixel buffer - frame \(frameCount)")
             }
+            completion(nil, nil)
             return
         }
         
-        // Create NSImage with explicit size
+        // PERFORMANCE: Create NSImage more efficiently
         let nsImage = NSImage(size: NSSize(width: width, height: height))
         let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
         nsImage.addRepresentation(bitmapRep)
         
-        // Verify NSImage was created properly
+        // Verify NSImage was created properly (only for initial frames)
         if frameCount <= 5 {
             print("✅ Created images for frame \(frameCount) - Size: \(width)x\(height)")
             print("   - CGImage valid: \(cgImage.width)x\(cgImage.height)")
@@ -320,9 +382,8 @@ final class CameraFeed: ObservableObject, Identifiable {
             print("   - NSImage representations: \(nsImage.representations.count)")
         }
         
-        // Update EVERY frame - no caching
-        previewImage = cgImage
-        previewNSImage = nsImage
+        imageConversionCount += 1
+        completion(cgImage, nsImage)
     }
     
     private class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -367,14 +428,14 @@ final class CameraFeed: ObservableObject, Identifiable {
                 return 
             }
             
-            // Calculate FPS for first few frames
+            // PERFORMANCE: Reduce FPS logging frequency
             if debugFrameCount <= 10 {
                 let fps = debugFrameCount > 1 ? 1.0 / (currentTime - lastFrameTime) : 0
                 print("🎥 VideoOutputDelegate frame \(debugFrameCount) for \(self.feed?.device.displayName ?? "unknown") - FPS: \(String(format: "%.1f", fps))")
             }
             lastFrameTime = currentTime
             
-            // Process EVERY frame immediately
+            // PERFORMANCE: Process frames asynchronously to avoid blocking capture thread
             Task { @MainActor in
                 self.feed?.currentSampleBuffer = sampleBuffer
                 self.feed?.updateFrame(pixelBuffer)
@@ -382,7 +443,10 @@ final class CameraFeed: ObservableObject, Identifiable {
         }
         
         func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-            print("⚠️ Dropped video frame \(debugFrameCount) from \(self.feed?.device.displayName ?? "unknown camera")")
+            // PERFORMANCE: Reduce dropped frame logging
+            if debugFrameCount <= 20 || debugFrameCount % 100 == 0 {
+                print("⚠️ Dropped video frame \(debugFrameCount) from \(self.feed?.device.displayName ?? "unknown camera")")
+            }
         }
     }
     
@@ -429,6 +493,10 @@ final class CameraFeedManager: ObservableObject {
     // Reference to StreamingViewModel for integration
     weak var streamingViewModel: StreamingViewModel?
     
+    // PERFORMANCE: Throttle UI updates for feed manager
+    private var lastManagerUIUpdate = CACurrentMediaTime()
+    private let managerUIUpdateInterval: CFTimeInterval = 1.0/10.0 // 10fps for manager updates
+    
     init(cameraDeviceManager: CameraDeviceManager) {
         self.cameraDeviceManager = cameraDeviceManager
         
@@ -474,8 +542,8 @@ final class CameraFeedManager: ObservableObject {
         // Add to active feeds BEFORE starting capture
         activeFeeds.append(feed)
         
-        // PERFORMANCE: Less frequent UI updates
-        objectWillChange.send()
+        // PERFORMANCE: Throttled UI updates
+        triggerManagerUIUpdate()
         print("📱 Added feed to activeFeeds array - count now: \(activeFeeds.count)")
         
         await feed.startCapture()
@@ -488,7 +556,7 @@ final class CameraFeedManager: ObservableObject {
             feed.connectionStatus = .connected
             feed.isActive = true
             feed.objectWillChange.send()
-            self.objectWillChange.send()
+            triggerManagerUIUpdate()
         }
         
         // Verify the feed started successfully
@@ -498,14 +566,23 @@ final class CameraFeedManager: ObservableObject {
             print("   - Frame count: \(feed.frameCount)")
             print("   - Has preview: \(feed.previewImage != nil)")
             
-            // PERFORMANCE: Reduce UI update frequency
+            // PERFORMANCE: Throttled UI updates
             feed.objectWillChange.send()
-            objectWillChange.send()
+            triggerManagerUIUpdate()
             
             return feed
         } else {
             print("❌ Camera feed failed to start: \(device.displayName) - \(feed.connectionStatus.displayText)")
             return feed // Return the feed even if failed so UI can show error state
+        }
+    }
+    
+    // PERFORMANCE: Throttled UI updates for manager
+    private func triggerManagerUIUpdate() {
+        let currentTime = CACurrentMediaTime()
+        if currentTime - lastManagerUIUpdate >= managerUIUpdateInterval {
+            lastManagerUIUpdate = currentTime
+            objectWillChange.send()
         }
     }
     
@@ -518,6 +595,8 @@ final class CameraFeedManager: ObservableObject {
         if selectedFeedForLiveProduction?.id == feed.id {
             selectedFeedForLiveProduction = nil
         }
+        
+        triggerManagerUIUpdate()
     }
     
     /// Select a feed for live production use and connect to StreamingViewModel
@@ -526,10 +605,10 @@ final class CameraFeedManager: ObservableObject {
         
         selectedFeedForLiveProduction = feed
         
-        // PERFORMANCE: Reduce UI update frequency
+        // PERFORMANCE: Throttled UI updates
         await MainActor.run {
             feed.objectWillChange.send()
-            self.objectWillChange.send()
+            self.triggerManagerUIUpdate()
             print("✅ Feed selection complete with UI updates triggered")
         }
         
@@ -580,6 +659,7 @@ final class CameraFeedManager: ObservableObject {
         }
         activeFeeds.removeAll()
         selectedFeedForLiveProduction = nil
+        triggerManagerUIUpdate()
     }
     
     /// Debug camera detection issues
