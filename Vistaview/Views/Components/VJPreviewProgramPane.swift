@@ -7,6 +7,8 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
+import Foundation
 
 struct VJPreviewProgramPane: View {
     @StateObject private var previewProgramManager: PreviewProgramManager
@@ -275,20 +277,12 @@ struct VJPreviewMonitor: View {
             // Content based on source type
             switch source {
             case .camera(let feed):
-                if let previewImage = feed.previewImage {
-                    Image(decorative: previewImage, scale: 1.0)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                } else {
-                    VStack {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.5)
-                        Text("Connecting...")
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                    }
-                }
+                // FIXED: Use efficient NSView wrapper instead of SwiftUI Image
+                EfficientCameraMonitorView(
+                    feed: feed,
+                    previewProgramManager: previewProgramManager,
+                    isPreview: isPreview
+                )
                 
             case .media(let file, let player):
                 // For media, we'd need a proper video preview implementation
@@ -401,6 +395,124 @@ struct VJPreviewMonitor: View {
         feedbackGenerator.perform(.generic, performanceTime: .now)
         
         return true
+    }
+}
+
+// MARK: - EFFICIENT Camera Monitor (CPU Optimized)
+
+struct EfficientCameraMonitorView: NSViewRepresentable {
+    let feed: CameraFeed
+    let previewProgramManager: PreviewProgramManager
+    let isPreview: Bool
+    
+    func makeNSView(context: Context) -> EfficientCameraView {
+        let view = EfficientCameraView(
+            feed: feed,
+            previewProgramManager: previewProgramManager,
+            isPreview: isPreview
+        )
+        return view
+    }
+    
+    func updateNSView(_ nsView: EfficientCameraView, context: Context) {
+        // No updates needed - view handles its own observation
+    }
+}
+
+class EfficientCameraView: NSView {
+    private let feed: CameraFeed
+    private let previewProgramManager: PreviewProgramManager
+    private let isPreview: Bool
+    private var imageLayer: CALayer!
+    private var lastProcessedFrameCount: Int = 0
+    
+    // Use simple observation instead of Combine
+    private var frameObservationTimer: Timer?
+    
+    init(feed: CameraFeed, previewProgramManager: PreviewProgramManager, isPreview: Bool) {
+        self.feed = feed
+        self.previewProgramManager = previewProgramManager
+        self.isPreview = isPreview
+        super.init(frame: .zero)
+        
+        setupEfficientLayer()
+        setupSimpleObservation()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) not supported")
+    }
+    
+    private func setupEfficientLayer() {
+        // Simple, efficient CALayer for video display
+        imageLayer = CALayer()
+        imageLayer.frame = bounds
+        imageLayer.backgroundColor = CGColor.black
+        imageLayer.contentsGravity = .resizeAspectFill
+        
+        // Optimize for video
+        imageLayer.isOpaque = true
+        imageLayer.drawsAsynchronously = true
+        
+        wantsLayer = true
+        layer = imageLayer
+    }
+    
+    private func setupSimpleObservation() {
+        // EFFICIENT: Use simple timer that only processes when frame count changes
+        frameObservationTimer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak self] _ in
+            guard let self = self,
+                  self.feed.frameCount != self.lastProcessedFrameCount,
+                  self.feed.connectionStatus == .connected else { return }
+            
+            self.lastProcessedFrameCount = self.feed.frameCount
+            self.updateImageContent()
+        }
+    }
+    
+    private func updateImageContent() {
+        guard let cgImage = feed.previewImage else {
+            // Show loading state
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageLayer.contents = nil
+            CATransaction.commit()
+            return
+        }
+        
+        // Apply effects if they exist
+        var processedImage = cgImage
+        
+        if let effectChain = isPreview ? 
+            previewProgramManager.getPreviewEffectChain() :
+            previewProgramManager.getProgramEffectChain(),
+           !effectChain.effects.isEmpty {
+            
+            let outputType: PreviewProgramManager.OutputType = isPreview ? .preview : .program
+            if let effectsProcessed = previewProgramManager.processImageWithEffects(cgImage, for: outputType) {
+                processedImage = effectsProcessed
+            }
+        }
+        
+        // EFFICIENT: Direct layer content update
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = processedImage
+        CATransaction.commit()
+    }
+    
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.frame = bounds
+        CATransaction.commit()
+    }
+    
+    deinit {
+        frameObservationTimer?.invalidate()
+        frameObservationTimer = nil
     }
 }
 

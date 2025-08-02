@@ -259,20 +259,26 @@ final class PreviewProgramManager: ObservableObject {
         isTransitioning = true
         transitionProgress = 0.0
         
-        let steps = 30 // 30 steps for smooth transition
-        let stepDuration = duration / Double(steps)
-        
-        for step in 0...steps {
-            DispatchQueue.main.asyncAfter(deadline: .now() + stepDuration * Double(step)) {
-                self.transitionProgress = Double(step) / Double(steps)
-                self.crossfaderValue = self.transitionProgress
-                
-                if step == steps {
-                    // Transition complete - take the cut
-                    self.take()
-                    self.isTransitioning = false
-                    self.transitionProgress = 0.0
-                }
+        // EFFICIENT: Use single timer instead of 30 dispatch operations
+        let startTime = CACurrentMediaTime()
+        let transitionTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
+            let elapsed = CACurrentMediaTime() - startTime
+            let progress = min(elapsed / duration, 1.0)
+            
+            self.transitionProgress = progress
+            self.crossfaderValue = progress
+            
+            if progress >= 1.0 {
+                // Transition complete
+                timer.invalidate()
+                self.take()
+                self.isTransitioning = false
+                self.transitionProgress = 0.0
             }
         }
     }
@@ -488,6 +494,12 @@ final class PreviewProgramManager: ObservableObject {
     func processImageWithEffects(_ image: CGImage?, for output: OutputType) -> CGImage? {
         guard let image = image else { return nil }
         
+        // PERFORMANCE: Skip processing if no effects are applied
+        let effectChain = output == .preview ? getPreviewEffectChain() : getProgramEffectChain()
+        guard let chain = effectChain, !chain.effects.isEmpty else {
+            return image // Return original image if no effects
+        }
+        
         // Convert CGImage to MTLTexture
         guard let texture = createMTLTexture(from: image) else { return image }
         
@@ -510,7 +522,8 @@ final class PreviewProgramManager: ObservableObject {
         do {
             let texture = try textureLoader.newTexture(cgImage: cgImage, options: [
                 MTKTextureLoader.Option.textureUsage: MTLTextureUsage.shaderRead.rawValue,
-                MTKTextureLoader.Option.textureStorageMode: MTLStorageMode.shared.rawValue
+                MTKTextureLoader.Option.textureStorageMode: MTLStorageMode.shared.rawValue,
+                MTKTextureLoader.Option.generateMipmaps: NSNumber(value: false) // Skip mipmaps for performance
             ])
             return texture
         } catch {
@@ -530,13 +543,8 @@ final class PreviewProgramManager: ObservableObject {
         // Apply a transform to correct the coordinate system (flip vertically)
         let flippedImage = image.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -image.extent.height))
         
-        // Create a CIContext and render to CGImage
-        let context = CIContext(mtlDevice: effectManager.metalDevice, options: [
-            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
-            .outputColorSpace: CGColorSpaceCreateDeviceRGB()
-        ])
-        
-        return context.createCGImage(flippedImage, from: flippedImage.extent)
+        // PERFORMANCE: Use existing ciContext for better performance
+        return ciContext.createCGImage(flippedImage, from: flippedImage.extent)
     }
     
     // MARK: - Public Types
