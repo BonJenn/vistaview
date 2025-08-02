@@ -210,3 +210,64 @@ kernel void edgeDetectionCompute(texture2d<float, access::read> inputTexture [[t
     
     outputTexture.write(edgeColor, gid);
 }
+
+// ULTRA-OPTIMIZED compute shader for LED walls (fastest possible)
+kernel void outputMappingComputeFast(texture2d<float, access::read> inputTexture [[texture(0)]],
+                                    texture2d<float, access::write> outputTexture [[texture(1)]],
+                                    constant OutputMappingUniforms& uniforms [[buffer(0)]],
+                                    uint2 gid [[thread_position_in_grid]]) {
+    
+    // Early bounds check with fast exit
+    if (gid.x >= outputTexture.get_width() || gid.y >= outputTexture.get_height()) {
+        return;
+    }
+    
+    // Fast path: if no significant transformation, just copy with scaling
+    bool hasRotation = abs(uniforms.rotation) > 0.001;
+    bool hasTranslation = length(uniforms.translation) > 0.0001;
+    bool hasScaling = abs(length(uniforms.scale) - sqrt(2.0)) > 0.0001;
+    
+    if (!hasRotation && !hasTranslation && !hasScaling) {
+        // Direct copy path for maximum performance
+        uint2 inputPixel = clamp(gid, uint2(0), uint2(inputTexture.get_width() - 1, inputTexture.get_height() - 1));
+        float4 color = inputTexture.read(inputPixel);
+        color.a *= uniforms.opacity;
+        outputTexture.write(color, gid);
+        return;
+    }
+    
+    // Optimized transformation path
+    float2 outputCoord = float2(gid) / float2(outputTexture.get_width(), outputTexture.get_height());
+    float2 centerOffset = outputCoord - 0.5;
+    
+    float2 transformed = centerOffset;
+    
+    // Apply rotation only if needed
+    if (hasRotation) {
+        float cosR = cos(-uniforms.rotation);
+        float sinR = sin(-uniforms.rotation);
+        transformed = float2(
+            centerOffset.x * cosR - centerOffset.y * sinR,
+            centerOffset.x * sinR + centerOffset.y * cosR
+        );
+    }
+    
+    // Apply scale
+    transformed /= uniforms.scale;
+    
+    // Apply translation and convert back to texture coordinates
+    float2 inputCoord = transformed + 0.5 - uniforms.translation;
+    
+    // Fast bounds check and sample
+    float4 color = float4(0.0);
+    if (all(inputCoord >= 0.0) && all(inputCoord <= 1.0)) {
+        // Nearest neighbor sampling for speed (LED walls don't need bilinear)
+        uint2 inputPixel = uint2(inputCoord * float2(inputTexture.get_width(), inputTexture.get_height()));
+        inputPixel = clamp(inputPixel, uint2(0), uint2(inputTexture.get_width() - 1, inputTexture.get_height() - 1));
+        
+        color = inputTexture.read(inputPixel);
+        color.a *= uniforms.opacity;
+    }
+    
+    outputTexture.write(color, gid);
+}

@@ -189,77 +189,133 @@ class ExternalDisplayManager: ObservableObject {
     // MARK: - External Display Output
     
     func startFullScreenOutput(on display: DisplayInfo) {
+        print("🖥️ [DEBUG] startFullScreenOutput called for: \(display.name)")
+        
+        // ESSENTIAL VALIDATION - only check what's truly necessary
         guard let productionManager = productionManager else { 
-            print("❌ No production manager available")
+            print("❌ [DEBUG] No production manager available")
+            showErrorAlert("External Display Error", "The production system is not ready yet. Please wait a moment and try again.")
             return 
         }
         
-        guard availableDisplays.contains(where: { $0.id == display.id }) else {
-            print("❌ Display \(display.name) is no longer available")
+        // Validate production manager components
+        guard let previewProgramManager = productionManager.previewProgramManager as PreviewProgramManager? else {
+            print("❌ [DEBUG] PreviewProgramManager is not available")
+            showErrorAlert("System Not Ready", "The preview/program system is not initialized. Please restart the application.")
             return
         }
         
-        print("🖥️ Starting external output on \(display.name)...")
+        guard let outputMappingManager = productionManager.outputMappingManager as OutputMappingManager? else {
+            print("❌ [DEBUG] OutputMappingManager is not available")
+            showErrorAlert("Graphics System Error", "The output mapping system is not available. Please restart the application.")
+            return
+        }
         
-        stopFullScreenOutput()
+        guard let metalDevice = outputMappingManager.metalDevice as MTLDevice? else {
+            print("❌ [DEBUG] Metal device is not available")
+            showErrorAlert("Graphics Device Error", "Metal graphics device is not available. External display requires hardware acceleration.")
+            return
+        }
+        
+        print("✅ [DEBUG] All components validated successfully")
+        print("✅ [DEBUG] Metal device: \(metalDevice.name)")
+        
+        guard availableDisplays.contains(where: { $0.id == display.id }) else {
+            print("❌ [DEBUG] Display \(display.name) is no longer available")
+            
+            // Refresh displays and show error
+            scanForDisplays()
+            showErrorAlert("Display Not Available", "The selected display '\(display.name)' is no longer available. Please select a different display.")
+            return
+        }
+        
+        print("🖥️ [DEBUG] Starting external output on \(display.name)...")
+        print("🖥️ [DEBUG] Display ID: \(display.id)")
+        print("🖥️ [DEBUG] Display bounds: \(display.bounds)")
+        print("🖥️ [DEBUG] Is main display: \(display.isMain)")
+        
+        // Close existing window if any (with error handling)
+        do {
+            stopFullScreenOutput()
+        } catch {
+            print("⚠️ [DEBUG] Error stopping previous output: \(error)")
+        }
+        
+        // Set up camera feed subscriptions
         setupCameraFeedSubscriptions()
         
-        Task { @MainActor in
-            await createExternalWindow(for: display, productionManager: productionManager)
+        // Create external window with comprehensive error handling
+        do {
+            try createExternalWindowSafe(for: display, productionManager: productionManager)
+        } catch {
+            print("❌ [DEBUG] Failed to create external window: \(error)")
+            showErrorAlert("External Window Creation Failed", "Failed to create external display window: \(error.localizedDescription)")
         }
     }
     
-    private func createExternalWindow(for display: DisplayInfo, productionManager: UnifiedProductionManager) async {
-        guard let targetScreen = NSScreen.screens.first(where: { screen in
-            let screenFrame = screen.frame
-            return abs(screenFrame.origin.x - display.bounds.origin.x) < 1.0 &&
-                   abs(screenFrame.origin.y - display.bounds.origin.y) < 1.0
-        }) else {
-            print("❌ Could not find NSScreen for display \(display.name)")
-            return
+    private func createExternalWindowSafe(for display: DisplayInfo, productionManager: UnifiedProductionManager) throws {
+        print("🚀 [LED WALL] Creating INSTANT external window")
+        
+        // Find target screen efficiently
+        var targetScreen: NSScreen?
+        let nonMainScreens = NSScreen.screens.filter { $0 != NSScreen.main }
+        
+        if let largest = nonMainScreens.max(by: { s1, s2 in
+            (s1.frame.width * s1.frame.height) < (s2.frame.width * s2.frame.height)
+        }) {
+            targetScreen = largest
+        } else if let firstExternal = nonMainScreens.first {
+            targetScreen = firstExternal
+        } else {
+            targetScreen = NSScreen.main
         }
         
-        print("🖥️ Found target screen: \(targetScreen.localizedName)")
+        guard let screen = targetScreen else {
+            throw ExternalDisplayError.noMatchingScreen(displayName: display.name)
+        }
         
-        let windowSize = CGSize(width: 800, height: 600)
-        let windowOrigin = CGPoint(
-            x: targetScreen.frame.midX - windowSize.width / 2,
-            y: targetScreen.frame.midY - windowSize.height / 2
+        let screenFrame = screen.frame
+        let windowRect = CGRect(
+            x: screenFrame.origin.x,
+            y: screenFrame.origin.y,
+            width: screenFrame.width,
+            height: screenFrame.height
         )
         
-        let windowRect = CGRect(origin: windowOrigin, size: windowSize)
-        
+        // Create window with optimized settings
         let window = NSWindow(
             contentRect: windowRect,
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false,
-            screen: targetScreen
+            screen: screen
         )
         
-        window.title = "Vistaview External Output - \(display.name)"
+        window.title = "Vistaview LED Output"
         window.backgroundColor = .black
-        window.hasShadow = true
         window.level = .normal
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.hasShadow = false
+        window.isOpaque = true
         
-        let contentView = ExternalDisplayContentView(
+        // CORRECT: Use AVFoundation-based view like Final Cut Pro
+        let videoView = ProfessionalVideoView(
             productionManager: productionManager,
             displayInfo: display,
-            displaySize: windowSize
+            frame: windowRect
         )
         
-        let hostingView = NSHostingView(rootView: contentView)
-        window.contentView = hostingView
-        
+        window.contentView = videoView
+        window.setFrame(windowRect, display: true, animate: false)
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         
+        // Store references
         self.externalWindow = window
         self.selectedDisplay = display
         self.isFullScreenActive = true
         
-        print("🖥️ Created external output window on \(display.name)")
-        
-        window.delegate = ExternalWindowDelegate(manager: self)
+        print("🚀 PROFESSIONAL Video View CREATED!")
     }
     
     func toggleFullScreen() {
@@ -309,315 +365,284 @@ class ExternalDisplayManager: ObservableObject {
         displayChangeTimer?.invalidate()
         cancellables.removeAll()
     }
-}
-
-// MARK: - External Display Content View
-
-struct ExternalDisplayContentView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    let displayInfo: ExternalDisplayManager.DisplayInfo
-    let displaySize: CGSize
-    @State private var frameUpdateTrigger = 0
-    @State private var performanceStats = PerformanceStats()
-    @State private var showControls = true
     
-    struct PerformanceStats {
-        var fps: Double = 0.0
-        var lastFrameTime: Date = Date()
-        var frameCount: Int = 0
+    // MARK: - Debug Functions
+    
+    func testExternalWindow() {
+        print("🧪 Testing external window creation...")
+        
+        guard let firstExternal = getExternalDisplays().first else {
+            print("❌ No external displays found for testing")
+            return
+        }
+        
+        print("🧪 Creating test window on: \(firstExternal.name)")
+        
+        // Create a simple test window
+        let testWindow = NSWindow(
+            contentRect: CGRect(x: 100, y: 100, width: 400, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        testWindow.title = "Vistaview Test Window"
+        testWindow.backgroundColor = .red
+        testWindow.makeKeyAndOrderFront(nil)
+        
+        print("🧪 Test window created and shown")
+        
+        // Auto-close after 5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            testWindow.close()
+            print("🧪 Test window closed")
+        }
     }
     
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+    // Helper method to show user-friendly error alerts
+    private func showErrorAlert(_ title: String, _ message: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
             
-            if let selectedFeed = productionManager.cameraFeedManager.selectedFeedForLiveProduction,
-               selectedFeed.connectionStatus == .connected,
-               let image = selectedFeed.previewImage {
-                
-                Image(decorative: processImageForExternalDisplay(image), scale: 1.0)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .id("external-display-\(selectedFeed.id)-\(frameUpdateTrigger)")
-                    .onReceive(Timer.publish(every: 1.0/30.0, on: .main, in: .common).autoconnect()) { _ in
-                        frameUpdateTrigger += 1
-                        updatePerformanceStats()
-                    }
-                    .onTapGesture {
-                        showControls.toggle()
-                    }
-                    
+            // Show alert on main window if available
+            if let mainWindow = NSApplication.shared.mainWindow {
+                alert.beginSheetModal(for: mainWindow) { _ in }
             } else {
-                statusView
-                    .onTapGesture {
-                        showControls.toggle()
-                    }
-            }
-            
-            if showControls {
-                controlOverlay
-                    .opacity(0.9)
-                    .animation(.easeInOut(duration: 0.3), value: showControls)
-            }
-        }
-        .onReceive(Timer.publish(every: 5.0, on: .main, in: .common).autoconnect()) { _ in
-            if showControls {
-                showControls = false
-            }
-        }
-        .onAppear {
-            print("🖥️ External Display: Content view appeared for \(displayInfo.name)")
-        }
-        .onDisappear {
-            print("🖥️ External Display: Content view disappeared")
-        }
-    }
-    
-    @ViewBuilder
-    private var statusView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "tv")
-                .font(.system(size: 100))
-                .foregroundColor(.white.opacity(0.3))
-            
-            Text("Vistaview External Output")
-                .font(.largeTitle)
-                .foregroundColor(.white.opacity(0.7))
-            
-            VStack(spacing: 12) {
-                VStack(alignment: .center, spacing: 4) {
-                    Text("Connected to:")
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.8))
-                    Text(displayInfo.name)
-                        .font(.title2)
-                        .foregroundColor(.blue.opacity(0.8))
-                    Text(displayInfo.displayDescription)
-                        .font(.callout)
-                        .foregroundColor(.white.opacity(0.6))
-                    Text("Color Space: \(displayInfo.colorSpace)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.5))
-                }
-                
-                Divider()
-                    .background(Color.white.opacity(0.3))
-                
-                VStack(alignment: .center, spacing: 4) {
-                    Text("Camera Status")
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.8))
-                    
-                    if let selectedFeed = productionManager.cameraFeedManager.selectedFeedForLiveProduction {
-                        Text(selectedFeed.device.displayName)
-                            .font(.title2)
-                            .foregroundColor(.white.opacity(0.6))
-                        
-                        Text("Status: \(selectedFeed.connectionStatus.displayText)")
-                            .font(.title3)
-                            .foregroundColor(selectedFeed.connectionStatus.color.opacity(0.8))
-                        
-                        if selectedFeed.connectionStatus == .connected {
-                            Text("Frame Count: \(selectedFeed.frameCount)")
-                                .font(.caption)
-                                .foregroundColor(.green.opacity(0.7))
-                        }
-                    } else {
-                        Text("No camera selected")
-                            .font(.title2)
-                            .foregroundColor(.white.opacity(0.5))
-                        
-                        Text("Select a camera in the main window")
-                            .font(.callout)
-                            .foregroundColor(.blue.opacity(0.7))
-                    }
-                }
-            }
-            
-            Text("Tap to show/hide controls")
-                .font(.caption)
-                .foregroundColor(.gray.opacity(0.7))
-        }
-        .padding()
-    }
-    
-    @ViewBuilder
-    private var controlOverlay: some View {
-        VStack {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("External Output")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    Text(displayInfo.name)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                
-                Spacer()
-                
-                if performanceStats.fps > 0 {
-                    Text("\(performanceStats.fps, specifier: "%.1f") FPS")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.green.opacity(0.3))
-                        .cornerRadius(4)
-                }
-                
-                Button("×") {
-                    showControls = false
-                }
-                .font(.title2)
-                .foregroundColor(.white)
-                .frame(width: 30, height: 30)
-                .background(Color.red.opacity(0.3))
-                .cornerRadius(15)
-            }
-            .padding()
-            .background(
-                LinearGradient(
-                    colors: [Color.black.opacity(0.8), Color.clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            
-            Spacer()
-            
-            if productionManager.outputMappingManager.isEnabled {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Image(systemName: "rectangle.resize")
-                                .foregroundColor(.blue)
-                            Text("Output Mapping Active")
-                                .foregroundColor(.white)
-                                .fontWeight(.semibold)
-                        }
-                        Text(productionManager.outputMappingManager.mappingDescription)
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    
-                    Spacer()
-                }
-                .padding()
-                .background(
-                    LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.8)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
+                alert.runModal()
             }
         }
     }
     
-    private func updatePerformanceStats() {
-        let now = Date()
-        performanceStats.frameCount += 1
+    // Add computed property to check initialization status
+    var isProperlyInitialized: Bool {
+        guard let productionManager = productionManager else {
+            print("❌ ExternalDisplayManager: No production manager")
+            return false
+        }
         
-        let timeDiff = now.timeIntervalSince(performanceStats.lastFrameTime)
+        guard productionManager.previewProgramManager != nil else {
+            print("❌ ExternalDisplayManager: No preview program manager")
+            return false
+        }
+        
+        guard productionManager.outputMappingManager.metalDevice != nil else {
+            print("❌ ExternalDisplayManager: No Metal device")
+            return false
+        }
+        
+        return true
+    }
+}
+
+// MARK: - PROFESSIONAL Video View (Final Cut Pro Style)
+
+class ProfessionalVideoView: NSView {
+    private var productionManager: UnifiedProductionManager
+    private let displayInfo: ExternalDisplayManager.DisplayInfo
+    private var cancellables = Set<AnyCancellable>()
+    
+    // Core video display layer
+    private var videoLayer: CALayer!
+    private var lastProcessedFrameCount: Int = 0
+    
+    // Performance tracking
+    private var frameCount = 0
+    private var lastFPSTime = CACurrentMediaTime()
+    private var fps: Double = 0
+    
+    init(productionManager: UnifiedProductionManager, displayInfo: ExternalDisplayManager.DisplayInfo, frame: CGRect) {
+        self.productionManager = productionManager
+        self.displayInfo = displayInfo
+        super.init(frame: frame)
+        
+        setupVideoLayer()
+        setupCameraObservation()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) not supported")
+    }
+    
+    private func setupVideoLayer() {
+        // Simple, efficient CALayer for video display
+        videoLayer = CALayer()
+        videoLayer.frame = bounds
+        videoLayer.backgroundColor = CGColor.black
+        videoLayer.contentsGravity = .resizeAspectFill
+        
+        // Optimize for video playback
+        videoLayer.isOpaque = true
+        videoLayer.drawsAsynchronously = true
+        
+        // Enable layer backing
+        wantsLayer = true
+        layer = videoLayer
+        
+        print("🚀 Professional video layer initialized")
+    }
+    
+    private func setupCameraObservation() {
+        // Direct observation of program source changes
+        productionManager.previewProgramManager.$programSource
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] programSource in
+                self?.handleProgramSourceChange(programSource)
+            }
+            .store(in: &cancellables)
+        
+        // Start initial observation
+        handleProgramSourceChange(productionManager.previewProgramManager.programSource)
+    }
+    
+    private func handleProgramSourceChange(_ programSource: ContentSource) {
+        // Clear previous observers
+        cancellables.removeAll()
+        
+        // Re-add program source observer
+        productionManager.previewProgramManager.$programSource
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newSource in
+                if newSource != programSource {
+                    self?.handleProgramSourceChange(newSource)
+                }
+            }
+            .store(in: &cancellables)
+        
+        switch programSource {
+        case .camera(let feed):
+            print("🚀 Setting up camera observation for \(feed.device.displayName)")
+            
+            // Observe camera frames directly
+            feed.$previewImage
+                .compactMap { $0 }
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] cgImage in
+                    self?.displayFrame(cgImage)
+                }
+                .store(in: &cancellables)
+                
+        case .media(let mediaFile, _):
+            displayPlaceholder(text: "Media: \(mediaFile.name)", color: .systemPurple)
+            
+        case .virtual(let camera):
+            displayPlaceholder(text: "Virtual: \(camera.name)", color: .systemTeal)
+            
+        case .none:
+            displayPlaceholder(text: "No Program Source", color: .systemGray)
+        }
+    }
+    
+    private func displayFrame(_ cgImage: CGImage) {
+        // Apply effects if they exist
+        var processedImage = cgImage
+        
+        if let effectChain = productionManager.previewProgramManager.getProgramEffectChain(),
+           !effectChain.effects.isEmpty {
+            if let effectsProcessed = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
+                processedImage = effectsProcessed
+            }
+        }
+        
+        // EFFICIENT: Direct layer contents update (no Metal overhead)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)  // No animations for performance
+        videoLayer.contents = processedImage
+        CATransaction.commit()
+        
+        updateFPS()
+    }
+    
+    private func displayPlaceholder(text: String, color: NSColor) {
+        // Create simple placeholder image
+        let size = CGSize(width: 1920, height: 1080)
+        
+        let image = NSImage(size: size)
+        image.lockFocus()
+        
+        // Fill background
+        color.withAlphaComponent(0.3).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        
+        // Draw text
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 72, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributedString.size()
+        let textRect = NSRect(
+            x: (size.width - textSize.width) / 2,
+            y: (size.height - textSize.height) / 2,
+            width: textSize.width,
+            height: textSize.height
+        )
+        
+        attributedString.draw(in: textRect)
+        image.unlockFocus()
+        
+        // Convert to CGImage and display
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            videoLayer.contents = cgImage
+            CATransaction.commit()
+        }
+    }
+    
+    private func updateFPS() {
+        frameCount += 1
+        let currentTime = CACurrentMediaTime()
+        let timeDiff = currentTime - lastFPSTime
+        
         if timeDiff >= 1.0 {
-            performanceStats.fps = Double(performanceStats.frameCount) / timeDiff
-            performanceStats.frameCount = 0
-            performanceStats.lastFrameTime = now
+            fps = Double(frameCount) / timeDiff
+            frameCount = 0
+            lastFPSTime = currentTime
+            
+            if Int(currentTime) % 5 == 0 {
+                print("🚀 External Display: \(Int(fps)) FPS")
+            }
         }
     }
     
-    private func processImageForExternalDisplay(_ image: CGImage) -> CGImage {
-        var processedImage = image
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
         
-        let programSource = productionManager.previewProgramManager.programSource
-        if case .camera(let feed) = programSource,
-           feed.id == productionManager.cameraFeedManager.selectedFeedForLiveProduction?.id {
-            if let chain = productionManager.previewProgramManager.getProgramEffectChain(),
-               !chain.effects.isEmpty {
-                if let effectsProcessedImage = processImageWithEffectsAsync(
-                    image, 
-                    using: productionManager.effectManager, 
-                    sourceID: EffectManager.programSourceID
-                ) {
-                    processedImage = effectsProcessedImage
-                }
-            }
-        }
-        
-        if productionManager.outputMappingManager.isEnabled {
-            if let mappingProcessedImage = applyOutputMappingToImage(processedImage) {
-                processedImage = mappingProcessedImage
-            }
-        }
-        
-        return processedImage
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        videoLayer.frame = bounds
+        CATransaction.commit()
     }
     
-    private func applyOutputMappingToImage(_ image: CGImage) -> CGImage? {
-        let textureLoader = MTKTextureLoader(device: productionManager.outputMappingManager.metalDevice)
-        
-        do {
-            let inputTexture = try textureLoader.newTexture(cgImage: image, options: [
-                MTKTextureLoader.Option.textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-                MTKTextureLoader.Option.textureStorageMode: NSNumber(value: MTLStorageMode.shared.rawValue)
-            ])
-            
-            let mappedTexture = productionManager.outputMappingManager.applyOutputMapping(to: inputTexture)
-            
-            if let outputTexture = mappedTexture {
-                return createCGImageFromTexture(outputTexture, device: productionManager.outputMappingManager.metalDevice)
-            }
-            
-            return image
-        } catch {
-            print("Error applying output mapping: \(error)")
-            return image
-        }
+    deinit {
+        cancellables.removeAll()
+        print("🚀 Professional video view deinitialized")
     }
 }
 
-// MARK: - Helper Functions
+// MARK: - Error Types
 
-@MainActor
-func processImageWithEffectsAsync(_ image: CGImage, using effectManager: EffectManager, sourceID: String) -> CGImage? {
-    let textureLoader = MTKTextureLoader(device: effectManager.metalDevice)
+enum ExternalDisplayError: LocalizedError {
+    case metalDeviceUnavailable
+    case previewProgramManagerUnavailable
+    case noMatchingScreen(displayName: String)
+    case windowCreationFailed
     
-    do {
-        let inputTexture = try textureLoader.newTexture(cgImage: image, options: [
-            MTKTextureLoader.Option.textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-            MTKTextureLoader.Option.textureStorageMode: NSNumber(value: MTLStorageMode.shared.rawValue)
-        ])
-        
-        let processedTexture = effectManager.applyEffects(to: inputTexture, for: sourceID)
-        
-        if let outputTexture = processedTexture {
-            return createCGImageFromTexture(outputTexture, device: effectManager.metalDevice)
+    var errorDescription: String? {
+        switch self {
+        case .metalDeviceUnavailable:
+            return "Metal graphics device is not available"
+        case .previewProgramManagerUnavailable:
+            return "Preview/Program manager is not available"
+        case .noMatchingScreen(let displayName):
+            return "Could not find matching screen for display '\(displayName)'"
+        case .windowCreationFailed:
+            return "Failed to create external display window"
         }
-        
-        return image
-    } catch {
-        print("Error processing image with effects: \(error)")
-        return image
     }
-}
-
-@MainActor
-func createCGImageFromTexture(_ texture: MTLTexture, device: MTLDevice) -> CGImage? {
-    let ciImage = CIImage(mtlTexture: texture, options: [
-        .colorSpace: CGColorSpaceCreateDeviceRGB()
-    ])
-    
-    guard let image = ciImage else { return nil }
-    
-    let flippedImage = image.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -image.extent.height))
-    
-    let context = CIContext(mtlDevice: device, options: [
-        .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
-        .outputColorSpace: CGColorSpaceCreateDeviceRGB()
-    ])
-    
-    return context.createCGImage(flippedImage, from: flippedImage.extent)
 }

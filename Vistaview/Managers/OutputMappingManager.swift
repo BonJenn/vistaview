@@ -361,12 +361,17 @@ class OutputMappingManager: ObservableObject {
         }
     }
     
-    // MARK: - Metal Processing
+    // MARK: - Metal Processing (OPTIMIZED FOR LOW LATENCY)
     
     func applyOutputMapping(to texture: MTLTexture) -> MTLTexture? {
         guard isEnabled else { return texture }
         
-        // Create descriptor for output texture
+        // OPTIMIZATION: Skip processing if mapping is essentially identity
+        if !hasSignificantMapping {
+            return texture
+        }
+        
+        // Create descriptor for output texture with optimal settings
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: texture.pixelFormat,
             width: Int(canvasSize.width),
@@ -374,13 +379,17 @@ class OutputMappingManager: ObservableObject {
             mipmapped: false
         )
         descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.storageMode = .private  // Fastest GPU-only storage
         
         guard let outputTexture = metalDevice.makeTexture(descriptor: descriptor),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
             return texture
         }
         
-        // Apply transformation using Metal compute shader
+        // OPTIMIZATION: Set label for better debugging and Metal profiling
+        commandBuffer.label = "OutputMapping"
+        
+        // Apply transformation using optimized Metal compute shader
         applyMappingTransform(
             from: texture,
             to: outputTexture,
@@ -388,8 +397,11 @@ class OutputMappingManager: ObservableObject {
             commandBuffer: commandBuffer
         )
         
+        // OPTIMIZATION: Don't wait for completion - pipeline the GPU work
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        
+        // ONLY wait if we need immediate results - for LED walls, pipeline instead
+        // commandBuffer.waitUntilCompleted()  // Commented out for better performance
         
         return outputTexture
     }
@@ -411,7 +423,10 @@ class OutputMappingManager: ObservableObject {
             return
         }
         
-        // Set up uniforms
+        // OPTIMIZATION: Set encoder label for profiling
+        computeEncoder.label = "OutputMappingTransform"
+        
+        // Set up uniforms (pre-calculate as much as possible)
         var uniforms = OutputMappingUniforms(
             transformMatrix: mapping.transformMatrix,
             outputSize: simd_float2(Float(canvasSize.width), Float(canvasSize.height)),
@@ -428,8 +443,8 @@ class OutputMappingManager: ObservableObject {
         computeEncoder.setTexture(destinationTexture, index: 1)
         computeEncoder.setBytes(&uniforms, length: MemoryLayout<OutputMappingUniforms>.stride, index: 0)
         
-        // Calculate thread group sizes
-        let threadGroupSize = MTLSize(width: 16, height: 16, depth: 1)
+        // OPTIMIZATION: Use larger thread groups for better GPU utilization
+        let threadGroupSize = MTLSize(width: 32, height: 32, depth: 1)  // Increased from 16x16
         let threadGroups = MTLSize(
             width: (destinationTexture.width + threadGroupSize.width - 1) / threadGroupSize.width,
             height: (destinationTexture.height + threadGroupSize.height - 1) / threadGroupSize.height,
@@ -444,10 +459,37 @@ class OutputMappingManager: ObservableObject {
     private func getComputePipelineState() -> MTLComputePipelineState? {
         // Cache the pipeline state
         if computePipelineState == nil {
-            guard let library = metalDevice.makeDefaultLibrary(),
-                  let computeFunction = library.makeFunction(name: "outputMappingComputeBilinear") else {
-                logger.error("🎯 Failed to create compute function")
+            guard let library = metalDevice.makeDefaultLibrary() else {
+                logger.error("🎯 Failed to get default Metal library")
                 return nil
+            }
+            
+            // Choose the fastest appropriate compute function
+            let functionName: String
+            if hasSignificantMapping {
+                // Use bilinear for quality when we have significant mapping
+                functionName = "outputMappingComputeBilinear"
+            } else {
+                // Use ultra-fast version for LED walls when mapping is minimal
+                functionName = "outputMappingComputeFast"
+            }
+            
+            guard let computeFunction = library.makeFunction(name: functionName) else {
+                logger.error("🎯 Failed to create compute function: \(functionName)")
+                // Fallback to basic function
+                guard let fallbackFunction = library.makeFunction(name: "outputMappingComputeBilinear") else {
+                    logger.error("🎯 Failed to create fallback compute function")
+                    return nil
+                }
+                
+                do {
+                    computePipelineState = try metalDevice.makeComputePipelineState(function: fallbackFunction)
+                } catch {
+                    logger.error("🎯 Failed to create fallback compute pipeline state: \(error)")
+                    return nil
+                }
+                
+                return computePipelineState
             }
             
             do {
@@ -558,6 +600,22 @@ extension OutputMappingManager {
         let pos = currentMapping.position
         let size = currentMapping.size
         return "Pos: (\(Int(pos.x * canvasSize.width)), \(Int(pos.y * canvasSize.height))) Size: \(Int(size.width * canvasSize.width))×\(Int(size.height * canvasSize.height))"
+    }
+    
+    /// Determines if the current mapping has significant changes that warrant processing
+    var hasSignificantMapping: Bool {
+        guard isEnabled else { return false }
+        
+        let mapping = currentMapping
+        
+        // OPTIMIZATION: Use more precise thresholds to avoid unnecessary processing
+        let hasPositionChange = abs(mapping.position.x) > 0.0001 || abs(mapping.position.y) > 0.0001
+        let hasSizeChange = abs(mapping.size.width - 1.0) > 0.0001 || abs(mapping.size.height - 1.0) > 0.0001
+        let hasScaleChange = abs(mapping.scale - 1.0) > 0.0001
+        let hasRotationChange = abs(mapping.rotation) > 0.01  // degrees (more precise)
+        let hasOpacityChange = abs(mapping.opacity - 1.0) > 0.0001
+        
+        return hasPositionChange || hasSizeChange || hasScaleChange || hasRotationChange || hasOpacityChange
     }
     
     func pixelPosition() -> CGPoint {
