@@ -832,6 +832,7 @@ struct SourcesPanel: View {
                     )
                 case 1:
                     MediaSourceView(mediaFiles: $mediaFiles, showingFilePicker: $showingFilePicker)
+                        .environmentObject(productionManager)
                 case 2:
                     VirtualSourceView(productionManager: productionManager)
                 case 3:
@@ -1075,6 +1076,7 @@ struct LiveCameraFeedButton: View {
 struct MediaSourceView: View {
     @Binding var mediaFiles: [MediaFile]
     @Binding var showingFilePicker: Bool
+    @EnvironmentObject var productionManager: UnifiedProductionManager
     
     var body: some View {
         VStack(spacing: 12) {
@@ -1104,27 +1106,27 @@ struct MediaSourceView: View {
                     Spacer()
                 }
             } else {
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible())
-                ], spacing: 8) {
-                    ForEach(mediaFiles) { file in
-                        VStack {
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.3))
-                                .frame(height: 60)
-                                .overlay(
-                                    VStack {
-                                        Image(systemName: file.fileType.icon)
-                                        Text(file.name)
-                                            .font(.caption2)
-                                            .lineLimit(2)
-                                    }
-                                    .foregroundColor(.secondary)
-                                )
-                                .cornerRadius(6)
+                ScrollView {
+                    LazyVGrid(columns: [
+                        GridItem(.adaptive(minimum: 100), spacing: 12)
+                    ], spacing: 12) {
+                        ForEach(mediaFiles) { file in
+                            MediaItemView(
+                                mediaFile: file,
+                                thumbnailManager: productionManager.mediaThumbnailManager,
+                                onMediaSelected: { selectedFile in
+                                    // Load media to preview when clicked
+                                    let mediaSource = selectedFile.asContentSource()
+                                    productionManager.previewProgramManager.loadToPreview(mediaSource)
+                                },
+                                onMediaDropped: { droppedFile, location in
+                                    // Handle drop - could be dropped on preview or program pane
+                                    print("Media dropped at location: \(location)")
+                                }
+                            ) 
                         }
                     }
+                    .padding(.horizontal, 8)
                 }
             }
             Spacer()

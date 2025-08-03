@@ -13,39 +13,6 @@ import Metal
 import MetalKit
 import CoreImage
 
-/// Represents a media file that can be loaded into preview/program
-struct MediaFile: Identifiable, Equatable {
-    let id = UUID()
-    let name: String
-    let url: URL
-    let duration: TimeInterval?
-    let fileType: MediaFileType
-    
-    enum MediaFileType: String, CaseIterable {
-        case video = "video"
-        case audio = "audio"
-        case image = "image"
-        
-        var icon: String {
-            switch self {
-            case .video: return "video.fill"
-            case .audio: return "waveform"
-            case .image: return "photo.fill"
-            }
-        }
-    }
-    
-    init(name: String, url: URL, fileType: MediaFileType, duration: TimeInterval? = nil) {
-        self.name = name
-        self.url = url
-        self.fileType = fileType
-        self.duration = duration
-    }
-    
-    static func == (lhs: MediaFile, rhs: MediaFile) -> Bool {
-        return lhs.id == rhs.id
-    }
-}
 
 /// Represents different types of content that can be displayed
 enum ContentSource: Identifiable, Equatable {

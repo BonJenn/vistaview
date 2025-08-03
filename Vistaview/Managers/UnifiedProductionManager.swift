@@ -41,6 +41,9 @@ final class UnifiedProductionManager: ObservableObject {
     @Published var currentStudio: StudioConfiguration?
     @Published var currentTemplate: StudioTemplate = .custom
     
+    // Add media thumbnail manager
+    let mediaThumbnailManager = MediaThumbnailManager()
+    
     init(studioManager: VirtualStudioManager? = nil,
          cameraFeedManager: CameraFeedManager? = nil) {
         self.studioManager = studioManager ?? VirtualStudioManager()
