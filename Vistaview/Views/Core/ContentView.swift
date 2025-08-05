@@ -1,6 +1,7 @@
 import SwiftUI
 import HaishinKit
 import AVFoundation
+import AVKit
 import Metal
 import MetalKit
 import CoreImage
@@ -363,8 +364,8 @@ struct PreviewProgramCenterView: View {
                         Spacer()
                     }
                     
-                    // PERFORMANCE: Optimize preview monitor with less frequent updates
-                    OptimizedPreviewMonitorView(
+                    // SIMPLER: Direct monitor view without complex caching
+                    SimplePreviewMonitorView(
                         productionManager: productionManager
                     )
                     .aspectRatio(16/9, contentMode: .fit)
@@ -385,8 +386,8 @@ struct PreviewProgramCenterView: View {
                             .foregroundColor(.red)
                     }
                     
-                    // PERFORMANCE: Optimize program monitor with less frequent updates
-                    OptimizedProgramMonitorView(
+                    // SIMPLER: Direct monitor view without complex caching
+                    SimpleProgramMonitorView(
                         productionManager: productionManager
                     )
                     .aspectRatio(16/9, contentMode: .fit)
@@ -406,22 +407,22 @@ struct PreviewProgramCenterView: View {
                 
                 Button("TAKE") {
                     // Move current preview source to program using the correct method name
-                    print(" TAKE BUTTON CLICKED!")
-                    print(" TAKE DEBUG: Current preview source: \(productionManager.previewProgramManager.previewSource)")
-                    print(" TAKE DEBUG: Current program source: \(productionManager.previewProgramManager.programSource)")
+                    print("✂️ TAKE BUTTON CLICKED!")
+                    print("✂️ TAKE DEBUG: Current preview source: \(productionManager.previewProgramManager.previewSource)")
+                    print("✂️ TAKE DEBUG: Current program source: \(productionManager.previewProgramManager.programSource)")
                     
                     // Check if preview source exists
                     if productionManager.previewProgramManager.previewSource == .none {
-                        print(" TAKE ERROR: No preview source to take!")
+                        print("✂️ TAKE ERROR: No preview source to take!")
                     } else {
-                        print(" TAKE: About to call take() method...")
+                        print("✂️ TAKE: About to call take() method...")
                         withAnimation(.easeInOut(duration: 0.3)) {
                             productionManager.previewProgramManager.take()
                         }
-                        print(" TAKE: Called take() method")
+                        print("✂️ TAKE: Called take() method")
                         DispatchQueue.main.async {
-                            print(" TAKE AFTER: Preview source: \(productionManager.previewProgramManager.previewSource)")
-                            print(" TAKE AFTER: Program source: \(productionManager.previewProgramManager.programSource)")
+                            print("✂️ TAKE AFTER: Preview source: \(productionManager.previewProgramManager.previewSource)")
+                            print("✂️ TAKE AFTER: Program source: \(productionManager.previewProgramManager.programSource)")
                             productionManager.previewProgramManager.objectWillChange.send()
                             productionManager.objectWillChange.send()
                         }
@@ -437,7 +438,7 @@ struct PreviewProgramCenterView: View {
                 .disabled(productionManager.previewProgramManager.previewSource == .none)
                 
                 Button("AUTO") {
-                    print(" AUTO: Auto-transitioned preview to program")
+                    print("🔄 AUTO: Auto-transitioned preview to program")
                     withAnimation(.easeInOut(duration: 1.0)) {
                         productionManager.previewProgramManager.transition(duration: 1.0)
                     }
@@ -459,15 +460,10 @@ struct PreviewProgramCenterView: View {
     }
 }
 
-// MARK: - Optimized Monitor Views
+// MARK: - Simplified Monitor Views (No Caching Issues)
 
-// PERFORMANCE: Optimized preview monitor with throttled updates
-struct OptimizedPreviewMonitorView: View {
+struct SimplePreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
-    @State private var lastUpdate = Date()
-    @State private var cachedView: AnyView?
-    
-    private let updateInterval: TimeInterval = 1.0/15.0 // 15fps updates
     
     private var effectCount: Int {
         productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
@@ -477,70 +473,33 @@ struct OptimizedPreviewMonitorView: View {
         ZStack {
             Color.black
             
-            // PERFORMANCE: Use cached view if update interval hasn't passed
-            if let cached = cachedView, Date().timeIntervalSince(lastUpdate) < updateInterval {
-                cached
-            } else {
-                Group {
-                    if case .camera(let cameraFeed) = productionManager.previewProgramManager.previewSource {
-                        OptimizedPreviewCameraView(
-                            cameraFeed: cameraFeed,
-                            productionManager: productionManager,
-                            effectCount: effectCount
-                        )
-                    } else if case .media(let mediaFile, let player) = productionManager.previewProgramManager.previewSource {
-                        VStack {
-                            Image(systemName: mediaFile.fileType.icon)
-                                .font(.largeTitle)
-                                .foregroundColor(.yellow)
-                            Text(mediaFile.name)
-                                .font(.title2)
-                                .foregroundColor(.white)
-                            Text("Media Playback")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    } else if case .virtual(let virtualCamera) = productionManager.previewProgramManager.previewSource {
-                        VStack {
-                            Image(systemName: "video.3d")
-                                .font(.largeTitle)
-                                .foregroundColor(.yellow)
-                            Text(virtualCamera.name)
-                                .font(.title2)
-                                .foregroundColor(.white)
-                            Text("Virtual Camera")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    } else {
-                        VStack {
-                            Image(systemName: "eye.slash")
-                                .font(.largeTitle)
-                                .foregroundColor(.gray)
-                            Text("No Preview Source")
-                                .font(.title2)
-                                .foregroundColor(.gray)
-                            Text("Click a camera to load preview")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                    }
+            switch productionManager.previewProgramManager.previewSource {
+            case .camera(let cameraFeed):
+                OptimizedPreviewCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+                
+            case .media(let mediaFile, let player):
+                if let actualPlayer = productionManager.previewProgramManager.previewPlayer {
+                    PersistentVideoPlayerView(
+                        player: actualPlayer,
+                        mediaFile: mediaFile,
+                        isPreview: true
+                    )
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
-                .onAppear {
-                    lastUpdate = Date()
-                    cachedView = AnyView(Group {
-                        // Cache the current view content
-                        if case .camera(let cameraFeed) = productionManager.previewProgramManager.previewSource {
-                            OptimizedPreviewCameraView(
-                                cameraFeed: cameraFeed,
-                                productionManager: productionManager,
-                                effectCount: effectCount
-                            )
-                        }
-                    })
-                }
+                
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: true)
+                
+            case .none:
+                NoSourceView(isPreview: true)
             }
             
+            // Effect count indicator
             if effectCount > 0 {
                 VStack {
                     Spacer()
@@ -567,6 +526,153 @@ struct OptimizedPreviewMonitorView: View {
             return true
         } isTargeted: { targeted in
             // Add visual feedback for drag targeting
+        }
+    }
+}
+
+struct SimpleProgramMonitorView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
+    }
+    
+    var body: some View {
+        ZStack {
+            Color.black
+            
+            switch productionManager.previewProgramManager.programSource {
+            case .camera(let cameraFeed):
+                OptimizedProgramCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+                
+            case .media(let mediaFile, let player):
+                if let actualPlayer = productionManager.previewProgramManager.programPlayer {
+                    PersistentVideoPlayerView(
+                        player: actualPlayer,
+                        mediaFile: mediaFile,
+                        isPreview: false
+                    )
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                }
+                
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: false)
+                
+            case .none:
+                NoSourceView(isPreview: false)
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("FX: \(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.red)
+                            .cornerRadius(8)
+                            .padding(4)
+                    }
+                }
+            }
+        }
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            guard let item = items.first else { return false }
+            Task { @MainActor in
+                productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+            }
+            return true
+        } isTargeted: { targeted in
+            // Add visual feedback for drag targeting
+        }
+    }
+}
+
+// MARK: - Persistent Video Player View
+
+struct PersistentVideoPlayerView: View {
+    let player: AVPlayer
+    let mediaFile: MediaFile
+    let isPreview: Bool
+    
+    var body: some View {
+        FrameBasedVideoPlayerView(player: player)
+            .id("persistent-video-\(mediaFile.id)-\(isPreview ? "preview" : "program")")
+    }
+}
+
+// MARK: - Helper Views for Cleaner Code
+
+struct MediaLoadingView: View {
+    let mediaFile: MediaFile
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: mediaFile.fileType.icon)
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(mediaFile.name)
+                .font(.title2)
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text("Loading Media...")
+                .font(.caption)
+                .foregroundColor(.gray)
+            
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
+                .scaleEffect(0.8)
+        }
+        .padding()
+    }
+}
+
+struct VirtualCameraView: View {
+    let camera: VirtualCamera
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack {
+            Image(systemName: "video.3d")
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(camera.name)
+                .font(.title2)
+                .foregroundColor(.white)
+            Text("Virtual Camera")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+}
+
+struct NoSourceView: View {
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack {
+            Image(systemName: isPreview ? "eye.slash" : "tv.slash")
+                .font(.largeTitle)
+                .foregroundColor(.gray)
+            Text(isPreview ? "No Preview Source" : "No Program Source")
+                .font(.title2)
+                .foregroundColor(.gray)
+            Text(isPreview ? "Click a camera or media to load preview" : "Use TAKE button to send preview to program")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
         }
     }
 }
@@ -637,97 +743,6 @@ struct OptimizedPreviewCameraView: View {
         
         // Return cached image if frame hasn't changed
         return cachedProcessedImage ?? cameraFeed.previewNSImage
-    }
-}
-
-// PERFORMANCE: Similar optimization for program monitor
-struct OptimizedProgramMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    @State private var lastUpdate = Date()
-    @State private var cachedView: AnyView?
-    
-    private let updateInterval: TimeInterval = 1.0/15.0 // 15fps updates
-    
-    private var effectCount: Int {
-        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
-    }
-    
-    var body: some View {
-        ZStack {
-            Color.black
-            
-            if case .camera(let cameraFeed) = productionManager.previewProgramManager.programSource {
-                OptimizedProgramCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-            } else if case .media(let mediaFile, let player) = productionManager.previewProgramManager.programSource {
-                VStack {
-                    Image(systemName: mediaFile.fileType.icon)
-                        .font(.largeTitle)
-                        .foregroundColor(.red)
-                    Text(mediaFile.name)
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text("Media Playback")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            } else if case .virtual(let virtualCamera) = productionManager.previewProgramManager.programSource {
-                VStack {
-                    Image(systemName: "video.3d")
-                        .font(.largeTitle)
-                        .foregroundColor(.red)
-                    Text(virtualCamera.name)
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text("Virtual Camera")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            } else {
-                VStack {
-                    Image(systemName: "tv.slash")
-                        .font(.largeTitle)
-                        .foregroundColor(.gray)
-                    Text("No Program Source")
-                        .font(.title2)
-                        .foregroundColor(.gray)
-                    Text("Use TAKE button to send preview to program")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            
-            if effectCount > 0 {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Text("FX: \(effectCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red)
-                            .cornerRadius(8)
-                            .padding(4)
-                    }
-                }
-            }
-        }
-        .dropDestination(for: EffectDragItem.self) { items, location in
-            guard let item = items.first else { return false }
-            Task { @MainActor in
-                productionManager.previewProgramManager.addEffectToProgram(item.effectType)
-            }
-            return true
-        } isTargeted: { targeted in
-            // Add visual feedback for drag targeting
-        }
     }
 }
 
@@ -809,7 +824,7 @@ struct SourcesPanel: View {
                 ForEach(Array(["Cameras", "Media", "Virtual", "Effects"].enumerated()), id: \.offset) { index, tab in
                     Button(action: {
                         selectedTab = index
-                        print(" Selected tab: \(index) - \(tab)")
+                        print("📱 Selected tab: \(index) - \(tab)")
                     }) {
                         Text(tab)
                             .font(.caption)
@@ -845,6 +860,78 @@ struct SourcesPanel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+struct MediaSourceView: View {
+    @Binding var mediaFiles: [MediaFile]
+    @Binding var showingFilePicker: Bool
+    @EnvironmentObject var productionManager: UnifiedProductionManager
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Media Library")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(action: { showingFilePicker = true }) {
+                    Image(systemName: "plus.circle")
+                        .foregroundColor(.blue)
+                }
+            }
+            if mediaFiles.isEmpty {
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "folder.badge.plus")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No Media Files")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Button("Add Files") {
+                        showingFilePicker = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [
+                        GridItem(.adaptive(minimum: 100), spacing: 12)
+                    ], spacing: 12) {
+                        ForEach(mediaFiles) { file in
+                            MediaItemView(
+                                mediaFile: file,
+                                thumbnailManager: productionManager.mediaThumbnailManager,
+                                onMediaSelected: { selectedFile in
+                                    print("🎬 MediaSourceView: Media file selected: \(selectedFile.name)")
+                                    print("🎬 MediaSourceView: Loading to preview...")
+                                    
+                                    let mediaSource = selectedFile.asContentSource()
+                                    productionManager.previewProgramManager.loadToPreview(mediaSource)
+                                    
+                                    print("✅ MediaSourceView: Media loaded to preview successfully")
+                                    
+                                    // Force UI updates to ensure preview monitor updates immediately
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        productionManager.previewProgramManager.objectWillChange.send()
+                                        productionManager.objectWillChange.send()
+                                    }
+                                },
+                                onMediaDropped: { droppedFile, location in
+                                    // Handle drop - could be dropped on preview or program pane
+                                    print("Media dropped at location: \(location)")
+                                }
+                            ) 
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                }
+            }
+            Spacer()
+        }
+        .padding()
     }
 }
 
@@ -1070,68 +1157,6 @@ struct LiveCameraFeedButton: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
-    }
-}
-
-struct MediaSourceView: View {
-    @Binding var mediaFiles: [MediaFile]
-    @Binding var showingFilePicker: Bool
-    @EnvironmentObject var productionManager: UnifiedProductionManager
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Media Library")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button(action: { showingFilePicker = true }) {
-                    Image(systemName: "plus.circle")
-                        .foregroundColor(.blue)
-                }
-            }
-            if mediaFiles.isEmpty {
-                VStack(spacing: 16) {
-                    Spacer()
-                    Image(systemName: "folder.badge.plus")
-                        .font(.largeTitle)
-                        .foregroundColor(.secondary)
-                    Text("No Media Files")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                    Button("Add Files") {
-                        showingFilePicker = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Spacer()
-                }
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [
-                        GridItem(.adaptive(minimum: 100), spacing: 12)
-                    ], spacing: 12) {
-                        ForEach(mediaFiles) { file in
-                            MediaItemView(
-                                mediaFile: file,
-                                thumbnailManager: productionManager.mediaThumbnailManager,
-                                onMediaSelected: { selectedFile in
-                                    // Load media to preview when clicked
-                                    let mediaSource = selectedFile.asContentSource()
-                                    productionManager.previewProgramManager.loadToPreview(mediaSource)
-                                },
-                                onMediaDropped: { droppedFile, location in
-                                    // Handle drop - could be dropped on preview or program pane
-                                    print("Media dropped at location: \(location)")
-                                }
-                            ) 
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                }
-            }
-            Spacer()
-        }
-        .padding()
     }
 }
 

@@ -152,6 +152,7 @@ final class PreviewProgramManager: ObservableObject {
             
         case .media(let file, let player):
             print("🎬 PreviewProgramManager: Loading media file to preview: \(file.name)")
+            print("🎬 PreviewProgramManager: Player is \(player == nil ? "nil" : "not nil")")
             loadMediaToPreview(file)
             
         case .virtual(let camera):
@@ -309,15 +310,35 @@ final class PreviewProgramManager: ObservableObject {
     // MARK: - Private Implementation
     
     private func loadMediaToPreview(_ file: MediaFile) {
+        print("🎬 PreviewProgramManager: Starting loadMediaToPreview for: \(file.name)")
+        
         // Remove existing observer if any
         if let observer = previewTimeObserver {
             previewPlayer?.removeTimeObserver(observer)
+            previewTimeObserver = nil
         }
+        
+        // Stop accessing previous security-scoped resource if needed
+        if case .media(let previousFile, _) = previewSource {
+            previousFile.url.stopAccessingSecurityScopedResource()
+        }
+        
+        // Start accessing the security-scoped resource
+        guard file.url.startAccessingSecurityScopedResource() else {
+            print("❌ Failed to start accessing security-scoped resource for: \(file.name)")
+            return
+        }
+        
+        print("✅ Security-scoped resource access granted for: \(file.name)")
         
         let player = AVPlayer(url: file.url)
         let newSource = ContentSource.media(file, player: player)
+        
+        // Update source first
         previewSource = newSource
         previewPlayer = player
+        
+        print("🎬 PreviewProgramManager: AVPlayer created and source updated")
         
         // Get duration using modern API
         Task {
@@ -327,6 +348,7 @@ final class PreviewProgramManager: ObservableObject {
                     if duration.isValid {
                         await MainActor.run {
                             self.previewDuration = CMTimeGetSeconds(duration)
+                            print("📼 Media duration loaded: \(self.previewDuration) seconds")
                         }
                     }
                 }
@@ -343,7 +365,12 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        print("📼 Media loaded to preview: \(file.name)")
+        // Auto-play the media
+        playPreview()
+        print("📼 Media loaded to preview and started playing: \(file.name)")
+        
+        // Force UI update
+        objectWillChange.send()
     }
     
     private func loadMediaToProgram(_ file: MediaFile) {
@@ -427,6 +454,11 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func clearPreview() {
+        // Stop accessing security-scoped resource if needed
+        if case .media(let file, _) = previewSource {
+            file.url.stopAccessingSecurityScopedResource()
+        }
+        
         previewSource = .none
         previewPlayer = nil
         previewImage = nil

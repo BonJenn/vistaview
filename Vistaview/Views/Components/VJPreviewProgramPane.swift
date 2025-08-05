@@ -285,15 +285,19 @@ struct VJPreviewMonitor: View {
                 )
                 
             case .media(let file, let player):
-                // For media, we'd need a proper video preview implementation
-                VStack {
-                    Image(systemName: file.fileType.icon)
-                        .font(.title2)
-                        .foregroundColor(.white.opacity(0.7))
-                    Text(file.name)
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
-                        .lineLimit(1)
+                // Always use the actual player from the PreviewProgramManager
+                if let actualPlayer = isPreview ? previewProgramManager.previewPlayer : previewProgramManager.programPlayer {
+                    FrameBasedVideoPlayerView(player: actualPlayer)
+                } else {
+                    VStack {
+                        Image(systemName: file.fileType.icon)
+                            .font(.title2)
+                            .foregroundColor(.white.opacity(0.7))
+                        Text(file.name)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.7))
+                            .lineLimit(1)
+                    }
                 }
                 
             case .virtual(let camera):

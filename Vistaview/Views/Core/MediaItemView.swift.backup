@@ -59,9 +59,7 @@ struct MediaItemView: View {
         }
         .onTapGesture {
             print("🎬 MediaItemView: CLICKED on media file: \(mediaFile.name)")
-            print("🎬 MediaItemView: About to call onMediaSelected callback")
             onMediaSelected(mediaFile)
-            print("✅ MediaItemView: onMediaSelected callback completed")
         }
         .draggable(mediaFile) {
             // Drag preview
@@ -96,6 +94,8 @@ struct MediaItemView: View {
         }
     }
 }
+
+// MARK: - MediaFile Conformance to Transferable
 
 extension MediaFile: Transferable {
     static var transferRepresentation: some TransferRepresentation {
