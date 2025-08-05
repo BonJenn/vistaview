@@ -153,7 +153,17 @@ final class PreviewProgramManager: ObservableObject {
         case .media(let file, let player):
             print("🎬 PreviewProgramManager: Loading media file to preview: \(file.name)")
             print("🎬 PreviewProgramManager: Player is \(player == nil ? "nil" : "not nil")")
-            loadMediaToPreview(file)
+            print("🎬 PreviewProgramManager: File type is: \(file.fileType)")
+            
+            // Handle different media types appropriately
+            switch file.fileType {
+            case .image:
+                print("🖼️ PreviewProgramManager: Loading image to preview")
+                loadImageToPreview(file)
+            case .video, .audio:
+                print("🎬 PreviewProgramManager: Loading video/audio to preview")
+                loadMediaToPreview(file)
+            }
             
         case .virtual(let camera):
             print("🎬 PreviewProgramManager: Loading virtual camera to preview: \(camera.name)")
@@ -183,7 +193,18 @@ final class PreviewProgramManager: ObservableObject {
             updateProgramFromCamera(feed)
             
         case .media(let file, let player):
-            loadMediaToProgram(file)
+            print("📺 PreviewProgramManager: Loading media file to program: \(file.name)")
+            print("📺 PreviewProgramManager: File type is: \(file.fileType)")
+            
+            // Handle different media types appropriately
+            switch file.fileType {
+            case .image:
+                print("🖼️ PreviewProgramManager: Loading image to program")
+                loadImageToProgram(file)
+            case .video, .audio:
+                print("📺 PreviewProgramManager: Loading video/audio to program")
+                loadMediaToProgram(file)
+            }
             
         case .virtual(let camera):
             programSource = source
@@ -571,6 +592,116 @@ final class PreviewProgramManager: ObservableObject {
         }
         
         print("📼 PROGRAM Media setup complete: \(file.name)")
+    }
+    
+    private func loadImageToPreview(_ file: MediaFile) {
+        print("🖼️ PreviewProgramManager: Starting loadImageToPreview for: \(file.name)")
+        
+        // Clear any existing media player for preview
+        if let observer = previewTimeObserver {
+            previewPlayer?.removeTimeObserver(observer)
+            previewTimeObserver = nil
+        }
+        previewPlayer = nil
+        
+        // Stop accessing previous security-scoped resource if needed
+        if case .media(let previousFile, _) = previewSource {
+            previousFile.url.stopAccessingSecurityScopedResource()
+        }
+        
+        // Start accessing the security-scoped resource
+        guard file.url.startAccessingSecurityScopedResource() else {
+            print("❌ Failed to start accessing security-scoped resource for image: \(file.name)")
+            return
+        }
+        
+        print("✅ Security-scoped resource access granted for image: \(file.name)")
+        
+        // Load the image directly
+        Task {
+            do {
+                let imageData = try Data(contentsOf: file.url)
+                if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    await MainActor.run {
+                        // Store the image directly in previewImage
+                        self.previewImage = cgImage
+                        
+                        // Set up the source without a player
+                        let newSource = ContentSource.media(file, player: nil)
+                        self.previewSource = newSource
+                        
+                        // Set static values for image
+                        self.previewDuration = 0 // Images don't have duration
+                        self.previewCurrentTime = 0
+                        self.isPreviewPlaying = false
+                        
+                        print("✅ Image loaded to preview: \(file.name)")
+                        
+                        // Force UI update
+                        self.objectWillChange.send()
+                    }
+                } else {
+                    print("❌ Failed to create CGImage from: \(file.name)")
+                }
+            } catch {
+                print("❌ Failed to load image data: \(error)")
+            }
+        }
+    }
+    
+    private func loadImageToProgram(_ file: MediaFile) {
+        print("🖼️ PreviewProgramManager: Starting loadImageToProgram for: \(file.name)")
+        
+        // Clear any existing media player for program
+        if let observer = programTimeObserver {
+            programPlayer?.removeTimeObserver(observer)
+            programTimeObserver = nil
+        }
+        programPlayer = nil
+        
+        // Stop accessing previous security-scoped resource if needed
+        if case .media(let previousFile, _) = programSource {
+            previousFile.url.stopAccessingSecurityScopedResource()
+        }
+        
+        // Start accessing the security-scoped resource
+        guard file.url.startAccessingSecurityScopedResource() else {
+            print("❌ Failed to start accessing security-scoped resource for image: \(file.name)")
+            return
+        }
+        
+        print("✅ Security-scoped resource access granted for image: \(file.name)")
+        
+        // Load the image directly
+        Task {
+            do {
+                let imageData = try Data(contentsOf: file.url)
+                if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    await MainActor.run {
+                        // Store the image directly in programImage
+                        self.programImage = cgImage
+                        
+                        // Set up the source without a player
+                        let newSource = ContentSource.media(file, player: nil)
+                        self.programSource = newSource
+                        
+                        // Set static values for image
+                        self.programDuration = 0 // Images don't have duration
+                        self.programCurrentTime = 0
+                        self.isProgramPlaying = false
+                        
+                        print("✅ Image loaded to program: \(file.name)")
+                        
+                        // Force UI update
+                        self.objectWillChange.send()
+                    }
+                } else {
+                    print("❌ Failed to create CGImage from: \(file.name)")
+                }
+            } catch {
+                print("❌ Failed to load image data: \(error)")
+            }
+        }
     }
     
     private func updatePreviewFromCamera(_ feed: CameraFeed) {

@@ -386,11 +386,14 @@ struct PreviewProgramCenterView: View {
                     
                     // Media controls for preview (if media is loaded)
                     if case .media(let mediaFile, _) = productionManager.previewProgramManager.previewSource {
-                        ComprehensiveMediaControls(
-                            previewProgramManager: productionManager.previewProgramManager,
-                            isPreview: true,
-                            mediaFile: mediaFile
-                        )
+                        // Only show controls for video and audio, not images
+                        if mediaFile.fileType == .video || mediaFile.fileType == .audio {
+                            ComprehensiveMediaControls(
+                                previewProgramManager: productionManager.previewProgramManager,
+                                isPreview: true,
+                                mediaFile: mediaFile
+                            )
+                        }
                     }
                 }
                 
@@ -426,11 +429,13 @@ struct PreviewProgramCenterView: View {
                     
                     // Media controls for program (if media is loaded)
                     if case .media(let mediaFile, _) = productionManager.previewProgramManager.programSource {
-                        ComprehensiveMediaControls(
-                            previewProgramManager: productionManager.previewProgramManager,
-                            isPreview: false,
-                            mediaFile: mediaFile
-                        )
+                        if mediaFile.fileType == .video || mediaFile.fileType == .audio {
+                            ComprehensiveMediaControls(
+                                previewProgramManager: productionManager.previewProgramManager,
+                                isPreview: false,
+                                mediaFile: mediaFile
+                            )
+                        }
                     }
                 }
             }
@@ -517,13 +522,26 @@ struct SimplePreviewMonitorView: View {
                 )
                 
             case .media(let mediaFile, let player):
-                if let actualPlayer = productionManager.previewProgramManager.previewPlayer {
+                if mediaFile.fileType == .image {
+                    // Display image directly from previewImage
+                    if let previewImageCG = productionManager.previewProgramManager.previewImage {
+                        Image(decorative: previewImageCG, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                            .id("preview-image-\(mediaFile.id)")
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: true)
+                    }
+                } else if let actualPlayer = productionManager.previewProgramManager.previewPlayer {
+                    // Handle video/audio with player
                     PersistentVideoPlayerView(
                         player: actualPlayer,
                         mediaFile: mediaFile,
                         isPreview: true
                     )
-                    .id("preview-player-\(actualPlayer.description)") // FIXED: Force recreation when player changes
+                    .id("preview-player-\(actualPlayer.description)")
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
@@ -586,13 +604,26 @@ struct SimpleProgramMonitorView: View {
                 )
                 
             case .media(let mediaFile, let player):
-                if let actualPlayer = productionManager.previewProgramManager.programPlayer {
+                if mediaFile.fileType == .image {
+                    // Display image directly from programImage
+                    if let programImageCG = productionManager.previewProgramManager.programImage {
+                        Image(decorative: programImageCG, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                            .id("program-image-\(mediaFile.id)")
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                    }
+                } else if let actualPlayer = productionManager.previewProgramManager.programPlayer {
+                    // Handle video/audio with player
                     PersistentVideoPlayerView(
                         player: actualPlayer,
                         mediaFile: mediaFile,
                         isPreview: false
                     )
-                    .id("program-player-\(actualPlayer.description)") // FIXED: Force recreation when player changes
+                    .id("program-player-\(actualPlayer.description)")
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                 }
@@ -635,8 +666,6 @@ struct SimpleProgramMonitorView: View {
     }
 }
 
-// MARK: - Persistent Video Player View
-
 struct PersistentVideoPlayerView: View {
     let player: AVPlayer
     let mediaFile: MediaFile
@@ -645,205 +674,6 @@ struct PersistentVideoPlayerView: View {
     var body: some View {
         FrameBasedVideoPlayerView(player: player, isPreview: isPreview)
             .id("persistent-video-\(mediaFile.id)-\(isPreview ? "preview" : "program")")
-    }
-}
-
-// MARK: - Helper Views for Cleaner Code
-
-struct MediaLoadingView: View {
-    let mediaFile: MediaFile
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: mediaFile.fileType.icon)
-                .font(.largeTitle)
-                .foregroundColor(isPreview ? .yellow : .red)
-            Text(mediaFile.name)
-                .font(.title2)
-                .foregroundColor(.white)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text("Loading Media...")
-                .font(.caption)
-                .foregroundColor(.gray)
-            
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
-                .scaleEffect(0.8)
-        }
-        .padding()
-    }
-}
-
-struct VirtualCameraView: View {
-    let camera: VirtualCamera
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack {
-            Image(systemName: "video.3d")
-                .font(.largeTitle)
-                .foregroundColor(isPreview ? .yellow : .red)
-            Text(camera.name)
-                .font(.title2)
-                .foregroundColor(.white)
-            Text("Virtual Camera")
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-    }
-}
-
-struct NoSourceView: View {
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack {
-            Image(systemName: isPreview ? "eye.slash" : "tv.slash")
-                .font(.largeTitle)
-                .foregroundColor(.gray)
-            Text(isPreview ? "No Preview Source" : "No Program Source")
-                .font(.title2)
-                .foregroundColor(.gray)
-            Text(isPreview ? "Click a camera or media to load preview" : "Use TAKE button to send preview to program")
-                .font(.caption)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-        }
-    }
-}
-
-// PERFORMANCE: Optimized camera view with reduced update frequency
-struct OptimizedPreviewCameraView: View {
-    @ObservedObject var cameraFeed: CameraFeed
-    @ObservedObject var productionManager: UnifiedProductionManager
-    let effectCount: Int
-    
-    // PERFORMANCE: Cache processed images to avoid repeated processing
-    @State private var cachedProcessedImage: NSImage?
-    @State private var lastProcessedFrameCount: Int = 0
-    
-    var body: some View {
-        Group {
-            // PERFORMANCE: Only process new images when frame count changes
-            if let processedImage = getCachedOrProcessedImage() {
-                Image(nsImage: processedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                    .id("preview-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
-            } else {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("Loading Camera...")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text(cameraFeed.device.displayName)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
-                        .font(.caption2)
-                        .foregroundColor(cameraFeed.connectionStatus.color)
-                    Text("Frame: \(cameraFeed.frameCount)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-    }
-    
-    // PERFORMANCE: Cached image processing to avoid repeated work
-    private func getCachedOrProcessedImage() -> NSImage? {
-        // Only process if frame count changed
-        if cameraFeed.frameCount != lastProcessedFrameCount {
-            lastProcessedFrameCount = cameraFeed.frameCount
-            
-            guard let cgImage = cameraFeed.previewImage else { 
-                cachedProcessedImage = nil
-                return nil 
-            }
-            
-            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
-                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-                nsImage.addRepresentation(bitmapRep)
-                cachedProcessedImage = nsImage
-                return nsImage
-            }
-            
-            cachedProcessedImage = cameraFeed.previewNSImage
-            return cameraFeed.previewNSImage
-        }
-        
-        // Return cached image if frame hasn't changed
-        return cachedProcessedImage ?? cameraFeed.previewNSImage
-    }
-}
-
-struct OptimizedProgramCameraView: View {
-    @ObservedObject var cameraFeed: CameraFeed
-    @ObservedObject var productionManager: UnifiedProductionManager
-    let effectCount: Int
-    
-    // PERFORMANCE: Cache processed images
-    @State private var cachedProcessedImage: NSImage?
-    @State private var lastProcessedFrameCount: Int = 0
-    
-    var body: some View {
-        Group {
-            if let processedImage = getCachedOrProcessedImage() {
-                Image(nsImage: processedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                    .id("program-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
-            } else {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("Loading Camera...")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text(cameraFeed.device.displayName)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
-                        .font(.caption2)
-                        .foregroundColor(cameraFeed.connectionStatus.color)
-                    Text("Frame: \(cameraFeed.frameCount)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-    }
-    
-    private func getCachedOrProcessedImage() -> NSImage? {
-        if cameraFeed.frameCount != lastProcessedFrameCount {
-            lastProcessedFrameCount = cameraFeed.frameCount
-            
-            guard let cgImage = cameraFeed.previewImage else { 
-                cachedProcessedImage = nil
-                return nil 
-            }
-            
-            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
-                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-                nsImage.addRepresentation(bitmapRep)
-                cachedProcessedImage = nsImage
-                return nsImage
-            }
-            
-            cachedProcessedImage = cameraFeed.previewNSImage
-            return cameraFeed.previewNSImage
-        }
-        
-        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
@@ -1260,10 +1090,8 @@ struct VirtualCameraButton: View {
                             .foregroundColor(.blue)
                     )
                     .cornerRadius(8)
-                
                 Text(camera.name)
                     .font(.headline)
-                
                 Text("Focal: \(Int(camera.focalLength))mm")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -1871,6 +1699,205 @@ struct ComprehensiveMediaControls: View {
             // Ignore errors
         }
         return ""
+    }
+}
+
+// MARK: - Helper Views for Cleaner Code
+
+struct MediaLoadingView: View {
+    let mediaFile: MediaFile
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: mediaFile.fileType.icon)
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(mediaFile.name)
+                .font(.title2)
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text("Loading Media...")
+                .font(.caption)
+                .foregroundColor(.gray)
+            
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
+                .scaleEffect(0.8)
+        }
+        .padding()
+    }
+}
+
+struct VirtualCameraView: View {
+    let camera: VirtualCamera
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack {
+            Image(systemName: "video.3d")
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(camera.name)
+                .font(.title2)
+                .foregroundColor(.white)
+            Text("Virtual Camera")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+}
+
+struct NoSourceView: View {
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack {
+            Image(systemName: isPreview ? "eye.slash" : "tv.slash")
+                .font(.largeTitle)
+                .foregroundColor(.gray)
+            Text(isPreview ? "No Preview Source" : "No Program Source")
+                .font(.title2)
+                .foregroundColor(.gray)
+            Text(isPreview ? "Click a camera or media to load preview" : "Use TAKE button to send preview to program")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+        }
+    }
+}
+
+// PERFORMANCE: Optimized camera view with reduced update frequency
+struct OptimizedPreviewCameraView: View {
+    @ObservedObject var cameraFeed: CameraFeed
+    @ObservedObject var productionManager: UnifiedProductionManager
+    let effectCount: Int
+    
+    // PERFORMANCE: Cache processed images to avoid repeated processing
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
+    
+    var body: some View {
+        Group {
+            // PERFORMANCE: Only process new images when frame count changes
+            if let processedImage = getCachedOrProcessedImage() {
+                Image(nsImage: processedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                    .id("preview-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
+            } else {
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading Camera...")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                    Text(cameraFeed.device.displayName)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
+                        .font(.caption2)
+                        .foregroundColor(cameraFeed.connectionStatus.color)
+                    Text("Frame: \(cameraFeed.frameCount)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+    
+    // PERFORMANCE: Cached image processing to avoid repeated work
+    private func getCachedOrProcessedImage() -> NSImage? {
+        // Only process if frame count changed
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
+        }
+        
+        // Return cached image if frame hasn't changed
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
+    }
+}
+
+struct OptimizedProgramCameraView: View {
+    @ObservedObject var cameraFeed: CameraFeed
+    @ObservedObject var productionManager: UnifiedProductionManager
+    let effectCount: Int
+    
+    // PERFORMANCE: Cache processed images
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
+    
+    var body: some View {
+        Group {
+            if let processedImage = getCachedOrProcessedImage() {
+                Image(nsImage: processedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                    .id("program-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
+            } else {
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading Camera...")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                    Text(cameraFeed.device.displayName)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
+                        .font(.caption2)
+                        .foregroundColor(cameraFeed.connectionStatus.color)
+                    Text("Frame: \(cameraFeed.frameCount)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+    
+    private func getCachedOrProcessedImage() -> NSImage? {
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
+        }
+        
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
