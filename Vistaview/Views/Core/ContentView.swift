@@ -362,6 +362,14 @@ struct PreviewProgramCenterView: View {
                             .fontWeight(.bold)
                             .foregroundColor(.yellow)
                         Spacer()
+                        
+                        // Show media name if media is loaded
+                        if case .media(let mediaFile, _) = productionManager.previewProgramManager.previewSource {
+                            Text(mediaFile.name)
+                                .font(.caption2)
+                                .foregroundColor(.yellow)
+                                .lineLimit(1)
+                        }
                     }
                     
                     // SIMPLER: Direct monitor view without complex caching
@@ -375,6 +383,15 @@ struct PreviewProgramCenterView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.yellow, lineWidth: 2)
                     )
+                    
+                    // Media controls for preview (if media is loaded)
+                    if case .media(let mediaFile, _) = productionManager.previewProgramManager.previewSource {
+                        ComprehensiveMediaControls(
+                            previewProgramManager: productionManager.previewProgramManager,
+                            isPreview: true,
+                            mediaFile: mediaFile
+                        )
+                    }
                 }
                 
                 // Program Monitor (Bottom - Live Output)
@@ -384,6 +401,15 @@ struct PreviewProgramCenterView: View {
                             .font(.caption)
                             .fontWeight(.bold)
                             .foregroundColor(.red)
+                        Spacer()
+                        
+                        // Show media name if media is loaded
+                        if case .media(let mediaFile, _) = productionManager.previewProgramManager.programSource {
+                            Text(mediaFile.name)
+                                .font(.caption2)
+                                .foregroundColor(.red)
+                                .lineLimit(1)
+                        }
                     }
                     
                     // SIMPLER: Direct monitor view without complex caching
@@ -397,6 +423,15 @@ struct PreviewProgramCenterView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.red, lineWidth: 2)
                     )
+                    
+                    // Media controls for program (if media is loaded)
+                    if case .media(let mediaFile, _) = productionManager.previewProgramManager.programSource {
+                        ComprehensiveMediaControls(
+                            previewProgramManager: productionManager.previewProgramManager,
+                            isPreview: false,
+                            mediaFile: mediaFile
+                        )
+                    }
                 }
             }
             .frame(maxHeight: .infinity)
@@ -488,6 +523,7 @@ struct SimplePreviewMonitorView: View {
                         mediaFile: mediaFile,
                         isPreview: true
                     )
+                    .id("preview-player-\(actualPlayer.description)") // FIXED: Force recreation when player changes
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
@@ -556,6 +592,7 @@ struct SimpleProgramMonitorView: View {
                         mediaFile: mediaFile,
                         isPreview: false
                     )
+                    .id("program-player-\(actualPlayer.description)") // FIXED: Force recreation when player changes
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                 }
@@ -606,7 +643,7 @@ struct PersistentVideoPlayerView: View {
     let isPreview: Bool
     
     var body: some View {
-        FrameBasedVideoPlayerView(player: player)
+        FrameBasedVideoPlayerView(player: player, isPreview: isPreview)
             .id("persistent-video-\(mediaFile.id)-\(isPreview ? "preview" : "program")")
     }
 }
@@ -1466,6 +1503,378 @@ struct StudioSelectorSheet: View {
     }
 }
 
+struct ComprehensiveMediaControls: View {
+    @ObservedObject var previewProgramManager: PreviewProgramManager
+    let isPreview: Bool
+    let mediaFile: MediaFile
+    
+    @State private var isDragging = false
+    @State private var dragStartTime: TimeInterval = 0
+    @State private var wasPlayingBeforeDrag = false
+    
+    private var player: AVPlayer? {
+        isPreview ? previewProgramManager.previewPlayer : previewProgramManager.programPlayer
+    }
+    
+    private var isPlaying: Bool {
+        isPreview ? previewProgramManager.isPreviewPlaying : previewProgramManager.isProgramPlaying
+    }
+    
+    private var currentTime: TimeInterval {
+        isPreview ? previewProgramManager.previewCurrentTime : previewProgramManager.programCurrentTime
+    }
+    
+    private var duration: TimeInterval {
+        isPreview ? previewProgramManager.previewDuration : previewProgramManager.programDuration
+    }
+    
+    private var progress: Double {
+        guard duration > 0 else { return 0.0 }
+        return min(1.0, max(0.0, currentTime / duration))
+    }
+    
+    // FIXED: Check if player is ready before allowing scrubbing
+    private var isPlayerReady: Bool {
+        guard let currentPlayer = player,
+              let currentItem = currentPlayer.currentItem else { return false }
+        return currentItem.status == .readyToPlay && currentItem.duration.isValid
+    }
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            // Scrub Bar with Timeline
+            VStack(spacing: 4) {
+                HStack {
+                    Text(formatTime(currentTime))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                    
+                    Spacer()
+                    
+                    // Progress percentage
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(isPreview ? .yellow : .red)
+                    
+                    Spacer()
+                    
+                    Text(formatTime(duration))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                }
+                
+                // Custom scrub slider with more precise control
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        // Background track
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(height: 4)
+                            .cornerRadius(2)
+                        
+                        // Progress track
+                        Rectangle()
+                            .fill(isPreview ? Color.yellow : Color.red)
+                            .frame(width: geometry.size.width * progress, height: 4)
+                            .cornerRadius(2)
+                        
+                        // Scrub handle - disabled if player not ready
+                        Circle()
+                            .fill(isPlayerReady ? (isPreview ? Color.yellow : Color.red) : Color.gray)
+                            .frame(width: 12, height: 12)
+                            .offset(x: geometry.size.width * progress - 6)
+                            .scaleEffect(isDragging ? 1.2 : 1.0)
+                            .animation(.easeInOut(duration: 0.1), value: isDragging)
+                        
+                        // Show loading indicator if player not ready
+                        if !isPlayerReady {
+                            HStack {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
+                                    .scaleEffect(0.5)
+                                Text("Loading...")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                                // Add manual retry button for stuck loading
+                                Button("Retry") {
+                                    if let currentPlayer = player, let currentItem = currentPlayer.currentItem {
+                                        print("🔄 Manual retry: Recreating player item")
+                                        let asset = currentItem.asset
+                                        let newItem = AVPlayerItem(asset: asset)
+                                        currentPlayer.replaceCurrentItem(with: newItem)
+                                    }
+                                }
+                                .font(.caption2)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(4)
+                            }
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                // FIXED: Only allow scrubbing if player is ready
+                                guard isPlayerReady else {
+                                    print("🚫 Scrubbing disabled - player not ready")
+                                    return
+                                }
+                                
+                                if !isDragging {
+                                    isDragging = true
+                                    wasPlayingBeforeDrag = isPlaying
+                                    dragStartTime = currentTime
+                                    // Pause during scrubbing for smoother experience
+                                    if isPlaying {
+                                        if isPreview {
+                                            previewProgramManager.pausePreview()
+                                        } else {
+                                            previewProgramManager.pauseProgram()
+                                        }
+                                    }
+                                }
+                                
+                                let newProgress = max(0, min(1, value.location.x / geometry.size.width))
+                                let newTime = newProgress * duration
+                                
+                                if isPreview {
+                                    previewProgramManager.seekPreview(to: newTime)
+                                } else {
+                                    previewProgramManager.seekProgram(to: newTime)
+                                }
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                                // Resume playback if it was playing before scrubbing
+                                if wasPlayingBeforeDrag {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        if isPreview {
+                                            previewProgramManager.playPreview()
+                                        } else {
+                                            previewProgramManager.playProgram()
+                                        }
+                                    }
+                                }
+                            }
+                    )
+                    .disabled(!isPlayerReady) // Disable gesture if player not ready
+                }
+                .frame(height: 20)
+            }
+            
+            // Transport Controls
+            HStack(spacing: 16) {
+                // Skip backward button
+                Button(action: {
+                    guard isPlayerReady else { return }
+                    let newTime = max(0, currentTime - 10)
+                    if isPreview {
+                        previewProgramManager.seekPreview(to: newTime)
+                    } else {
+                        previewProgramManager.seekProgram(to: newTime)
+                    }
+                }) {
+                    Image(systemName: "gobackward.10")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isPlayerReady ? .primary : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Skip backward 10 seconds")
+                .keyboardShortcut("j", modifiers: [])
+                .disabled(!isPlayerReady)
+                
+                // Play/Pause button (larger)
+                Button(action: {
+                    guard isPlayerReady else { 
+                        print("🚫 Play/Pause disabled - player not ready")
+                        return 
+                    }
+                    togglePlayPause()
+                }) {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundColor(isPlayerReady ? (isPreview ? .yellow : .red) : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(isPlaying ? "Pause (Space)" : "Play (Space)")
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(!isPlayerReady)
+                
+                // Skip forward button
+                Button(action: {
+                    guard isPlayerReady else { return }
+                    let newTime = min(duration, currentTime + 10)
+                    if isPreview {
+                        previewProgramManager.seekPreview(to: newTime)
+                    } else {
+                        previewProgramManager.seekProgram(to: newTime)
+                    }
+                }) {
+                    Image(systemName: "goforward.10")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isPlayerReady ? .primary : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Skip forward 10 seconds")
+                .keyboardShortcut("l", modifiers: [])
+                .disabled(!isPlayerReady)
+                
+                Spacer()
+                
+                // Frame-by-frame controls
+                Button(action: {
+                    guard isPlayerReady else { return }
+                    // Step backward one frame (approximate)
+                    let frameTime = 1.0/30.0 // Assume 30fps
+                    let newTime = max(0, currentTime - frameTime)
+                    if isPreview {
+                        previewProgramManager.seekPreview(to: newTime)
+                    } else {
+                        previewProgramManager.seekProgram(to: newTime)
+                    }
+                }) {
+                    Image(systemName: "backward.frame")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(isPlayerReady ? .secondary : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Previous frame")
+                .keyboardShortcut(",", modifiers: [])
+                .disabled(!isPlayerReady)
+                
+                Button(action: {
+                    guard isPlayerReady else { return }
+                    // Step forward one frame (approximate)
+                    let frameTime = 1.0/30.0 // Assume 30fps
+                    let newTime = min(duration, currentTime + frameTime)
+                    if isPreview {
+                        previewProgramManager.seekPreview(to: newTime)
+                    } else {
+                        previewProgramManager.seekProgram(to: newTime)
+                    }
+                }) {
+                    Image(systemName: "forward.frame")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(isPlayerReady ? .secondary : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Next frame")
+                .keyboardShortcut(".", modifiers: [])
+                .disabled(!isPlayerReady)
+                
+                // Stop button
+                Button(action: {
+                    guard isPlayerReady else { return }
+                    if isPreview {
+                        previewProgramManager.stopPreview()
+                    } else {
+                        previewProgramManager.stopProgram()
+                    }
+                }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isPlayerReady ? .primary : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Stop and rewind to beginning")
+                .disabled(!isPlayerReady)
+                
+                // Loop button (for future implementation)
+                Button(action: {
+                    // TODO: Implement loop functionality
+                    print("🔄 Loop functionality coming soon!")
+                }) {
+                    Image(systemName: "repeat")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Loop (coming soon)")
+                .disabled(true)
+            }
+            
+            // Additional info row
+            HStack {
+                Text(mediaFile.name)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                
+                Spacer()
+                
+                // Show player status for debugging
+                if let currentPlayer = player, let currentItem = currentPlayer.currentItem {
+                    Text("Status: \(currentItem.status.description)")
+                        .font(.caption2)
+                        .foregroundColor(currentItem.status == .readyToPlay ? .green : (currentItem.status == .failed ? .red : .orange))
+                }
+                
+                Text(formatFileSize(mediaFile.url))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.1))
+        .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isPreview ? Color.yellow.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
+        )
+    }
+    
+    private func togglePlayPause() {
+        if isPreview {
+            if isPlaying {
+                previewProgramManager.pausePreview()
+            } else {
+                previewProgramManager.playPreview()
+            }
+        } else {
+            if isPlaying {
+                previewProgramManager.pauseProgram()
+            } else {
+                previewProgramManager.playProgram()
+            }
+        }
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        let totalSeconds = Int(time)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%d:%02d", minutes, seconds)
+        }
+    }
+    
+    private func formatFileSize(_ url: URL) -> String {
+        do {
+            let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
+            if let fileSize = resourceValues.fileSize {
+                let formatter = ByteCountFormatter()
+                formatter.allowedUnits = [.useMB, .useGB]
+                formatter.countStyle = .file
+                return formatter.string(fromByteCount: Int64(fileSize))
+            }
+        } catch {
+            // Ignore errors
+        }
+        return ""
+    }
+}
+
+// MARK: - Preview
 #Preview {
     ContentView()
 }

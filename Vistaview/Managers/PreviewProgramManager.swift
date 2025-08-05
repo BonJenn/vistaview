@@ -254,57 +254,121 @@ final class PreviewProgramManager: ObservableObject {
     // MARK: - Media Playback Controls
     
     func playPreview() {
-        guard case .media(let file, let player) = previewSource, let player = player else { return }
-        player.play()
+        guard case .media(let file, let player) = previewSource else { 
+            print("❌ playPreview: No media source in preview")
+            return 
+        }
+        guard let actualPlayer = previewPlayer else { 
+            print("❌ playPreview: No preview player found")
+            return 
+        }
+        
+        if let currentItem = actualPlayer.currentItem {
+            print("🎬 BEFORE PLAY - Preview player time: \(CMTimeGetSeconds(currentItem.currentTime()))")
+            print("🎬 BEFORE PLAY - Preview player rate: \(actualPlayer.rate)")
+            print("🎬 BEFORE PLAY - Preview player status: \(currentItem.status.description)")
+            print("🎬 BEFORE PLAY - Preview player duration: \(CMTimeGetSeconds(currentItem.duration))")
+        }
+        
+        print("🎬 About to play preview player: \(actualPlayer)")
+        actualPlayer.play()
         isPreviewPlaying = true
-        print("▶️ Preview playing")
+        print("▶️ Preview playing: \(file.name)")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let currentItem = actualPlayer.currentItem {
+                print("🎬 AFTER PLAY - Preview player time: \(CMTimeGetSeconds(currentItem.currentTime()))")
+                print("🎬 AFTER PLAY - Preview player rate: \(actualPlayer.rate)")
+            }
+        }
     }
     
     func pausePreview() {
-        guard case .media(let file, let player) = previewSource, let player = player else { return }
-        player.pause()
+        guard case .media(let file, let player) = previewSource else { 
+            print("❌ pausePreview: No media source in preview")
+            return 
+        }
+        guard let actualPlayer = previewPlayer else { 
+            print("❌ pausePreview: No preview player found")
+            return 
+        }
+        print("🎬 About to pause preview player: \(actualPlayer)")
+        actualPlayer.pause()
         isPreviewPlaying = false
-        print("⏸️ Preview paused")
+        print("⏸️ Preview paused: \(file.name)")
     }
     
     func stopPreview() {
-        if case .media(let file, let player) = previewSource, let player = player {
-            player.pause()
-            player.seek(to: CMTime.zero)
+        if case .media(let file, let player) = previewSource, let actualPlayer = previewPlayer {
+            actualPlayer.pause()
+            actualPlayer.seek(to: CMTime.zero)
             isPreviewPlaying = false
+            previewCurrentTime = 0.0
+            print("⏹️ Preview stopped: \(file.name)")
         }
     }
     
     func playProgram() {
-        guard case .media(let file, let player) = programSource, let player = player else { return }
-        player.play()
+        guard case .media(let file, let player) = programSource else { return }
+        guard let actualPlayer = programPlayer else { return }
+        actualPlayer.play()
         isProgramPlaying = true
-        print("▶️ Program playing")
+        print("▶️ Program playing: \(file.name)")
     }
     
     func pauseProgram() {
-        guard case .media(let file, let player) = programSource, let player = player else { return }
-        player.pause()
+        guard case .media(let file, let player) = programSource else { return }
+        guard let actualPlayer = programPlayer else { return }
+        actualPlayer.pause()
         isProgramPlaying = false
-        print("⏸️ Program paused")
+        print("⏸️ Program paused: \(file.name)")
     }
     
     func stopProgram() {
-        if case .media(let file, let player) = programSource, let player = player {
-            player.pause()
-            player.seek(to: CMTime.zero)
+        if case .media(let file, let player) = programSource, let actualPlayer = programPlayer {
+            actualPlayer.pause()
+            actualPlayer.seek(to: CMTime.zero)
             isProgramPlaying = false
+            programCurrentTime = 0.0
+            print("⏹️ Program stopped: \(file.name)")
         }
     }
     
     func seekPreview(to time: TimeInterval) {
-        guard case .media(let file, let player) = previewSource, let player = player else { return }
-        player.seek(to: CMTime(seconds: time, preferredTimescale: 600))
+        guard case .media(let file, let player) = previewSource else { 
+            print("❌ seekPreview: No media source in preview")
+            return 
+        }
+        guard let actualPlayer = previewPlayer else { 
+            print("❌ seekPreview: No preview player found")
+            return 
+        }
+        print("🎬 About to seek preview player: \(actualPlayer) to \(time)")
+        let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+        actualPlayer.seek(to: cmTime) { [weak self] completed in
+            if completed {
+                print("🎯 Preview seeked to: \(time) seconds")
+                Task { @MainActor in
+                    self?.previewCurrentTime = time
+                }
+            } else {
+                print("❌ Preview seek failed to: \(time) seconds")
+            }
+        }
     }
     
     func seekProgram(to time: TimeInterval) {
-        guard case .media(let file, let player) = programSource, let player = player else { return }
-        player.seek(to: CMTime(seconds: time, preferredTimescale: 600))
+        guard case .media(let file, let player) = programSource else { return }
+        guard let actualPlayer = programPlayer else { return }
+        let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+        actualPlayer.seek(to: cmTime) { [weak self] completed in
+            if completed {
+                print("🎯 Program seeked to: \(time) seconds")
+                Task { @MainActor in
+                    self?.programCurrentTime = time
+                }
+            }
+        }
     }
     
     // MARK: - Private Implementation
@@ -323,6 +387,9 @@ final class PreviewProgramManager: ObservableObject {
             previousFile.url.stopAccessingSecurityScopedResource()
         }
         
+        // Clear previous player
+        previewPlayer = nil
+        
         // Start accessing the security-scoped resource
         guard file.url.startAccessingSecurityScopedResource() else {
             print("❌ Failed to start accessing security-scoped resource for: \(file.name)")
@@ -331,29 +398,71 @@ final class PreviewProgramManager: ObservableObject {
         
         print("✅ Security-scoped resource access granted for: \(file.name)")
         
-        let player = AVPlayer(url: file.url)
-        let newSource = ContentSource.media(file, player: player)
+        // FIXED: Use EXACTLY the same method as program (create from URL, not asset)
+        let playerItem = AVPlayerItem(url: file.url)
         
-        // Update source first
+        // Create a new AVPlayer instance specifically for preview
+        let player = AVPlayer(playerItem: playerItem)
+        
+        // Important: Configure player for optimal performance
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.allowsExternalPlayback = false
+        
+        // Set up status observer BEFORE setting the source (exactly like program)
+        var statusObserver: NSKeyValueObservation?
+        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, change in
+            Task { @MainActor in
+                print("🎬 PREVIEW Player item status changed to: \(item.status.rawValue) (\(item.status.description))")
+                
+                switch item.status {
+                case .readyToPlay:
+                    print("✅ PREVIEW Player item is ready to play")
+                    
+                case .failed:
+                    print("❌ PREVIEW Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
+                    
+                case .unknown:
+                    print("🤔 PREVIEW Player item status is still unknown")
+                    
+                @unknown default:
+                    print("🆕 PREVIEW Player item has unknown status: \(item.status.rawValue)")
+                }
+                
+                // Clean up observer when done
+                if item.status != .unknown {
+                    statusObserver?.invalidate()
+                    statusObserver = nil
+                }
+            }
+        }
+        
+        // Set source and player BEFORE setting up observer
+        let newSource = ContentSource.media(file, player: player)
         previewSource = newSource
         previewPlayer = player
         
-        print("🎬 PreviewProgramManager: AVPlayer created and source updated")
+        print("🎬 PreviewProgramManager: AVPlayer created for PREVIEW and source updated")
+        print("🔍 PREVIEW DEBUG: Player stored in previewPlayer: \(player)")
+        print("🔍 PREVIEW DEBUG: Player in ContentSource: \(String(describing: (previewSource as? ContentSource)))")
         
-        // Get duration using modern API
+        // CRITICAL: Verify the player is actually stored correctly
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            print("🔍 PREVIEW VERIFICATION: previewPlayer after delay: \(String(describing: self.previewPlayer))")
+            print("🔍 PREVIEW VERIFICATION: Are they the same object? \(self.previewPlayer === player)")
+        }
+        
+        // Get duration using modern API (exactly like program)  
         Task {
             do {
-                if let asset = player.currentItem?.asset {
-                    let duration = try await asset.load(.duration)
-                    if duration.isValid {
-                        await MainActor.run {
-                            self.previewDuration = CMTimeGetSeconds(duration)
-                            print("📼 Media duration loaded: \(self.previewDuration) seconds")
-                        }
+                let duration = try await playerItem.asset.load(.duration)
+                if duration.isValid {
+                    await MainActor.run {
+                        self.previewDuration = CMTimeGetSeconds(duration)
+                        print("📼 PREVIEW Media duration loaded: \(self.previewDuration) seconds")
                     }
                 }
             } catch {
-                print("Failed to load duration: \(error)")
+                print("Failed to load PREVIEW duration: \(error)")
             }
         }
         
@@ -365,38 +474,91 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        // Auto-play the media
-        playPreview()
-        print("📼 Media loaded to preview and started playing: \(file.name)")
+        print("📼 PREVIEW Media setup complete: \(file.name)")
         
         // Force UI update
         objectWillChange.send()
     }
     
     private func loadMediaToProgram(_ file: MediaFile) {
+        print("🎬 PreviewProgramManager: Starting loadMediaToProgram for: \(file.name)")
+        
         // Remove existing observer if any
         if let observer = programTimeObserver {
             programPlayer?.removeTimeObserver(observer)
+            programTimeObserver = nil
         }
         
-        let player = AVPlayer(url: file.url)
+        // Stop accessing previous security-scoped resource if needed
+        if case .media(let previousFile, _) = programSource {
+            previousFile.url.stopAccessingSecurityScopedResource()
+        }
+        
+        // Clear previous player
+        programPlayer = nil
+        
+        // Start accessing the security-scoped resource
+        guard file.url.startAccessingSecurityScopedResource() else {
+            print("❌ Failed to start accessing security-scoped resource for PROGRAM: \(file.name)")
+            return
+        }
+        
+        // Create AVPlayerItem first to monitor its status
+        let playerItem = AVPlayerItem(url: file.url)
+        
+        // Create a new AVPlayer instance specifically for program
+        let player = AVPlayer(playerItem: playerItem)
+        
+        // Important: Configure player for optimal performance  
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.allowsExternalPlayback = false
+        
+        // Set up status observer BEFORE setting the source
+        var statusObserver: NSKeyValueObservation?
+        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, change in
+            Task { @MainActor in
+                print("🎬 PROGRAM Player item status changed to: \(item.status.rawValue) (\(item.status.description))")
+                
+                switch item.status {
+                case .readyToPlay:
+                    print("✅ PROGRAM Player item is ready to play")
+                    
+                case .failed:
+                    print("❌ PROGRAM Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
+                    
+                case .unknown:
+                    print("🤔 PROGRAM Player item status is still unknown")
+                    
+                @unknown default:
+                    print("🆕 PROGRAM Player item has unknown status: \(item.status.rawValue)")
+                }
+                
+                // Clean up observer when done
+                if item.status != .unknown {
+                    statusObserver?.invalidate()
+                    statusObserver = nil
+                }
+            }
+        }
+        
         let newSource = ContentSource.media(file, player: player)
         programSource = newSource
         programPlayer = player
         
+        print("🎬 PreviewProgramManager: AVPlayer created for PROGRAM and source updated")
+        
         // Get duration using modern API
         Task {
             do {
-                if let asset = player.currentItem?.asset {
-                    let duration = try await asset.load(.duration)
-                    if duration.isValid {
-                        await MainActor.run {
-                            self.programDuration = CMTimeGetSeconds(duration)
-                        }
+                let duration = try await playerItem.asset.load(.duration)
+                if duration.isValid {
+                    await MainActor.run {
+                        self.programDuration = CMTimeGetSeconds(duration)
+                        print("📼 PROGRAM Media duration loaded: \(self.programDuration) seconds")
                     }
                 }
             } catch {
-                print("Failed to load duration: \(error)")
+                print("Failed to load PROGRAM duration: \(error)")
             }
         }
         
@@ -408,7 +570,7 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        print("📼 Media loaded to program: \(file.name)")
+        print("📼 PROGRAM Media setup complete: \(file.name)")
     }
     
     private func updatePreviewFromCamera(_ feed: CameraFeed) {
