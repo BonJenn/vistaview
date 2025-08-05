@@ -20,10 +20,15 @@ class MediaThumbnailManager: ObservableObject {
     func getThumbnail(for mediaFile: MediaFile) async -> NSImage? {
         let cacheKey = mediaFile.url.absoluteString
         
+        print("🖼️ ThumbnailManager: Getting thumbnail for: \(mediaFile.name)")
+        
         // Return cached thumbnail if available
         if let cachedThumbnail = thumbnailCache[cacheKey] {
+            print("✅ ThumbnailManager: Found cached thumbnail for: \(mediaFile.name)")
             return cachedThumbnail
         }
+        
+        print("🔄 ThumbnailManager: Generating new thumbnail for: \(mediaFile.name)")
         
         // Generate new thumbnail
         let thumbnail = await generateThumbnail(for: mediaFile)
@@ -31,12 +36,27 @@ class MediaThumbnailManager: ObservableObject {
         // Cache the result
         if let thumbnail = thumbnail {
             thumbnailCache[cacheKey] = thumbnail
+            print("✅ ThumbnailManager: Successfully generated and cached thumbnail for: \(mediaFile.name)")
+        } else {
+            print("❌ ThumbnailManager: Failed to generate thumbnail for: \(mediaFile.name)")
         }
         
         return thumbnail
     }
     
     private func generateThumbnail(for mediaFile: MediaFile) async -> NSImage? {
+        // FIXED: Start accessing security-scoped resource
+        guard mediaFile.url.startAccessingSecurityScopedResource() else {
+            print("❌ ThumbnailManager: Failed to access security-scoped resource for: \(mediaFile.name)")
+            return generatePlaceholderThumbnail(for: mediaFile.fileType)
+        }
+        
+        defer {
+            mediaFile.url.stopAccessingSecurityScopedResource()
+        }
+        
+        print("🔓 ThumbnailManager: Security access granted for: \(mediaFile.name)")
+        
         switch mediaFile.fileType {
         case .video:
             return await generateVideoThumbnail(from: mediaFile.url)
@@ -48,25 +68,50 @@ class MediaThumbnailManager: ObservableObject {
     }
     
     private func generateVideoThumbnail(from url: URL) async -> NSImage? {
+        print("🎬 ThumbnailManager: Generating video thumbnail from: \(url.lastPathComponent)")
+        
         let asset = AVAsset(url: url)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = thumbnailSize
         
         do {
-            let cgImage = try await imageGenerator.image(at: CMTime(seconds: 1, preferredTimescale: 600)).image
+            // First check if the asset is readable
+            let duration = try await asset.load(.duration)
+            let isPlayable = try await asset.load(.isPlayable)
+            
+            print("🎬 ThumbnailManager: Asset duration: \(CMTimeGetSeconds(duration))s, playable: \(isPlayable)")
+            
+            if !isPlayable {
+                print("❌ ThumbnailManager: Asset is not playable")
+                return generatePlaceholderThumbnail(for: .video)
+            }
+            
+            // Generate thumbnail at 1 second, or 10% through the video, whichever is smaller
+            let thumbnailTime = min(CMTime(seconds: 1, preferredTimescale: 600), 
+                                   CMTime(seconds: CMTimeGetSeconds(duration) * 0.1, preferredTimescale: 600))
+            
+            let result = try await imageGenerator.image(at: thumbnailTime)
+            let cgImage = result.image
             let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            
+            print("✅ ThumbnailManager: Successfully generated video thumbnail")
             return nsImage
         } catch {
-            print("Failed to generate video thumbnail: \(error)")
+            print("❌ ThumbnailManager: Failed to generate video thumbnail: \(error)")
             return generatePlaceholderThumbnail(for: .video)
         }
     }
     
     private func generateImageThumbnail(from url: URL) -> NSImage? {
+        print("🖼️ ThumbnailManager: Generating image thumbnail from: \(url.lastPathComponent)")
+        
         guard let nsImage = NSImage(contentsOf: url) else {
+            print("❌ ThumbnailManager: Failed to load image from URL")
             return generatePlaceholderThumbnail(for: .image)
         }
+        
+        print("📏 ThumbnailManager: Original image size: \(nsImage.size)")
         
         // Resize image to thumbnail size
         let thumbnailImage = NSImage(size: thumbnailSize)
@@ -74,6 +119,7 @@ class MediaThumbnailManager: ObservableObject {
         nsImage.draw(in: NSRect(origin: .zero, size: thumbnailSize))
         thumbnailImage.unlockFocus()
         
+        print("✅ ThumbnailManager: Successfully generated image thumbnail")
         return thumbnailImage
     }
     

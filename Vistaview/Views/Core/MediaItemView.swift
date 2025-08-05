@@ -31,10 +31,51 @@ struct MediaItemView: View {
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))
                             .overlay(
-                                Image(systemName: mediaFile.fileType.icon)
-                                    .font(.title2)
-                                    .foregroundColor(.secondary)
+                                VStack(spacing: 2) {
+                                    Image(systemName: mediaFile.fileType.icon)
+                                        .font(.title2)
+                                        .foregroundColor(.secondary)
+                                    Text("Loading...")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                             )
+                    }
+                    
+                    // Type badge overlay
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text(mediaFile.fileType.displayName)
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(mediaFile.fileType.badgeColor.opacity(0.8))
+                                .cornerRadius(4)
+                        }
+                        Spacer()
+                    }
+                    .padding(2)
+                    
+                    // Duration overlay for videos
+                    if mediaFile.fileType == .video, let duration = mediaFile.duration {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                Text(formatDuration(duration))
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(4)
+                            }
+                        }
+                        .padding(2)
                     }
                 }
                 .frame(width: 80, height: 45)
@@ -94,6 +135,13 @@ struct MediaItemView: View {
             .background(Color.black.opacity(0.8))
             .cornerRadius(8)
         }
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = Int(duration)
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Represents a media file that can be loaded into preview/program
 struct MediaFile: Identifiable, Equatable, Codable {
@@ -18,6 +19,22 @@ struct MediaFile: Identifiable, Equatable, Codable {
             case .video: return "video.fill"
             case .audio: return "waveform"
             case .image: return "photo.fill"
+            }
+        }
+        
+        var displayName: String {
+            switch self {
+            case .video: return "VIDEO"
+            case .audio: return "AUDIO"
+            case .image: return "IMAGE"
+            }
+        }
+        
+        var badgeColor: Color {
+            switch self {
+            case .video: return .blue
+            case .audio: return .green
+            case .image: return .orange
             }
         }
     }
