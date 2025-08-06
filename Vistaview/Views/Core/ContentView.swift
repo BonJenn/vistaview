@@ -176,7 +176,7 @@ struct TopToolbarView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Color.gray.opacity(0.1))
-            .cornerRadius(8)
+            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
             
             Spacer()
             
@@ -263,7 +263,7 @@ struct TopToolbarView: View {
             }
         }
         .padding()
-        .background(Color.gray.opacity(0.05))
+        .background(TahoeDesign.Colors.surfaceLight)
     }
 }
 
@@ -288,7 +288,7 @@ struct FinalCutProStyleView: View {
                 showingFilePicker: $showingFilePicker
             )
             .frame(minWidth: 280, maxWidth: 400)
-            .background(Color.gray.opacity(0.03))
+            .liquidGlassPanel(material: .regularMaterial, cornerRadius: 0, shadowIntensity: .light)
             
             // Center Panel - Preview/Program like Final Cut Pro
             VStack(spacing: 0) {
@@ -335,7 +335,7 @@ struct FinalCutProStyleView: View {
                 .frame(minHeight: 200)
             }
             .frame(minWidth: 280, maxWidth: 350)
-            .background(Color.gray.opacity(0.03))
+            .liquidGlassPanel(material: .regularMaterial, cornerRadius: 0, shadowIntensity: .light)
         }
     }
 }
@@ -378,7 +378,7 @@ struct PreviewProgramCenterView: View {
                     )
                     .aspectRatio(16/9, contentMode: .fit)
                     .background(Color.black)
-                    .cornerRadius(8)
+                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.yellow, lineWidth: 2)
@@ -421,7 +421,7 @@ struct PreviewProgramCenterView: View {
                     )
                     .aspectRatio(16/9, contentMode: .fit)
                     .background(Color.black)
-                    .cornerRadius(8)
+                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.red, lineWidth: 2)
@@ -566,7 +566,7 @@ struct SimplePreviewMonitorView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.blue)
-                            .cornerRadius(8)
+                            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                             .padding(4)
                     }
                 }
@@ -648,7 +648,7 @@ struct SimpleProgramMonitorView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.red)
-                            .cornerRadius(8)
+                            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                             .padding(4)
                     }
                 }
@@ -759,7 +759,7 @@ struct MediaSourceView: View {
                     Button("Add Files") {
                         showingFilePicker = true
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(LiquidGlassButton(accentColor: .accentColor, size: .medium))
                     Spacer()
                 }
             } else {
@@ -820,7 +820,7 @@ struct CamerasSourceView: View {
                 .font(.caption2)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color.blue.opacity(0.2))
+                .statusIndicator(color: TahoeDesign.Colors.virtual, isActive: true)
                 .foregroundColor(.blue)
                 .cornerRadius(4)
             }
@@ -844,7 +844,7 @@ struct CamerasSourceView: View {
                         .foregroundColor(.green)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.2))
+                        .statusIndicator(color: TahoeDesign.Colors.live, isActive: true)
                         .cornerRadius(4)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1089,7 +1089,7 @@ struct VirtualCameraButton: View {
                             .font(.largeTitle)
                             .foregroundColor(.blue)
                     )
-                    .cornerRadius(8)
+                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                 Text(camera.name)
                     .font(.headline)
                 Text("Focal: \(Int(camera.focalLength))mm")
@@ -1163,7 +1163,7 @@ struct EffectDragButton: View {
             .padding(8)
             .background(effect.category.color.opacity(0.8))
             .foregroundColor(.white)
-            .cornerRadius(8)
+            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
             .shadow(radius: 4)
         }
     }
@@ -1259,7 +1259,7 @@ struct OutputControlsPanel: View {
                                 .padding(.vertical, 8)
                                 .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
                                 .foregroundColor(.white)
-                                .cornerRadius(8)
+                                .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                             }
                         }
                     }
@@ -1309,7 +1309,7 @@ struct StudioSelectorSheet: View {
                                         .font(.largeTitle)
                                         .foregroundColor(.blue)
                                 )
-                                .cornerRadius(8)
+                                .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                             Text(studio.name)
                                 .font(.headline)
                             Text(studio.description)

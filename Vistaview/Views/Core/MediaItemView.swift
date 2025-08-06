@@ -9,19 +9,12 @@ struct MediaItemView: View {
     
     @State private var thumbnail: NSImage?
     @State private var isDragging = false
+    @State private var isHovered = false
     
     var body: some View {
         ZStack {
-            // Background with hover effect
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(isDragging ? 0.3 : 0.1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.blue.opacity(isDragging ? 0.5 : 0.2), lineWidth: isDragging ? 2 : 1)
-                )
-            
-            VStack(spacing: 4) {
-                // Thumbnail or icon
+            VStack(spacing: TahoeDesign.Spacing.xs) {
+                // Thumbnail or icon with enhanced glass styling
                 ZStack {
                     if let thumbnail = thumbnail {
                         Image(nsImage: thumbnail)
@@ -29,7 +22,7 @@ struct MediaItemView: View {
                             .aspectRatio(contentMode: .fill)
                     } else {
                         Rectangle()
-                            .fill(Color.gray.opacity(0.3))
+                            .fill(TahoeDesign.Colors.surfaceMedium)
                             .overlay(
                                 VStack(spacing: 2) {
                                     Image(systemName: mediaFile.fileType.icon)
@@ -42,7 +35,7 @@ struct MediaItemView: View {
                             )
                     }
                     
-                    // Type badge overlay
+                    // Type badge overlay with glass styling
                     VStack {
                         HStack {
                             Spacer()
@@ -50,10 +43,9 @@ struct MediaItemView: View {
                                 .font(.caption2)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, TahoeDesign.Spacing.xs)
                                 .padding(.vertical, 2)
-                                .background(mediaFile.fileType.badgeColor.opacity(0.8))
-                                .cornerRadius(4)
+                                .statusIndicator(color: mediaFile.fileType.badgeColor, isActive: true)
                         }
                         Spacer()
                     }
@@ -69,10 +61,10 @@ struct MediaItemView: View {
                                     .font(.caption2)
                                     .fontWeight(.medium)
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 4)
+                                    .padding(.horizontal, TahoeDesign.Spacing.xs)
                                     .padding(.vertical, 2)
-                                    .background(Color.black.opacity(0.7))
-                                    .cornerRadius(4)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.xs, style: .continuous))
                             }
                         }
                         .padding(2)
@@ -80,19 +72,33 @@ struct MediaItemView: View {
                 }
                 .frame(width: 80, height: 45)
                 .clipped()
-                .cornerRadius(4)
+                .clipShape(RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.sm, style: .continuous))
                 
-                // File name
+                // File name with improved typography
                 Text(mediaFile.name)
                     .font(.caption2)
+                    .fontWeight(.medium)
                     .foregroundColor(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .frame(height: 30)
             }
-            .padding(6)
+            .padding(TahoeDesign.Spacing.sm)
         }
         .frame(width: 100, height: 100)
+        .liquidGlassPanel(
+            material: isHovered || isDragging ? .regularMaterial : .ultraThinMaterial,
+            cornerRadius: TahoeDesign.CornerRadius.md,
+            shadowIntensity: isHovered || isDragging ? .medium : .light
+        )
+        .scaleEffect(isDragging ? 0.95 : (isHovered ? 1.02 : 1.0))
+        .animation(TahoeAnimations.quickEasing, value: isDragging)
+        .animation(TahoeAnimations.quickEasing, value: isHovered)
+        .onHover { hovering in
+            withAnimation(TahoeAnimations.quickEasing) {
+                isHovered = hovering
+            }
+        }
         .onAppear {
             Task {
                 thumbnail = await thumbnailManager.getThumbnail(for: mediaFile)
@@ -101,24 +107,29 @@ struct MediaItemView: View {
         .onTapGesture {
             print("🎬 MediaItemView: CLICKED on media file: \(mediaFile.name)")
             print("🎬 MediaItemView: About to call onMediaSelected callback")
+            
+            // Add haptic feedback
+            let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+            feedbackGenerator.perform(.generic, performanceTime: .now)
+            
             onMediaSelected(mediaFile)
             print("✅ MediaItemView: onMediaSelected callback completed")
         }
         .draggable(mediaFile) {
-            // Drag preview
-            VStack(spacing: 4) {
+            // Enhanced drag preview with glass styling
+            VStack(spacing: TahoeDesign.Spacing.xs) {
                 if let thumbnail = thumbnail {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 60, height: 34)
                         .clipped()
-                        .cornerRadius(4)
+                        .clipShape(RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.xs, style: .continuous))
                 } else {
                     Rectangle()
-                        .fill(Color.gray.opacity(0.3))
+                        .fill(TahoeDesign.Colors.surfaceMedium)
                         .frame(width: 60, height: 34)
-                        .cornerRadius(4)
+                        .clipShape(RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.xs, style: .continuous))
                         .overlay(
                             Image(systemName: mediaFile.fileType.icon)
                                 .font(.body)
@@ -128,12 +139,16 @@ struct MediaItemView: View {
                 
                 Text(mediaFile.name)
                     .font(.caption2)
+                    .fontWeight(.medium)
                     .foregroundColor(.white)
                     .lineLimit(1)
             }
-            .padding(8)
-            .background(Color.black.opacity(0.8))
-            .cornerRadius(8)
+            .padding(TahoeDesign.Spacing.sm)
+            .liquidGlassPanel(
+                material: .thickMaterial,
+                cornerRadius: TahoeDesign.CornerRadius.md,
+                shadowIntensity: .heavy
+            )
         }
     }
     
