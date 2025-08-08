@@ -230,6 +230,9 @@ final class PreviewProgramManager: ObservableObject {
         
         loadToProgram(previewContent)
         
+        effectManager.copyPreviewEffectsToProgram(overwrite: true)
+        print("✨ TAKE: Copied Preview effects to Program")
+        
         // Reset crossfader to full program
         crossfaderValue = 0.0
         
@@ -855,6 +858,7 @@ final class PreviewProgramManager: ObservableObject {
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
             self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
         }
         
         print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
@@ -867,6 +871,7 @@ final class PreviewProgramManager: ObservableObject {
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
             self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
         }
         
         print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
@@ -879,6 +884,7 @@ final class PreviewProgramManager: ObservableObject {
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
             self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
         }
         
         print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
@@ -891,6 +897,7 @@ final class PreviewProgramManager: ObservableObject {
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
             self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
         }
         
         print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
@@ -906,10 +913,18 @@ final class PreviewProgramManager: ObservableObject {
     
     func clearPreviewEffects() {
         effectManager.clearPreviewEffects()
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
+        }
     }
     
     func clearProgramEffects() {
         effectManager.clearProgramEffects()
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+            self.unifiedProductionManager.objectWillChange.send()
+        }
     }
 }
 

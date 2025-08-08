@@ -503,7 +503,7 @@ struct SimplePreviewMonitorView: View {
                     effectCount: effectCount
                 )
                 
-            case .media(let mediaFile, let player):
+            case .media(let mediaFile, _):
                 if mediaFile.fileType == .image {
                     if let previewImageCG = productionManager.previewProgramManager.previewImage {
                         let processedImage = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
@@ -525,7 +525,7 @@ struct SimplePreviewMonitorView: View {
                                 productionManager.previewProgramManager.processImageWithEffects(cg, for: .preview) ?? cg
                             }
                         )
-                        .id("preview-player-\(actualPlayer.description)")
+                        .id("preview-player-\(actualPlayer.description)-fx-\(effectCount)")
                         
                         if effectCount > 0 {
                             VStack {
@@ -577,6 +577,8 @@ struct SimplePreviewMonitorView: View {
             guard let item = items.first else { return false }
             Task { @MainActor in
                 productionManager.previewProgramManager.addEffectToPreview(item.effectType)
+                productionManager.objectWillChange.send()
+                productionManager.previewProgramManager.objectWillChange.send()
             }
             return true
         } isTargeted: { targeted in
@@ -604,7 +606,7 @@ struct SimpleProgramMonitorView: View {
                     effectCount: effectCount
                 )
                 
-            case .media(let mediaFile, let player):
+            case .media(let mediaFile, _):
                 if mediaFile.fileType == .image {
                     if let programImageCG = productionManager.previewProgramManager.programImage {
                         let processedImage = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
@@ -626,7 +628,7 @@ struct SimpleProgramMonitorView: View {
                                 productionManager.previewProgramManager.processImageWithEffects(cg, for: .program) ?? cg
                             }
                         )
-                        .id("program-player-\(actualPlayer.description)")
+                        .id("program-player-\(actualPlayer.description)-fx-\(effectCount)")
                         
                         if effectCount > 0 {
                             VStack {
@@ -678,6 +680,8 @@ struct SimpleProgramMonitorView: View {
             guard let item = items.first else { return false }
             Task { @MainActor in
                 productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+                productionManager.objectWillChange.send()
+                productionManager.previewProgramManager.objectWillChange.send()
             }
             return true
         } isTargeted: { targeted in
@@ -805,9 +809,8 @@ struct MediaSourceView: View {
                                         productionManager.objectWillChange.send()
                                     }
                                 },
-                                onMediaDropped: { droppedFile, location in
+                                onMediaDropped: { _, _ in
                                     // Handle drop - could be dropped on preview or program pane
-                                    print("Media dropped at location: \(location)")
                                 }
                             )
                         }
@@ -1622,7 +1625,7 @@ struct ComprehensiveMediaControls: View {
         .cornerRadius(6)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(isPreview ? Color.yellow.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
+                .stroke(isPreview ? Color.yellow : Color.red, lineWidth: 1)
         )
     }
     

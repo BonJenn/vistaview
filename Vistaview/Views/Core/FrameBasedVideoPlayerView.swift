@@ -17,6 +17,7 @@ class VideoFrameObserver: ObservableObject {
     private var lastNoBufferLogTime: TimeInterval = 0 // Track last log time
     private var callbackCount = 0 // Track display link callbacks
     private let frameProcessor: ((CGImage) -> CGImage?)?
+    private let processingQueue = DispatchQueue(label: "vistaview.video.fx.processing", qos: .userInteractive)
 
     init(player: AVPlayer, isPreview: Bool = false, frameProcessor: ((CGImage) -> CGImage?)? = nil) {
         self.player = player
@@ -212,10 +213,20 @@ class VideoFrameObserver: ObservableObject {
                 
                 if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
                     print("✅ VideoFrameObserver \(isPreview ? "PREVIEW" : "PROGRAM"): CREATED CGIMAGE")
-                    let finalCG = self.frameProcessor?(cgImage) ?? cgImage
-                    DispatchQueue.main.async {
-                        print("✅ VideoFrameObserver \(self.isPreview ? "PREVIEW" : "PROGRAM"): UPDATING UI WITH NEW FRAME")
-                        self.currentFrame = NSImage(cgImage: finalCG, size: ciImage.extent.size)
+                    let targetSize = ciImage.extent.size
+                    if let processor = self.frameProcessor {
+                        processingQueue.async { [weak self] in
+                            guard let self = self else { return }
+                            let processed = processor(cgImage) ?? cgImage
+                            DispatchQueue.main.async {
+                                self.currentFrame = NSImage(cgImage: processed, size: targetSize)
+                            }
+                        }
+                    } else {
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self = self else { return }
+                            self.currentFrame = NSImage(cgImage: cgImage, size: targetSize)
+                        }
                     }
                 } else {
                     print("❌ VideoFrameObserver \(isPreview ? "PREVIEW" : "PROGRAM"): FAILED TO CREATE CGIMAGE from CIImage")

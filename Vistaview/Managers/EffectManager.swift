@@ -266,6 +266,27 @@ class EffectManager: ObservableObject {
         return applyEffects(to: texture, for: Self.programSourceID)
     }
     
+    func cloneChain(from fromID: String, to toID: String, overwrite: Bool = true) {
+        if let sourceChain = effectChains[fromID] {
+            let newChain = sourceChain.duplicate()
+            if toID == Self.programSourceID {
+                newChain.name = "Program Effects"
+            } else if toID == Self.previewSourceID {
+                newChain.name = "Preview Effects"
+            }
+            effectChains[toID] = newChain
+            print("✨ Cloned effect chain from \(fromID) to \(toID) with \(newChain.effects.count) effects")
+        } else if overwrite {
+            effectChains[toID]?.effects.removeAll()
+            effectChains[toID]?.objectWillChange.send()
+            print("✨ Cleared chain for \(toID) (no source chain to clone)")
+        }
+    }
+    
+    func copyPreviewEffectsToProgram(overwrite: Bool = true) {
+        cloneChain(from: Self.previewSourceID, to: Self.programSourceID, overwrite: overwrite)
+    }
+    
     // MARK: - Effect Chain Management
     
     func createEffectChain(for sourceID: String, name: String) -> EffectChain {
