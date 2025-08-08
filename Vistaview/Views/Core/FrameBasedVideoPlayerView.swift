@@ -16,10 +16,12 @@ class VideoFrameObserver: ObservableObject {
     private var hasVideoOutput = false // Track if we've successfully added output
     private var lastNoBufferLogTime: TimeInterval = 0 // Track last log time
     private var callbackCount = 0 // Track display link callbacks
+    private let frameProcessor: ((CGImage) -> CGImage?)?
 
-    init(player: AVPlayer, isPreview: Bool = false) {
+    init(player: AVPlayer, isPreview: Bool = false, frameProcessor: ((CGImage) -> CGImage?)? = nil) {
         self.player = player
         self.isPreview = isPreview
+        self.frameProcessor = frameProcessor
         print("🎬 VideoFrameObserver: Created with ID: \(observerId) for \(isPreview ? "PREVIEW" : "PROGRAM")")
         setupObservers()
         setupDisplayLink()
@@ -210,9 +212,10 @@ class VideoFrameObserver: ObservableObject {
                 
                 if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
                     print("✅ VideoFrameObserver \(isPreview ? "PREVIEW" : "PROGRAM"): CREATED CGIMAGE")
+                    let finalCG = self.frameProcessor?(cgImage) ?? cgImage
                     DispatchQueue.main.async {
                         print("✅ VideoFrameObserver \(self.isPreview ? "PREVIEW" : "PROGRAM"): UPDATING UI WITH NEW FRAME")
-                        self.currentFrame = NSImage(cgImage: cgImage, size: ciImage.extent.size)
+                        self.currentFrame = NSImage(cgImage: finalCG, size: ciImage.extent.size)
                     }
                 } else {
                     print("❌ VideoFrameObserver \(isPreview ? "PREVIEW" : "PROGRAM"): FAILED TO CREATE CGIMAGE from CIImage")
@@ -245,12 +248,14 @@ class VideoFrameObserver: ObservableObject {
 struct FrameBasedVideoPlayerView: View {
     let player: AVPlayer
     let isPreview: Bool
+    let frameProcessor: ((CGImage) -> CGImage?)?
     @StateObject private var frameObserver: VideoFrameObserver
     
-    init(player: AVPlayer, isPreview: Bool = false) {
+    init(player: AVPlayer, isPreview: Bool = false, frameProcessor: ((CGImage) -> CGImage?)? = nil) {
         self.player = player
         self.isPreview = isPreview
-        _frameObserver = StateObject(wrappedValue: VideoFrameObserver(player: player, isPreview: isPreview))
+        self.frameProcessor = frameProcessor
+        _frameObserver = StateObject(wrappedValue: VideoFrameObserver(player: player, isPreview: isPreview, frameProcessor: frameProcessor))
     }
     
     var body: some View {

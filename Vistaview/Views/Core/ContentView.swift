@@ -290,20 +290,11 @@ struct FinalCutProStyleView: View {
             .frame(minWidth: 280, maxWidth: 400)
             .liquidGlassPanel(material: .regularMaterial, cornerRadius: 0, shadowIntensity: .light)
             
-            // Center Panel - Preview/Program like Final Cut Pro
-            VStack(spacing: 0) {
-                // Main Preview/Program Area
-                PreviewProgramCenterView(
-                    productionManager: productionManager,
-                    mediaFiles: $mediaFiles
-                )
-                
-                // Timeline/Layers Control (bottom strip)
-                TimelineControlsView(productionManager: productionManager)
-                    .frame(height: 120)
-                    .background(Color.black.opacity(0.05))
-            }
-            .frame(minWidth: 600)
+            // Center Panel - Preview/Program
+            PreviewProgramCenterView(
+                productionManager: productionManager,
+                mediaFiles: $mediaFiles
+            )
             
             // Right Panel - Output & Streaming Controls
             VStack(spacing: 0) {
@@ -340,7 +331,7 @@ struct FinalCutProStyleView: View {
     }
 }
 
-// MARK: - Preview/Program Center View (Optimized)
+// MARK: - Preview/Program Center View - Side by Side Layout with Optimized Controls
 
 struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -349,158 +340,149 @@ struct PreviewProgramCenterView: View {
     // PERFORMANCE: Add UI update throttling for high-frequency updates
     @State private var lastUIUpdate = Date()
     private let uiUpdateThreshold: TimeInterval = 1.0/15.0 // 15fps for monitor updates
+
+    @State private var lastUIUpdate2 = Date()
+    private let uiUpdateThreshold2: TimeInterval = 1.0/60.0 // 60fps for monitor updates
     
     var body: some View {
-        VStack(spacing: 8) {
-            // Main Preview/Program Display - Stacked Vertically
-            VStack(spacing: 8) {
-                // Preview Monitor (Top - Next Up)
-                VStack(spacing: 4) {
-                    HStack {
-                        Text("PREVIEW")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.yellow)
-                        Spacer()
-                        
-                        // Show media name if media is loaded
-                        if case .media(let mediaFile, _) = productionManager.previewProgramManager.previewSource {
-                            Text(mediaFile.name)
-                                .font(.caption2)
-                                .foregroundColor(.yellow)
-                                .lineLimit(1)
+        GeometryReader { geo in
+            let shouldStackVertically = geo.size.width < 900
+            VStack(spacing: TahoeDesign.Spacing.md) {
+                Group {
+                    if shouldStackVertically {
+                        VStack(spacing: TahoeDesign.Spacing.md) {
+                            monitorView(isPreview: true)
+                            monitorView(isPreview: false)
                         }
-                    }
-                    
-                    // SIMPLER: Direct monitor view without complex caching
-                    SimplePreviewMonitorView(
-                        productionManager: productionManager
-                    )
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .background(Color.black)
-                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.yellow, lineWidth: 2)
-                    )
-                    
-                    // Media controls for preview (if media is loaded)
-                    if case .media(let mediaFile, _) = productionManager.previewProgramManager.previewSource {
-                        // Only show controls for video and audio, not images
-                        if mediaFile.fileType == .video || mediaFile.fileType == .audio {
-                            ComprehensiveMediaControls(
-                                previewProgramManager: productionManager.previewProgramManager,
-                                isPreview: true,
-                                mediaFile: mediaFile
-                            )
-                        }
-                    }
-                }
-                
-                // Program Monitor (Bottom - Live Output)
-                VStack(spacing: 4) {
-                    HStack {
-                        Text("PROGRAM")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.red)
-                        Spacer()
-                        
-                        // Show media name if media is loaded
-                        if case .media(let mediaFile, _) = productionManager.previewProgramManager.programSource {
-                            Text(mediaFile.name)
-                                .font(.caption2)
-                                .foregroundColor(.red)
-                                .lineLimit(1)
-                        }
-                    }
-                    
-                    // SIMPLER: Direct monitor view without complex caching
-                    SimpleProgramMonitorView(
-                        productionManager: productionManager
-                    )
-                    .aspectRatio(16/9, contentMode: .fit)
-                    .background(Color.black)
-                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.red, lineWidth: 2)
-                    )
-                    
-                    // Media controls for program (if media is loaded)
-                    if case .media(let mediaFile, _) = productionManager.previewProgramManager.programSource {
-                        if mediaFile.fileType == .video || mediaFile.fileType == .audio {
-                            ComprehensiveMediaControls(
-                                previewProgramManager: productionManager.previewProgramManager,
-                                isPreview: false,
-                                mediaFile: mediaFile
-                            )
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: .infinity)
-            
-            // TAKE and AUTO buttons
-            HStack(spacing: 12) {
-                Spacer()
-                
-                Button("TAKE") {
-                    // Move current preview source to program using the correct method name
-                    print("✂️ TAKE BUTTON CLICKED!")
-                    print("✂️ TAKE DEBUG: Current preview source: \(productionManager.previewProgramManager.previewSource)")
-                    print("✂️ TAKE DEBUG: Current program source: \(productionManager.previewProgramManager.programSource)")
-                    
-                    // Check if preview source exists
-                    if productionManager.previewProgramManager.previewSource == .none {
-                        print("✂️ TAKE ERROR: No preview source to take!")
                     } else {
-                        print("✂️ TAKE: About to call take() method...")
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            productionManager.previewProgramManager.take()
-                        }
-                        print("✂️ TAKE: Called take() method")
-                        DispatchQueue.main.async {
-                            print("✂️ TAKE AFTER: Preview source: \(productionManager.previewProgramManager.previewSource)")
-                            print("✂️ TAKE AFTER: Program source: \(productionManager.previewProgramManager.programSource)")
-                            productionManager.previewProgramManager.objectWillChange.send()
-                            productionManager.objectWillChange.send()
+                        HStack(spacing: TahoeDesign.Spacing.md) {
+                            monitorView(isPreview: true)
+                            monitorView(isPreview: false)
                         }
                     }
                 }
-                .font(.caption)
-                .fontWeight(.bold)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(productionManager.previewProgramManager.previewSource == .none ? Color.gray : Color.red)
-                .foregroundColor(.white)
-                .cornerRadius(6)
-                .disabled(productionManager.previewProgramManager.previewSource == .none)
-                
-                Button("AUTO") {
-                    print("🔄 AUTO: Auto-transitioned preview to program")
-                    withAnimation(.easeInOut(duration: 1.0)) {
-                        productionManager.previewProgramManager.transition(duration: 1.0)
+                .animation(.easeInOut(duration: 0.18), value: shouldStackVertically)
+
+                // TAKE and AUTO buttons as before
+                HStack(spacing: TahoeDesign.Spacing.xl) {
+                    Spacer()
+                    Button("TAKE") {
+                        if productionManager.previewProgramManager.previewSource == .none {
+                            print("✂️ TAKE ERROR: No preview source to take!")
+                        } else {
+                            withAnimation(TahoeAnimations.standardEasing) {
+                                productionManager.previewProgramManager.take()
+                            }
+                            DispatchQueue.main.async {
+                                productionManager.previewProgramManager.objectWillChange.send()
+                                productionManager.objectWillChange.send()
+                            }
+                        }
                     }
+                    .buttonStyle(LiquidGlassButton(
+                        accentColor: productionManager.previewProgramManager.previewSource == .none ? .gray : TahoeDesign.Colors.program,
+                        size: .large
+                    ))
+                    .disabled(productionManager.previewProgramManager.previewSource == .none)
+                    Button("AUTO") {
+                        withAnimation(TahoeAnimations.slowEasing) {
+                            productionManager.previewProgramManager.transition(duration: 1.0)
+                        }
+                    }
+                    .buttonStyle(LiquidGlassButton(
+                        accentColor: productionManager.previewProgramManager.previewSource == .none ? .gray : TahoeDesign.Colors.virtual,
+                        size: .large
+                    ))
+                    .disabled(productionManager.previewProgramManager.previewSource == .none)
+                    Spacer()
                 }
-                .font(.caption)
-                .fontWeight(.bold)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(productionManager.previewProgramManager.previewSource == .none ? Color.gray : Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(6)
-                .disabled(productionManager.previewProgramManager.previewSource == .none)
-                
-                Spacer()
+                .padding(.vertical, TahoeDesign.Spacing.md)
+                .liquidGlassPanel(
+                    material: .ultraThinMaterial,
+                    cornerRadius: TahoeDesign.CornerRadius.lg,
+                    shadowIntensity: .light,
+                    padding: EdgeInsets(
+                        top: TahoeDesign.Spacing.sm,
+                        leading: TahoeDesign.Spacing.xl,
+                        bottom: TahoeDesign.Spacing.sm,
+                        trailing: TahoeDesign.Spacing.xl
+                    )
+                )
             }
-            .padding(.vertical, 8)
+            .padding(TahoeDesign.Spacing.lg)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .padding()
+    }
+
+    @ViewBuilder
+    private func monitorView(isPreview: Bool) -> some View {
+        let monitorLabel = isPreview ? "PREVIEW" : "PROGRAM"
+        let color = isPreview ? TahoeDesign.Colors.preview : TahoeDesign.Colors.program
+        let sourceCase = isPreview
+            ? productionManager.previewProgramManager.previewSource
+            : productionManager.previewProgramManager.programSource
+
+        VStack(spacing: TahoeDesign.Spacing.xs) {
+            HStack {
+                Text(monitorLabel)
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(color)
+                    .statusIndicator(color: color, isActive: true)
+                Spacer()
+                if case .media(let mediaFile, _) = sourceCase {
+                    Text(mediaFile.name)
+                        .font(.caption2)
+                        .foregroundColor(color)
+                        .lineLimit(1)
+                }
+            }
+            if isPreview {
+                SimplePreviewMonitorView(productionManager: productionManager)
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .liquidGlassMonitor(
+                        borderColor: TahoeDesign.Colors.preview,
+                        cornerRadius: TahoeDesign.CornerRadius.lg,
+                        glowIntensity: 0.4,
+                        isActive: true
+                    )
+            } else {
+                SimpleProgramMonitorView(productionManager: productionManager)
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .liquidGlassMonitor(
+                        borderColor: TahoeDesign.Colors.program,
+                        cornerRadius: TahoeDesign.CornerRadius.lg,
+                        glowIntensity: 0.4,
+                        isActive: true
+                    )
+            }
+            if case .media(let mediaFile, _) = sourceCase {
+                if mediaFile.fileType == .video || mediaFile.fileType == .audio {
+                    ComprehensiveMediaControls(
+                        previewProgramManager: productionManager.previewProgramManager,
+                        isPreview: isPreview,
+                        mediaFile: mediaFile
+                    )
+                    .liquidGlassPanel(
+                        material: .ultraThinMaterial,
+                        cornerRadius: TahoeDesign.CornerRadius.sm,
+                        shadowIntensity: .light,
+                        padding: EdgeInsets(
+                            top: TahoeDesign.Spacing.xs,
+                            leading: TahoeDesign.Spacing.sm,
+                            bottom: TahoeDesign.Spacing.xs,
+                            trailing: TahoeDesign.Spacing.sm
+                        )
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .animation(.easeInOut(duration: 0.18), value: isPreview)
     }
 }
 
-// MARK: - Simplified Monitor Views (No Caching Issues)
+// MARK: - Simplified Monitor Views 
 
 struct SimplePreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -523,25 +505,45 @@ struct SimplePreviewMonitorView: View {
                 
             case .media(let mediaFile, let player):
                 if mediaFile.fileType == .image {
-                    // Display image directly from previewImage
                     if let previewImageCG = productionManager.previewProgramManager.previewImage {
-                        Image(decorative: previewImageCG, scale: 1.0)
+                        let processedImage = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
+                        Image(decorative: processedImage, scale: 1.0)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
-                            .id("preview-image-\(mediaFile.id)")
+                            .id("preview-image-processed-\(mediaFile.id)-fx-\(effectCount)")
                     } else {
                         MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                     }
                 } else if let actualPlayer = productionManager.previewProgramManager.previewPlayer {
-                    // Handle video/audio with player
-                    PersistentVideoPlayerView(
-                        player: actualPlayer,
-                        mediaFile: mediaFile,
-                        isPreview: true
-                    )
-                    .id("preview-player-\(actualPlayer.description)")
+                    ZStack {
+                        FrameBasedVideoPlayerView(
+                            player: actualPlayer,
+                            isPreview: true,
+                            frameProcessor: { cg in
+                                productionManager.previewProgramManager.processImageWithEffects(cg, for: .preview) ?? cg
+                            }
+                        )
+                        .id("preview-player-\(actualPlayer.description)")
+                        
+                        if effectCount > 0 {
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Text("Effects Processing...")
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.2))
+                                        .cornerRadius(4)
+                                        .padding()
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
@@ -553,7 +555,6 @@ struct SimplePreviewMonitorView: View {
                 NoSourceView(isPreview: true)
             }
             
-            // Effect count indicator
             if effectCount > 0 {
                 VStack {
                     Spacer()
@@ -605,25 +606,45 @@ struct SimpleProgramMonitorView: View {
                 
             case .media(let mediaFile, let player):
                 if mediaFile.fileType == .image {
-                    // Display image directly from programImage
                     if let programImageCG = productionManager.previewProgramManager.programImage {
-                        Image(decorative: programImageCG, scale: 1.0)
+                        let processedImage = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
+                        Image(decorative: processedImage, scale: 1.0)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
-                            .id("program-image-\(mediaFile.id)")
+                            .id("program-image-processed-\(mediaFile.id)-fx-\(effectCount)")
                     } else {
                         MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                     }
                 } else if let actualPlayer = productionManager.previewProgramManager.programPlayer {
-                    // Handle video/audio with player
-                    PersistentVideoPlayerView(
-                        player: actualPlayer,
-                        mediaFile: mediaFile,
-                        isPreview: false
-                    )
-                    .id("program-player-\(actualPlayer.description)")
+                    ZStack {
+                        FrameBasedVideoPlayerView(
+                            player: actualPlayer,
+                            isPreview: false,
+                            frameProcessor: { cg in
+                                productionManager.previewProgramManager.processImageWithEffects(cg, for: .program) ?? cg
+                            }
+                        )
+                        .id("program-player-\(actualPlayer.description)")
+                        
+                        if effectCount > 0 {
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Text("Effects Processing...")
+                                        .font(.caption2)
+                                        .foregroundColor(.red)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.red.opacity(0.2))
+                                        .cornerRadius(4)
+                                        .padding()
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                 }
@@ -635,7 +656,6 @@ struct SimpleProgramMonitorView: View {
                 NoSourceView(isPreview: false)
             }
             
-            // Effect count indicator
             if effectCount > 0 {
                 VStack {
                     Spacer()
@@ -780,7 +800,6 @@ struct MediaSourceView: View {
                                     
                                     print("✅ MediaSourceView: Media loaded to preview successfully")
                                     
-                                    // Force UI updates to ensure preview monitor updates immediately
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         productionManager.previewProgramManager.objectWillChange.send()
                                         productionManager.objectWillChange.send()
@@ -790,7 +809,7 @@ struct MediaSourceView: View {
                                     // Handle drop - could be dropped on preview or program pane
                                     print("Media dropped at location: \(location)")
                                 }
-                            ) 
+                            )
                         }
                     }
                     .padding(.horizontal, 8)
@@ -969,7 +988,7 @@ struct LiveCameraFeedButton: View {
                                     lineWidth: (isInProgram || isInPreview) ? 2 : 1
                                 )
                         )
-                        .id("camera-preview-\(feed.id)-\(feed.frameCount)") // Force updates when frame changes
+                        .id("camera-preview-\(feed.id)-\(feed.frameCount)")
                 } else {
                     Rectangle()
                         .fill(Color.black)
@@ -1361,7 +1380,6 @@ struct ComprehensiveMediaControls: View {
         return min(1.0, max(0.0, currentTime / duration))
     }
     
-    // FIXED: Check if player is ready before allowing scrubbing
     private var isPlayerReady: Bool {
         guard let currentPlayer = player,
               let currentItem = currentPlayer.currentItem else { return false }
@@ -1370,7 +1388,6 @@ struct ComprehensiveMediaControls: View {
     
     var body: some View {
         VStack(spacing: 6) {
-            // Scrub Bar with Timeline
             VStack(spacing: 4) {
                 HStack {
                     Text(formatTime(currentTime))
@@ -1380,7 +1397,6 @@ struct ComprehensiveMediaControls: View {
                     
                     Spacer()
                     
-                    // Progress percentage
                     Text("\(Int(progress * 100))%")
                         .font(.caption2)
                         .foregroundColor(isPreview ? .yellow : .red)
@@ -1393,22 +1409,18 @@ struct ComprehensiveMediaControls: View {
                         .monospacedDigit()
                 }
                 
-                // Custom scrub slider with more precise control
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
-                        // Background track
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))
                             .frame(height: 4)
                             .cornerRadius(2)
                         
-                        // Progress track
                         Rectangle()
                             .fill(isPreview ? Color.yellow : Color.red)
                             .frame(width: geometry.size.width * progress, height: 4)
                             .cornerRadius(2)
                         
-                        // Scrub handle - disabled if player not ready
                         Circle()
                             .fill(isPlayerReady ? (isPreview ? Color.yellow : Color.red) : Color.gray)
                             .frame(width: 12, height: 12)
@@ -1416,7 +1428,6 @@ struct ComprehensiveMediaControls: View {
                             .scaleEffect(isDragging ? 1.2 : 1.0)
                             .animation(.easeInOut(duration: 0.1), value: isDragging)
                         
-                        // Show loading indicator if player not ready
                         if !isPlayerReady {
                             HStack {
                                 ProgressView()
@@ -1425,21 +1436,6 @@ struct ComprehensiveMediaControls: View {
                                 Text("Loading...")
                                     .font(.caption2)
                                     .foregroundColor(.gray)
-                                // Add manual retry button for stuck loading
-                                Button("Retry") {
-                                    if let currentPlayer = player, let currentItem = currentPlayer.currentItem {
-                                        print("🔄 Manual retry: Recreating player item")
-                                        let asset = currentItem.asset
-                                        let newItem = AVPlayerItem(asset: asset)
-                                        currentPlayer.replaceCurrentItem(with: newItem)
-                                    }
-                                }
-                                .font(.caption2)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(4)
                             }
                         }
                     }
@@ -1447,17 +1443,10 @@ struct ComprehensiveMediaControls: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
-                                // FIXED: Only allow scrubbing if player is ready
-                                guard isPlayerReady else {
-                                    print("🚫 Scrubbing disabled - player not ready")
-                                    return
-                                }
-                                
                                 if !isDragging {
                                     isDragging = true
                                     wasPlayingBeforeDrag = isPlaying
                                     dragStartTime = currentTime
-                                    // Pause during scrubbing for smoother experience
                                     if isPlaying {
                                         if isPreview {
                                             previewProgramManager.pausePreview()
@@ -1478,7 +1467,6 @@ struct ComprehensiveMediaControls: View {
                             }
                             .onEnded { _ in
                                 isDragging = false
-                                // Resume playback if it was playing before scrubbing
                                 if wasPlayingBeforeDrag {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         if isPreview {
@@ -1490,14 +1478,12 @@ struct ComprehensiveMediaControls: View {
                                 }
                             }
                     )
-                    .disabled(!isPlayerReady) // Disable gesture if player not ready
+                    .disabled(!isPlayerReady)
                 }
                 .frame(height: 20)
             }
             
-            // Transport Controls
             HStack(spacing: 16) {
-                // Skip backward button
                 Button(action: {
                     guard isPlayerReady else { return }
                     let newTime = max(0, currentTime - 10)
@@ -1516,7 +1502,6 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut("j", modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Play/Pause button (larger)
                 Button(action: {
                     guard isPlayerReady else { 
                         print("🚫 Play/Pause disabled - player not ready")
@@ -1533,7 +1518,6 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Skip forward button
                 Button(action: {
                     guard isPlayerReady else { return }
                     let newTime = min(duration, currentTime + 10)
@@ -1554,11 +1538,9 @@ struct ComprehensiveMediaControls: View {
                 
                 Spacer()
                 
-                // Frame-by-frame controls
                 Button(action: {
                     guard isPlayerReady else { return }
-                    // Step backward one frame (approximate)
-                    let frameTime = 1.0/30.0 // Assume 30fps
+                    let frameTime = 1.0/30.0
                     let newTime = max(0, currentTime - frameTime)
                     if isPreview {
                         previewProgramManager.seekPreview(to: newTime)
@@ -1577,8 +1559,7 @@ struct ComprehensiveMediaControls: View {
                 
                 Button(action: {
                     guard isPlayerReady else { return }
-                    // Step forward one frame (approximate)
-                    let frameTime = 1.0/30.0 // Assume 30fps
+                    let frameTime = 1.0/30.0
                     let newTime = min(duration, currentTime + frameTime)
                     if isPreview {
                         previewProgramManager.seekPreview(to: newTime)
@@ -1595,7 +1576,8 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Stop button
+                Spacer()
+                
                 Button(action: {
                     guard isPlayerReady else { return }
                     if isPreview {
@@ -1612,21 +1594,9 @@ struct ComprehensiveMediaControls: View {
                 .help("Stop and rewind to beginning")
                 .disabled(!isPlayerReady)
                 
-                // Loop button (for future implementation)
-                Button(action: {
-                    // TODO: Implement loop functionality
-                    print("🔄 Loop functionality coming soon!")
-                }) {
-                    Image(systemName: "repeat")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Loop (coming soon)")
-                .disabled(true)
+                Spacer()
             }
             
-            // Additional info row
             HStack {
                 Text(mediaFile.name)
                     .font(.caption2)
@@ -1635,7 +1605,6 @@ struct ComprehensiveMediaControls: View {
                 
                 Spacer()
                 
-                // Show player status for debugging
                 if let currentPlayer = player, let currentItem = currentPlayer.currentItem {
                     Text("Status: \(currentItem.status.description)")
                         .font(.caption2)
@@ -1696,7 +1665,7 @@ struct ComprehensiveMediaControls: View {
                 return formatter.string(fromByteCount: Int64(fileSize))
             }
         } catch {
-            // Ignore errors
+            print("Error formatting file size: \(error)")
         }
         return ""
     }
@@ -1726,7 +1695,6 @@ struct MediaLoadingView: View {
                 .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
                 .scaleEffect(0.8)
         }
-        .padding()
     }
 }
 
@@ -1774,13 +1742,11 @@ struct OptimizedPreviewCameraView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     let effectCount: Int
     
-    // PERFORMANCE: Cache processed images to avoid repeated processing
     @State private var cachedProcessedImage: NSImage?
     @State private var lastProcessedFrameCount: Int = 0
     
     var body: some View {
         Group {
-            // PERFORMANCE: Only process new images when frame count changes
             if let processedImage = getCachedOrProcessedImage() {
                 Image(nsImage: processedImage)
                     .resizable()
@@ -1809,9 +1775,7 @@ struct OptimizedPreviewCameraView: View {
         }
     }
     
-    // PERFORMANCE: Cached image processing to avoid repeated work
     private func getCachedOrProcessedImage() -> NSImage? {
-        // Only process if frame count changed
         if cameraFeed.frameCount != lastProcessedFrameCount {
             lastProcessedFrameCount = cameraFeed.frameCount
             
@@ -1832,7 +1796,6 @@ struct OptimizedPreviewCameraView: View {
             return cameraFeed.previewNSImage
         }
         
-        // Return cached image if frame hasn't changed
         return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
@@ -1842,7 +1805,6 @@ struct OptimizedProgramCameraView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     let effectCount: Int
     
-    // PERFORMANCE: Cache processed images
     @State private var cachedProcessedImage: NSImage?
     @State private var lastProcessedFrameCount: Int = 0
     

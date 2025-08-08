@@ -849,23 +849,51 @@ final class PreviewProgramManager: ObservableObject {
     // MARK: - Effect Integration
     
     func addEffectToPreview(_ effectType: String) {
+        print("✨ PreviewProgramManager: Adding \(effectType) effect to Preview output")
         effectManager.addEffectToPreview(effectType)
-        print("✨ Added \(effectType) effect to Preview output")
+        
+        // Force UI update to ensure effects are applied immediately
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
+        print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
     }
     
     func addEffectToProgram(_ effectType: String) {
+        print("✨ PreviewProgramManager: Adding \(effectType) effect to Program output")
         effectManager.addEffectToProgram(effectType)
-        print("✨ Added \(effectType) effect to Program output")
+        
+        // Force UI update to ensure effects are applied immediately
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
+        print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
     }
     
     func addEffectToPreview(_ effect: any VideoEffect) {
+        print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Preview output")
         effectManager.addEffectToPreview(effect)
-        print("✨ Added \(effect.name) effect to Preview output")
+        
+        // Force UI update to ensure effects are applied immediately
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
+        print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
     }
     
     func addEffectToProgram(_ effect: any VideoEffect) {
+        print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Program output")
         effectManager.addEffectToProgram(effect)
-        print("✨ Added \(effect.name) effect to Program output")
+        
+        // Force UI update to ensure effects are applied immediately
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
+        print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
     }
     
     func getPreviewEffectChain() -> EffectChain? {
