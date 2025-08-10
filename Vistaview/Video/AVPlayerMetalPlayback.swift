@@ -21,8 +21,32 @@ final class AVPlayerMetalPlayback {
     
     private(set) var latestTexture: MTLTexture?
     
+    private let captureScope: MTLCaptureScope?
+    
     private var effectRunner: EffectRunner?
     
+    private let heapPool: TextureHeapPool
+    
+    private var frameIndex: UInt64 = 0
+    private var loggedPixelFormatOnce = false
+
+    // FPS + Watchdog
+    private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
+    private var fpsAccumulator: Double = 0
+    private var fpsCount: Int = 0
+    var onFPSUpdate: ((Double) -> Void)?
+    var targetFPS: Double = 60
+    private var lowFPSConsecutive = 0
+    var onWatchdog: (() -> Void)?
+    private var lastWatchdogFire: CFTimeInterval = 0
+
+    // Capture next frame control
+    private var captureNextFrameRequested = false
+
+    // HDR tone map toggle (auto-enabled if PQ/HLG detected)
+    var toneMapEnabled: Bool = false
+    var swapUV: Bool = false
+
     init?(player: AVPlayer, itemOutput: AVPlayerItemVideoOutput, device: MTLDevice) {
         self.player = player
         self.itemOutput = itemOutput
@@ -31,6 +55,15 @@ final class AVPlayerMetalPlayback {
         self.commandQueue = queue
         CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
         self.converter = NV12ToBGRAConverter(device: device)
+        self.heapPool = TextureHeapPool(device: device)
+        
+        // Capture scope
+        let capMgr = MTLCaptureManager.shared()
+        let scope = capMgr.makeCaptureScope(commandQueue: queue)
+        scope.label = "PlaybackCaptureScope"
+        self.captureScope = scope
+        // Set as default so Xcode's Capture GPU Frame uses this scope
+        capMgr.defaultCaptureScope = scope
         
         var link: CVDisplayLink?
         guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess, let link else { return nil }
@@ -46,6 +79,75 @@ final class AVPlayerMetalPlayback {
         stop()
     }
     
+    func setEffectRunner(_ runner: EffectRunner?) {
+        self.effectRunner = runner
+    }
+    
+    func captureNextFrame() {
+        captureNextFrameRequested = true
+    }
+
+    private func makeParams(for pixelBuffer: CVPixelBuffer, pixelFormat: OSType) -> ConvertParams {
+        // Column-major YUV->RGB (Rec.709 full-range by default)
+        // Columns correspond to Y, U, V contributions respectively.
+        var m = simd_float3x3(
+            simd_float3(1.0,  1.0,    1.0),          // Y column
+            simd_float3(0.0, -0.1873, 1.8556),       // U column
+            simd_float3(1.5748, -0.4681, 0.0)        // V column
+        )
+        var yOffset: Float = 0.0
+        var uvOffset: Float = 0.5
+        var yScale: Float = 1.0
+        var uvScale: Float = 1.0
+
+        if let matrix = CVBufferGetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue() as? String {
+            if matrix == kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String {
+                m = simd_float3x3(
+                    simd_float3(1.0,  1.0,    1.0),           // Y
+                    simd_float3(0.0, -0.344136, 1.7720),       // U
+                    simd_float3(1.4020, -0.714136, 0.0)        // V
+                )
+            } else if matrix == kCVImageBufferYCbCrMatrix_ITU_R_2020 as String {
+                // Optional: Rec.2020 non-constant luminance approximation (column-major)
+                m = simd_float3x3(
+                    simd_float3(1.0,  1.0,    1.0),           // Y
+                    simd_float3(0.0, -0.16455, 1.8814),        // U
+                    simd_float3(1.4746, -0.57135, 0.0)         // V
+                )
+            }
+        }
+
+        if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+           pixelFormat == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange {
+            yOffset = 16.0/255.0
+            yScale  = 255.0/219.0
+            uvOffset = 128.0/255.0
+            uvScale  = 255.0/224.0
+        } else {
+            yOffset = 0.0
+            yScale  = 1.0
+            uvOffset = 0.5
+            uvScale  = 1.0
+        }
+
+        var applyToneMap = toneMapEnabled
+        if let tf = CVBufferGetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue() as? String {
+            if isHDRTransferFunction(tf) {
+                applyToneMap = true
+            }
+        }
+
+        return ConvertParams(
+            yuv2rgb: m,
+            yOffset: yOffset,
+            uvOffset: uvOffset,
+            yScale: yScale,
+            uvScale: uvScale,
+            toneMapEnabled: applyToneMap ? 1.0 : 0.0,
+            swapUV: swapUV ? 1.0 : 0.0
+        )
+    }
+
     func start() {
         guard let link = displayLink, !CVDisplayLinkIsRunning(link) else { return }
         CVDisplayLinkStart(link)
@@ -57,13 +159,10 @@ final class AVPlayerMetalPlayback {
         }
     }
     
-    func setEffectRunner(_ runner: EffectRunner?) {
-        self.effectRunner = runner
-    }
-    
     private func pullFrame() {
         guard let cache = textureCache, let converter = converter else { return }
         
+        // Host time -> seconds
         let hostTimeTicks = CVGetCurrentHostTime()
         let hostTimeSec = Double(hostTimeTicks) / CVGetHostClockFrequency()
         let itemTime = itemOutput.itemTime(forHostTime: hostTimeSec)
@@ -71,12 +170,21 @@ final class AVPlayerMetalPlayback {
               let pb = itemOutput.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else {
             return
         }
-        
+
+        let fmt = CVPixelBufferGetPixelFormatType(pb)
+        if !loggedPixelFormatOnce {
+            loggedPixelFormatOnce = true
+            let fmtStr = String(format: "0x%08X", fmt)
+            print("AVPlayerMetalPlayback: First pixelBuffer format = \(fmtStr) (NV12 full=0x0000000F, video=0x0000002F)")
+        }
+
         let w = CVPixelBufferGetWidth(pb)
         let h = CVPixelBufferGetHeight(pb)
         if currentSize.w != w || currentSize.h != h || outputTexture == nil {
             currentSize = (w, h)
-            outputTexture = converter.makeOutputTexture(width: w, height: h)
+            heapPool.ensureHeap(width: w, height: h, pixelFormat: .bgra8Unorm, usage: [.shaderRead, .shaderWrite])
+            outputTexture = converter.makeOutputTexture(width: w, height: h, heap: heapPool.heap)
+            outputTexture?.label = "Playback BGRA Output \(w)x\(h)"
         }
         guard let outBGRA = outputTexture else { return }
         
@@ -85,26 +193,90 @@ final class AVPlayerMetalPlayback {
             inFlight.signal()
             return
         }
+        frameIndex &+= 1
+        cb.label = "Playback CB #\(frameIndex)"
         cb.addCompletedHandler { [weak self] _ in
             self?.inFlight.signal()
         }
+
+        if captureNextFrameRequested {
+            captureNextFrameRequested = false
+            let desc = MTLCaptureDescriptor()
+            desc.captureObject = commandQueue
+            do {
+                try MTLCaptureManager.shared().startCapture(with: desc)
+            } catch {
+                print("Failed to start capture: \(error)")
+            }
+            cb.addCompletedHandler { _ in
+                MTLCaptureManager.shared().stopCapture()
+            }
+        }
         
-        guard let yTex = makeTexture(from: pb, plane: 0, pixelFormat: .r8Unorm, cache: cache),
-              let uvTex = makeTexture(from: pb, plane: 1, pixelFormat: .rg8Unorm, cache: cache) else {
+        cb.pushDebugGroup("PlaybackFrame")
+        
+        // Plane textures: choose correct formats for 8-bit vs 10-bit NV12 using pixel format type
+        let is10BitNV12 = (fmt == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange) ||
+                          (fmt == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+        let yFmt: MTLPixelFormat = is10BitNV12 ? .r16Unorm : .r8Unorm
+        let uvFmt: MTLPixelFormat = is10BitNV12 ? .rg16Unorm : .rg8Unorm
+
+        guard let yTex = makeTexture(from: pb, plane: 0, pixelFormat: yFmt, cache: cache),
+              let uvTex = makeTexture(from: pb, plane: 1, pixelFormat: uvFmt, cache: cache) else {
+            cb.popDebugGroup()
             cb.commit()
             return
         }
+        yTex.label = "Luma (Y) \(w)x\(h)"
+        uvTex.label = "Chroma (UV) \(w/2)x\(h/2)"
         
-        converter.encode(commandBuffer: cb, luma: yTex, chroma: uvTex, output: outBGRA)
+        // Per-frame color params
+        let params = makeParams(for: pb, pixelFormat: fmt)
+
+        // NV12 -> BGRA (with color correctness and optional tone map)
+        converter.encode(commandBuffer: cb, luma: yTex, chroma: uvTex, output: outBGRA, params: params)
         
+        // Effects (if any)
+        cb.pushDebugGroup("Effects")
         let finalTex = effectRunner?.encodeEffects(input: outBGRA, commandBuffer: cb) ?? outBGRA
+        cb.popDebugGroup()
         
         cb.addCompletedHandler { [weak self] _ in
             guard let self = self else { return }
             self.lock.lock()
             self.latestTexture = finalTex
             self.lock.unlock()
+            
+            // FPS + watchdog
+            let now = CACurrentMediaTime()
+            let dt = now - self.lastFrameTime
+            self.lastFrameTime = now
+            if dt > 0 {
+                let fps = 1.0 / dt
+                self.fpsAccumulator += fps
+                self.fpsCount += 1
+                if self.fpsCount >= 10 {
+                    let avg = self.fpsAccumulator / Double(self.fpsCount)
+                    self.fpsAccumulator = 0
+                    self.fpsCount = 0
+                    self.onFPSUpdate?(avg)
+                    if avg + 0.5 < self.targetFPS {
+                        self.lowFPSConsecutive += 1
+                    } else {
+                        self.lowFPSConsecutive = 0
+                    }
+                    let tNow = CACurrentMediaTime()
+                    if self.lowFPSConsecutive >= 6 && (tNow - self.lastWatchdogFire) > 60 {
+                        self.lastWatchdogFire = tNow
+                        self.onWatchdog?()
+                        // Auto-capture one frame for analysis
+                        self.captureNextFrame()
+                    }
+                }
+            }
         }
+        
+        cb.popDebugGroup()
         cb.commit()
     }
     
@@ -127,5 +299,15 @@ final class AVPlayerMetalPlayback {
             return nil
         }
         return tex
+    }
+
+    // HDR transfer function detection without relying on unavailable CoreVideo constants
+    private func isHDRTransferFunction(_ tf: String) -> Bool {
+        let s = tf.lowercased()
+        if s.contains("itu_r_2100_pq") { return true }
+        if s.contains("smpte") && s.contains("2084") { return true } // SMPTE ST 2084 (PQ)
+        if s.contains("hlg") { return true } // HLG
+        if s.contains("arib") && s.contains("b67") { return true } // ARIB STD-B67 (HLG)
+        return false
     }
 }

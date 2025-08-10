@@ -252,6 +252,43 @@ struct TopToolbarView: View {
                     }
                 }
                 
+                Menu {
+                    Button("Capture Preview Frame") {
+                        productionManager.previewProgramManager.captureNextPreviewFrame()
+                    }
+                    Button("Capture Program Frame") {
+                        productionManager.previewProgramManager.captureNextProgramFrame()
+                    }
+                } label: {
+                    Image(systemName: "camera.aperture")
+                }
+                .help("Capture next GPU frame (NV12→BGRA + Effects)")
+
+                Menu {
+                    Toggle(
+                        "HDR Tone Map",
+                        isOn: Binding(
+                            get: { productionManager.previewProgramManager.hdrToneMapEnabled },
+                            set: { productionManager.previewProgramManager.hdrToneMapEnabled = $0 }
+                        )
+                    )
+                    
+                    Picker(
+                        "Target FPS",
+                        selection: Binding(
+                            get: { productionManager.previewProgramManager.targetFPS },
+                            set: { productionManager.previewProgramManager.targetFPS = $0 }
+                        )
+                    ) {
+                        Text("30 FPS").tag(30.0)
+                        Text("60 FPS").tag(60.0)
+                        Text("120 FPS").tag(120.0)
+                    }
+                } label: {
+                    Image(systemName: "speedometer")
+                }
+                .help("Performance settings")
+
                 Button(action: {}) {
                     Image(systemName: "gear")
                 }
@@ -543,6 +580,22 @@ struct SimplePreviewMonitorView: View {
                     }
                 }
             }
+            
+            // HUD: FPS
+            VStack {
+                HStack {
+                    Text(String(format: "FPS: %.1f", productionManager.previewProgramManager.previewFPS))
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.4))
+                        .cornerRadius(4)
+                        .padding(6)
+                    Spacer()
+                }
+                Spacer()
+            }
         }
         .dropDestination(for: EffectDragItem.self) { items, _ in
             guard let item = items.first else { return false }
@@ -622,6 +675,22 @@ struct SimpleProgramMonitorView: View {
                             .padding(4)
                     }
                 }
+            }
+            
+            // HUD: FPS
+            VStack {
+                HStack {
+                    Text(String(format: "FPS: %.1f", productionManager.previewProgramManager.programFPS))
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.4))
+                        .cornerRadius(4)
+                        .padding(6)
+                    Spacer()
+                }
+                Spacer()
             }
         }
         .dropDestination(for: EffectDragItem.self) { items, _ in

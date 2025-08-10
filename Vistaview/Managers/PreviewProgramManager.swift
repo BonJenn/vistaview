@@ -101,7 +101,13 @@ final class PreviewProgramManager: ObservableObject {
 
     @Published var previewVideoFrame: CGImage?
     @Published var programVideoFrame: CGImage?
-    
+
+    // Playback tuning & diagnostics
+    @Published var hdrToneMapEnabled: Bool = false
+    @Published var targetFPS: Double = 60
+    @Published var previewFPS: Double = 0
+    @Published var programFPS: Double = 0
+
     // MARK: - Computed Properties for UI
     
     /// Safe access to preview source display name
@@ -517,14 +523,31 @@ final class PreviewProgramManager: ObservableObject {
                 print("Failed to load PREVIEW duration: \(error)")
             }
         }
+
+        let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
+        if file.fileType == .audio || !hasVideoTrack {
+            print("🎧 Preview: Configuring audio-only playback for \(file.name) (hasVideoTrack=\(hasVideoTrack))")
+            let player = createAudioOnlyPlayer(for: asset) ?? AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            previewAudioPlayer = player
+            previewPlayer = player
+            previewSource = .media(file, player: player)
+            
+            let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+            previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+                self?.previewCurrentTime = CMTimeGetSeconds(t)
+            }
+            isPreviewPlaying = false
+            objectWillChange.send()
+            print("✅ Preview audio-only configured")
+            return
+        }
         
         if preferVTDecode && file.fileType == .video {
             // VT path currently disabled by default. Fallthrough to AVPlayer path.
         }
 
-        // AVPlayer path with AVPlayerItemVideoOutput + autoplay + GPU rendering
+        // AVPlayer + ItemOutput path
         let playerItem = AVPlayerItem(url: file.url)
-
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:],
@@ -541,10 +564,21 @@ final class PreviewProgramManager: ObservableObject {
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             previewAVPlayback = playback
             playback.setEffectRunner(previewEffectRunner)
+            playback.toneMapEnabled = hdrToneMapEnabled
+            playback.targetFPS = targetFPS
+            playback.onFPSUpdate = { [weak self] fps in
+                Task { @MainActor in
+                    self?.previewFPS = fps
+                }
+            }
+            playback.onWatchdog = { [weak self] in
+                print("⚠️ Preview watchdog: FPS below target, capturing next frame")
+                self?.captureNextPreviewFrame()
+            }
             playback.start()
         }
 
-        // Autoplay when ready
+        // Autoplay & time observer
         var statusObserver: NSKeyValueObservation?
         statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
@@ -556,11 +590,9 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
 
-        let newSource = ContentSource.media(file, player: player)
-        previewSource = newSource
+        previewSource = .media(file, player: player)
         previewPlayer = player
 
-        // Keep time observer for UI labels
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             self?.previewCurrentTime = CMTimeGetSeconds(t)
@@ -612,12 +644,29 @@ final class PreviewProgramManager: ObservableObject {
                 print("Failed to load PROGRAM duration: \(error)")
             }
         }
+
+        let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
+        if file.fileType == .audio || !hasVideoTrack {
+            print("🎧 Program: Configuring audio-only playback for \(file.name) (hasVideoTrack=\(hasVideoTrack))")
+            let player = createAudioOnlyPlayer(for: asset) ?? AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            programAudioPlayer = player
+            programPlayer = player
+            programSource = .media(file, player: player)
+            
+            let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+            programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+                self?.programCurrentTime = CMTimeGetSeconds(t)
+            }
+            isProgramPlaying = false
+            print("✅ Program audio-only configured")
+            return
+        }
         
         if preferVTDecode && file.fileType == .video {
             // VT path currently disabled by default. Fallthrough to AVPlayer path.
         }
         
-        // AVPlayer path with AVPlayerItemVideoOutput + autoplay + GPU rendering
+        // AVPlayer + ItemOutput path
         let playerItem = AVPlayerItem(url: file.url)
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -635,6 +684,17 @@ final class PreviewProgramManager: ObservableObject {
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             programAVPlayback = playback
             playback.setEffectRunner(programEffectRunner)
+            playback.toneMapEnabled = hdrToneMapEnabled
+            playback.targetFPS = targetFPS
+            playback.onFPSUpdate = { [weak self] fps in
+                Task { @MainActor in
+                    self?.programFPS = fps
+                }
+            }
+            playback.onWatchdog = { [weak self] in
+                print("⚠️ Program watchdog: FPS below target, capturing next frame")
+                self?.captureNextProgramFrame()
+            }
             playback.start()
         }
 
@@ -649,8 +709,7 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
 
-        let newSource = ContentSource.media(file, player: player)
-        programSource = newSource
+        programSource = .media(file, player: player)
         programPlayer = player
 
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
@@ -945,7 +1004,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToProgram(_ effectType: String) {
         print("✨ PreviewProgramManager: Adding \(effectType) effect to Program output")
-        effectManager.addEffectToProgram(effectType)
+        effectManager.addEffectToProgram(effectType);
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -958,7 +1017,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToPreview(_ effect: any VideoEffect) {
         print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Preview output")
-        effectManager.addEffectToPreview(effect)
+        effectManager.addEffectToPreview(effect);
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -971,7 +1030,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToProgram(_ effect: any VideoEffect) {
         print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Program output")
-        effectManager.addEffectToProgram(effect)
+        effectManager.addEffectToProgram(effect);
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -1035,6 +1094,14 @@ final class PreviewProgramManager: ObservableObject {
 
     var programCurrentTexture: MTLTexture? {
         programAVPlayback?.latestTexture ?? programVideoTexture
+    }
+
+    func captureNextPreviewFrame() {
+        previewAVPlayback?.captureNextFrame()
+    }
+    
+    func captureNextProgramFrame() {
+        programAVPlayback?.captureNextFrame()
     }
 }
 
