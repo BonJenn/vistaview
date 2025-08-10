@@ -1,5 +1,6 @@
 import MetalKit
 import AVFoundation
+import VideoToolbox
 
 // PERFORMANCE: BlurParams struct for efficient parameter passing to Metal shaders
 struct BlurParams {
@@ -29,6 +30,17 @@ class BaseRenderer: NSObject, MTKViewDelegate {
     // PERFORMANCE: Add command buffer pooling
     private var commandBufferPool: [MTLCommandBuffer] = []
     private let maxPoolSize = 3
+
+    private let inFlightSemaphore = DispatchSemaphore(value: 3)
+
+    private var useVTDecode = false
+    private var vtDecoder: VideoDecoder?
+    private var lastDecodedPixelBuffer: CVPixelBuffer?
+    private let frameLock = NSLock()
+    
+    private var nv12Converter: NV12ToBGRAConverter?
+    private var intermediateBGRA: MTLTexture?
+    private var videoSize: (width: Int, height: Int) = (0, 0)
 
     init(mtkView: MTKView, blurEnabled: Bool = false, blurAmount: Float = 0.5) {
         self.device = mtkView.device ?? MTLCreateSystemDefaultDevice()!
@@ -88,6 +100,8 @@ class BaseRenderer: NSObject, MTKViewDelegate {
 
         super.init()
         CVMetalTextureCacheCreate(nil, nil, device, nil, &textureCache)
+        
+        self.nv12Converter = NV12ToBGRAConverter(device: device)
     }
 
     func loadVideo(url: URL) {
@@ -103,6 +117,33 @@ class BaseRenderer: NSObject, MTKViewDelegate {
 
         player = AVPlayer(playerItem: item)
         player?.play()
+    }
+    
+    func loadVideoUsingVT(url: URL) {
+        useVTDecode = true
+        vtDecoder?.stop()
+        let decoder = VideoDecoder(url: url)
+        decoder.onFrame = { [weak self] pixelBuffer, pts in
+            guard let self = self else { return }
+            self.frameLock.lock()
+            self.lastDecodedPixelBuffer = pixelBuffer
+            let w = CVPixelBufferGetWidth(pixelBuffer)
+            let h = CVPixelBufferGetHeight(pixelBuffer)
+            if self.videoSize.width != w || self.videoSize.height != h {
+                self.videoSize = (w, h)
+                self.intermediateBGRA = nil
+                self.cachedTexture = nil
+            }
+            self.frameLock.unlock()
+        }
+        decoder.onError = { error in
+            print("VT decode error: \(error)")
+        }
+        decoder.onFinished = {
+            print("VT decode finished")
+        }
+        vtDecoder = decoder
+        decoder.start()
     }
     
     // PERFORMANCE: Optimized command buffer creation with pooling
@@ -121,11 +162,70 @@ class BaseRenderer: NSObject, MTKViewDelegate {
 
     // PERFORMANCE: Optimized draw method with texture caching and pipeline selection
     func draw(in view: MTKView) {
+        guard let commandBuffer = getCommandBuffer() else {
+            return
+        }
+        
+        inFlightSemaphore.wait()
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            self?.inFlightSemaphore.signal()
+        }
+
+        var textureForRendering: MTLTexture?
+
+        if useVTDecode {
+            // NV12 -> BGRA conversion path
+            var pixelBuffer: CVPixelBuffer?
+            frameLock.lock()
+            pixelBuffer = lastDecodedPixelBuffer
+            frameLock.unlock()
+            
+            if let pb = pixelBuffer, let textureCache = textureCache {
+                let yTex = makeTexture(from: pb, plane: 0, pixelFormat: .r8Unorm, cache: textureCache)
+                let cbcrTex = makeTexture(from: pb, plane: 1, pixelFormat: .rg8Unorm, cache: textureCache)
+                
+                if let yTex, let cbcrTex, let converter = nv12Converter {
+                    if intermediateBGRA == nil {
+                        intermediateBGRA = converter.makeOutputTexture(width: videoSize.width, height: videoSize.height)
+                    }
+                    if let out = intermediateBGRA {
+                        converter.encode(commandBuffer: commandBuffer, luma: yTex, chroma: cbcrTex, output: out)
+                        textureForRendering = out
+                    }
+                }
+            } else if let cached = cachedTexture {
+                textureForRendering = cached
+            }
+        } else {
+            // Existing AVPlayerItemVideoOutput path
+            if let videoOutput = videoOutput,
+               let currentTime = player?.currentTime(),
+               videoOutput.hasNewPixelBuffer(forItemTime: currentTime) {
+                
+                if let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) {
+                    if let lastBuffer = lastPixelBuffer,
+                       CFEqual(pixelBuffer, lastBuffer),
+                       let texture = cachedTexture {
+                        textureForRendering = texture
+                    } else {
+                        if let textureCache = textureCache,
+                           let texture = createMetalTexture(from: pixelBuffer, textureCache: textureCache) {
+                            textureForRendering = texture
+                            cachedTexture = texture
+                            lastPixelBuffer = pixelBuffer
+                        }
+                    }
+                }
+            } else if let texture = cachedTexture {
+                textureForRendering = texture
+            }
+        }
+        
         guard let drawable = view.currentDrawable,
               let renderPassDescriptor = view.currentRenderPassDescriptor,
-              let commandBuffer = getCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { 
-            return 
+              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            commandBuffer.commit()
+            return
         }
 
         // PERFORMANCE: Select optimal pipeline based on current settings
@@ -133,63 +233,51 @@ class BaseRenderer: NSObject, MTKViewDelegate {
         if !blurEnabled || blurAmount < 0.01 {
             pipelineName = "passthrough"
         } else if blurAmount < 0.3 {
-            pipelineName = "boxblur"  // Use faster box blur for light blur
+            pipelineName = "boxblur"
         } else {
-            pipelineName = "blur"     // Use high-quality Gaussian blur for heavy blur
+            pipelineName = "blur"
         }
         
         let selectedPipeline = pipelineStates[pipelineName] ?? pipelineState
         encoder.setRenderPipelineState(selectedPipeline)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
-
-        // PERFORMANCE: Optimized texture handling with caching
-        if let videoOutput = videoOutput,
-           let currentTime = player?.currentTime(),
-           videoOutput.hasNewPixelBuffer(forItemTime: currentTime) {
-            
-            if let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) {
-                
-                // PERFORMANCE: Check if we can reuse cached texture
-                if let lastBuffer = lastPixelBuffer,
-                   CFEqual(pixelBuffer, lastBuffer),
-                   let texture = cachedTexture {
-                    // Reuse cached texture
-                    encoder.setFragmentTexture(texture, index: 0)
-                } else {
-                    // Create new texture and cache it
-                    if let textureCache = textureCache,
-                       let texture = createMetalTexture(from: pixelBuffer, textureCache: textureCache) {
-                        encoder.setFragmentTexture(texture, index: 0)
-                        cachedTexture = texture
-                        lastPixelBuffer = pixelBuffer
-                    }
-                }
-                
-                // PERFORMANCE: Only set blur parameters if using blur pipeline
-                if pipelineName != "passthrough" {
-                    var blurParams = BlurParams(values: SIMD2<Float>(blurEnabled ? 1.0 : 0.0, blurAmount))
-                    encoder.setFragmentBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 0)
-                }
-            }
-        } else if let texture = cachedTexture {
-            // PERFORMANCE: Reuse last cached texture if no new frame
-            encoder.setFragmentTexture(texture, index: 0)
-            
-            if pipelineName != "passthrough" {
-                var blurParams = BlurParams(values: SIMD2<Float>(blurEnabled ? 1.0 : 0.0, blurAmount))
-                encoder.setFragmentBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 0)
-            }
+        
+        if let tex = textureForRendering {
+            encoder.setFragmentTexture(tex, index: 0)
+        }
+        
+        if pipelineName != "passthrough" {
+            var blurParams = BlurParams(values: SIMD2<Float>(blurEnabled ? 1.0 : 0.0, blurAmount))
+            encoder.setFragmentBytes(&blurParams, length: MemoryLayout<BlurParams>.size, index: 0)
         }
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
-        
-        // PERFORMANCE: Return command buffer to pool for reuse
-        // Note: Can't actually reuse MTLCommandBuffer, but this pattern is ready for Metal objects that can be pooled
     }
     
+    private func makeTexture(from pixelBuffer: CVPixelBuffer, plane: Int, pixelFormat: MTLPixelFormat, cache: CVMetalTextureCache) -> MTLTexture? {
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, plane)
+        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, plane)
+        var cvTextureOut: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            cache,
+            pixelBuffer,
+            nil,
+            pixelFormat,
+            width,
+            height,
+            plane,
+            &cvTextureOut
+        )
+        guard status == kCVReturnSuccess, let cvTex = cvTextureOut, let tex = CVMetalTextureGetTexture(cvTex) else {
+            return nil
+        }
+        return tex
+    }
+
     // PERFORMANCE: Optimized Metal texture creation
     private func createMetalTexture(from pixelBuffer: CVPixelBuffer, textureCache: CVMetalTextureCache) -> MTLTexture? {
         let width = CVPixelBufferGetWidth(pixelBuffer)

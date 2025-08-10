@@ -259,11 +259,19 @@ class EffectManager: ObservableObject {
     }
     
     func applyPreviewEffects(to texture: MTLTexture) -> MTLTexture? {
-        return applyEffects(to: texture, for: Self.previewSourceID)
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return texture }
+        let out = encodeEffects(to: texture, for: Self.previewSourceID, using: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return out
     }
     
     func applyProgramEffects(to texture: MTLTexture) -> MTLTexture? {
-        return applyEffects(to: texture, for: Self.programSourceID)
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return texture }
+        let out = encodeEffects(to: texture, for: Self.programSourceID, using: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return out
     }
     
     func cloneChain(from fromID: String, to toID: String, overwrite: Bool = true) {
@@ -314,17 +322,17 @@ class EffectManager: ObservableObject {
     
     // MARK: - Effect Application
     
-    func applyEffects(to texture: MTLTexture, for sourceID: String) -> MTLTexture? {
-        guard let chain = effectChains[sourceID],
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
-            return texture
-        }
-        
-        let processedTexture = chain.apply(to: texture, using: commandBuffer, device: metalDevice)
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        
-        return processedTexture
+    func encodeEffects(to texture: MTLTexture, for sourceID: String, using commandBuffer: MTLCommandBuffer) -> MTLTexture? {
+        guard let chain = effectChains[sourceID] else { return texture }
+        return chain.apply(to: texture, using: commandBuffer, device: metalDevice) ?? texture
+    }
+    
+    func applyPreviewEffects(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer) -> MTLTexture? {
+        return encodeEffects(to: texture, for: Self.previewSourceID, using: commandBuffer)
+    }
+    
+    func applyProgramEffects(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer) -> MTLTexture? {
+        return encodeEffects(to: texture, for: Self.programSourceID, using: commandBuffer)
     }
     
     // MARK: - Drag & Drop Support

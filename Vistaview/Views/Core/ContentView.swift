@@ -76,7 +76,7 @@ struct ContentView: View {
         .task {
             await requestPermissions()
             await productionManager.initialize()
-            print("🔧 ContentView: Validating production manager initialization...")
+            print("ContentView: Validating production manager initialization...")
             validateProductionManagerInitialization()
         }
         .fileImporter(
@@ -95,24 +95,24 @@ struct ContentView: View {
     }
     
     private func validateProductionManagerInitialization() {
-        print("🔧 Validating production manager components...")
+        print("Validating production manager components...")
         
         // Re-set production manager to ensure proper initialization
-        print("🔧 Re-setting production manager to ensure proper initialization...")
+        print("Re-setting production manager to ensure proper initialization...")
         productionManager.externalDisplayManager.setProductionManager(productionManager)
         
         // Validate key components
-        print("✅ CameraFeedManager: \(productionManager.cameraFeedManager != nil ? "OK" : "MISSING")")
-        print("✅ EffectManager: \(productionManager.effectManager != nil ? "OK" : "MISSING")")
-        print("✅ OutputMappingManager: \(productionManager.outputMappingManager != nil ? "OK" : "MISSING")")
-        print("✅ ExternalDisplayManager: \(productionManager.externalDisplayManager != nil ? "OK" : "MISSING")")
-        print("✅ PreviewProgramManager: \(productionManager.previewProgramManager != nil ? "OK" : "MISSING")")
+        print("CameraFeedManager: \(productionManager.cameraFeedManager != nil ? "OK" : "MISSING")")
+        print("EffectManager: \(productionManager.effectManager != nil ? "OK" : "MISSING")")
+        print("OutputMappingManager: \(productionManager.outputMappingManager != nil ? "OK" : "MISSING")")
+        print("ExternalDisplayManager: \(productionManager.externalDisplayManager != nil ? "OK" : "MISSING")")
+        print("PreviewProgramManager: \(productionManager.previewProgramManager != nil ? "OK" : "MISSING")")
         
         // Validate Metal device - metalDevice is not optional, so we can access it directly
         let metalDevice = productionManager.effectManager.metalDevice
-        print("✅ Metal Device: \(metalDevice.name)")
+        print("Metal Device: \(metalDevice.name)")
         
-        print("🔧 Production manager validation complete")
+        print("Production manager validation complete")
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
@@ -337,13 +337,6 @@ struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Binding var mediaFiles: [MediaFile]
     
-    // PERFORMANCE: Add UI update throttling for high-frequency updates
-    @State private var lastUIUpdate = Date()
-    private let uiUpdateThreshold: TimeInterval = 1.0/15.0 // 15fps for monitor updates
-
-    @State private var lastUIUpdate2 = Date()
-    private let uiUpdateThreshold2: TimeInterval = 1.0/60.0 // 60fps for monitor updates
-    
     var body: some View {
         GeometryReader { geo in
             let shouldStackVertically = geo.size.width < 900
@@ -363,12 +356,11 @@ struct PreviewProgramCenterView: View {
                 }
                 .animation(.easeInOut(duration: 0.18), value: shouldStackVertically)
 
-                // TAKE and AUTO buttons as before
                 HStack(spacing: TahoeDesign.Spacing.xl) {
                     Spacer()
                     Button("TAKE") {
                         if productionManager.previewProgramManager.previewSource == .none {
-                            print("✂️ TAKE ERROR: No preview source to take!")
+                            print("TAKE ERROR: No preview source to take!")
                         } else {
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
@@ -439,7 +431,7 @@ struct PreviewProgramCenterView: View {
             }
             if isPreview {
                 SimplePreviewMonitorView(productionManager: productionManager)
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.preview,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -448,7 +440,7 @@ struct PreviewProgramCenterView: View {
                     )
             } else {
                 SimpleProgramMonitorView(productionManager: productionManager)
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.program,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -457,7 +449,7 @@ struct PreviewProgramCenterView: View {
                     )
             }
             if case .media(let mediaFile, _) = sourceCase {
-                if mediaFile.fileType == .video || mediaFile.fileType == .audio {
+                if mediaFile.fileType == .video {
                     ComprehensiveMediaControls(
                         previewProgramManager: productionManager.previewProgramManager,
                         isPreview: isPreview,
@@ -516,34 +508,13 @@ struct SimplePreviewMonitorView: View {
                     } else {
                         MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                     }
-                } else if let actualPlayer = productionManager.previewProgramManager.previewPlayer {
-                    ZStack {
-                        FrameBasedVideoPlayerView(
-                            player: actualPlayer,
-                            isPreview: true,
-                            frameProcessor: { cg in
-                                productionManager.previewProgramManager.processImageWithEffects(cg, for: .preview) ?? cg
-                            }
-                        )
-                        .id("preview-player-\(actualPlayer.description)-fx-\(effectCount)")
-                        
-                        if effectCount > 0 {
-                            VStack {
-                                HStack {
-                                    Spacer()
-                                    Text("Effects Processing...")
-                                        .font(.caption2)
-                                        .foregroundColor(.blue)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.2))
-                                        .cornerRadius(4)
-                                        .padding()
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.previewCurrentTexture
+                    })
+                    .aspectRatio(contentMode: .fit)
+                    .background(Color.black)
+                    .id("preview-avmetal-\(mediaFile.id)-fx-\(effectCount)")
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
@@ -573,7 +544,7 @@ struct SimplePreviewMonitorView: View {
                 }
             }
         }
-        .dropDestination(for: EffectDragItem.self) { items, location in
+        .dropDestination(for: EffectDragItem.self) { items, _ in
             guard let item = items.first else { return false }
             Task { @MainActor in
                 productionManager.previewProgramManager.addEffectToPreview(item.effectType)
@@ -581,9 +552,7 @@ struct SimplePreviewMonitorView: View {
                 productionManager.previewProgramManager.objectWillChange.send()
             }
             return true
-        } isTargeted: { targeted in
-            // Add visual feedback for drag targeting
-        }
+        } isTargeted: { _ in }
     }
 }
 
@@ -610,7 +579,7 @@ struct SimpleProgramMonitorView: View {
                 if mediaFile.fileType == .image {
                     if let programImageCG = productionManager.previewProgramManager.programImage {
                         let processedImage = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
-                        Image(decorative: processedImage, scale: 1.0)
+                        Image(decorative: programImageCG, scale: 1.0)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -619,34 +588,13 @@ struct SimpleProgramMonitorView: View {
                     } else {
                         MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                     }
-                } else if let actualPlayer = productionManager.previewProgramManager.programPlayer {
-                    ZStack {
-                        FrameBasedVideoPlayerView(
-                            player: actualPlayer,
-                            isPreview: false,
-                            frameProcessor: { cg in
-                                productionManager.previewProgramManager.processImageWithEffects(cg, for: .program) ?? cg
-                            }
-                        )
-                        .id("program-player-\(actualPlayer.description)-fx-\(effectCount)")
-                        
-                        if effectCount > 0 {
-                            VStack {
-                                HStack {
-                                    Spacer()
-                                    Text("Effects Processing...")
-                                        .font(.caption2)
-                                        .foregroundColor(.red)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.red.opacity(0.2))
-                                        .cornerRadius(4)
-                                        .padding()
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.programCurrentTexture
+                    })
+                    .aspectRatio(contentMode: .fit)
+                    .background(Color.black)
+                    .id("program-avmetal-\(mediaFile.id)-fx-\(effectCount)")
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                 }
@@ -676,7 +624,7 @@ struct SimpleProgramMonitorView: View {
                 }
             }
         }
-        .dropDestination(for: EffectDragItem.self) { items, location in
+        .dropDestination(for: EffectDragItem.self) { items, _ in
             guard let item = items.first else { return false }
             Task { @MainActor in
                 productionManager.previewProgramManager.addEffectToProgram(item.effectType)
@@ -684,9 +632,7 @@ struct SimpleProgramMonitorView: View {
                 productionManager.previewProgramManager.objectWillChange.send()
             }
             return true
-        } isTargeted: { targeted in
-            // Add visual feedback for drag targeting
-        }
+        } isTargeted: { _ in }
     }
 }
 
@@ -715,7 +661,7 @@ struct SourcesPanel: View {
                 ForEach(Array(["Cameras", "Media", "Virtual", "Effects"].enumerated()), id: \.offset) { index, tab in
                     Button(action: {
                         selectedTab = index
-                        print("📱 Selected tab: \(index) - \(tab)")
+                        print("Selected tab: \(index) - \(tab)")
                     }) {
                         Text(tab)
                             .font(.caption)
@@ -796,13 +742,13 @@ struct MediaSourceView: View {
                                 mediaFile: file,
                                 thumbnailManager: productionManager.mediaThumbnailManager,
                                 onMediaSelected: { selectedFile in
-                                    print("🎬 MediaSourceView: Media file selected: \(selectedFile.name)")
-                                    print("🎬 MediaSourceView: Loading to preview...")
+                                    print("Media file selected: \(selectedFile.name)")
+                                    print("Loading to preview...")
                                     
                                     let mediaSource = selectedFile.asContentSource()
                                     productionManager.previewProgramManager.loadToPreview(mediaSource)
                                     
-                                    print("✅ MediaSourceView: Media loaded to preview successfully")
+                                    print("Media loaded to preview successfully")
                                     
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         productionManager.previewProgramManager.objectWillChange.send()
@@ -991,7 +937,8 @@ struct LiveCameraFeedButton: View {
                                     lineWidth: (isInProgram || isInPreview) ? 2 : 1
                                 )
                         )
-                        .id("camera-preview-\(feed.id)-\(feed.frameCount)")
+                        .padding(4)
+                    Spacer()
                 } else {
                     Rectangle()
                         .fill(Color.black)
@@ -1022,6 +969,7 @@ struct LiveCameraFeedButton: View {
                                     lineWidth: (isInProgram || isInPreview) ? 2 : 1
                                 )
                         )
+                    Spacer()
                 }
                 
                 VStack(spacing: 1) {
@@ -1384,11 +1332,23 @@ struct ComprehensiveMediaControls: View {
     }
     
     private var isPlayerReady: Bool {
-        guard let currentPlayer = player,
-              let currentItem = currentPlayer.currentItem else { return false }
-        return currentItem.status == .readyToPlay && currentItem.duration.isValid
+        if isPreview {
+            if previewProgramManager.preferVTDecode && previewProgramManager.previewVTReady {
+                return true
+            }
+            guard let currentPlayer = player,
+                  let currentItem = currentPlayer.currentItem else { return false }
+            return currentItem.status == .readyToPlay && currentItem.duration.isValid
+        } else {
+            if previewProgramManager.preferVTDecode && previewProgramManager.programVTReady {
+                return true
+            }
+            guard let currentPlayer = player,
+                  let currentItem = currentPlayer.currentItem else { return false }
+            return currentItem.status == .readyToPlay && currentItem.duration.isValid
+        }
     }
-    
+
     var body: some View {
         VStack(spacing: 6) {
             VStack(spacing: 4) {
@@ -1507,7 +1467,7 @@ struct ComprehensiveMediaControls: View {
                 
                 Button(action: {
                     guard isPlayerReady else { 
-                        print("🚫 Play/Pause disabled - player not ready")
+                        print("Play/Pause disabled - player not ready")
                         return 
                     }
                     togglePlayPause()

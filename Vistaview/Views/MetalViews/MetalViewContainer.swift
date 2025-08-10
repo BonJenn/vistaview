@@ -1,5 +1,6 @@
 import SwiftUI
 import MetalKit
+import QuartzCore
 
 struct MetalViewContainer: NSViewRepresentable {
     var isPreview: Bool
@@ -10,10 +11,20 @@ struct MetalViewContainer: NSViewRepresentable {
         let mtkView = MTKView()
         mtkView.device = MTLCreateSystemDefaultDevice()
         mtkView.clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
-        mtkView.framebufferOnly = false
+        mtkView.framebufferOnly = true
         mtkView.colorPixelFormat = .bgra8Unorm
-        mtkView.isPaused = true
-        mtkView.enableSetNeedsDisplay = true
+        mtkView.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
+        mtkView.isPaused = false
+        mtkView.enableSetNeedsDisplay = false
+        mtkView.preferredFramesPerSecond = 60
+
+        if let layer = mtkView.layer as? CAMetalLayer {
+            layer.displaySyncEnabled = true
+            layer.presentsWithTransaction = false
+            if #available(macOS 13.0, *) {
+                layer.maximumDrawableCount = 3
+            }
+        }
 
         if isPreview {
             let previewRenderer = PreviewRenderer(mtkView: mtkView, blurEnabled: isBlurEnabled, blurAmount: blurAmount)

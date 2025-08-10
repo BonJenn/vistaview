@@ -81,6 +81,27 @@ final class PreviewProgramManager: ObservableObject {
     // Image processing
     private let ciContext = CIContext()
     
+    var preferVTDecode: Bool = true
+    private var previewVTPlayback: VideoPlaybackVT?
+    private var programVTPlayback: VideoPlaybackVT?
+    
+    private var previewAVPlayback: AVPlayerMetalPlayback?
+    private var programAVPlayback: AVPlayerMetalPlayback?
+    
+    @Published var previewVideoTexture: MTLTexture?
+    @Published var programVideoTexture: MTLTexture?
+    private var previewAudioPlayer: AVPlayer?
+    private var programAudioPlayer: AVPlayer?
+    private let gpuProcessQueue = DispatchQueue(label: "vistaview.vt.gpu.process", qos: .userInitiated)
+
+    @Published var previewVTReady: Bool = false
+    @Published var programVTReady: Bool = false
+    private var previewPrimedForPoster = false
+    private var programPrimedForPoster = false
+
+    @Published var previewVideoFrame: CGImage?
+    @Published var programVideoFrame: CGImage?
+    
     // MARK: - Computed Properties for UI
     
     /// Safe access to preview source display name
@@ -97,6 +118,9 @@ final class PreviewProgramManager: ObservableObject {
         self.cameraFeedManager = cameraFeedManager
         self.unifiedProductionManager = unifiedProductionManager
         self.effectManager = effectManager
+
+        self.previewEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getPreviewEffectChain())
+        self.programEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getProgramEffectChain())
     }
     
     deinit {
@@ -221,26 +245,18 @@ final class PreviewProgramManager: ObservableObject {
         print("✂️ TAKE DEBUG: Current preview source: \(previewSource)")
         print("✂️ TAKE DEBUG: Current program source: \(programSource)")
         
-        // Stop current program
         stopProgram()
-        
-        // Move preview content to program
         let previewContent = previewSource
         print("✂️ TAKE DEBUG: Moving \(previewContent) to program")
-        
         loadToProgram(previewContent)
-        
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
         print("✨ TAKE: Copied Preview effects to Program")
-        
-        // Reset crossfader to full program
         crossfaderValue = 0.0
-        
-        // Force UI updates
         objectWillChange.send()
-        
         print("✅ Take complete: Program now showing \(programSourceDisplayName)")
         print("✅ TAKE DEBUG: Final program source: \(programSource)")
+        
+        playProgram()
     }
     
     /// Smooth transition from program to preview over time
@@ -278,6 +294,14 @@ final class PreviewProgramManager: ObservableObject {
     // MARK: - Media Playback Controls
     
     func playPreview() {
+        if preferVTDecode, let vt = previewVTPlayback {
+            print("▶️ playPreview (VT)")
+            previewPrimedForPoster = false
+            previewAudioPlayer?.play()
+            vt.start()
+            isPreviewPlaying = true
+            return
+        }
         guard case .media(let file, let player) = previewSource else { 
             print("❌ playPreview: No media source in preview")
             return 
@@ -308,6 +332,13 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func pausePreview() {
+        if preferVTDecode, previewVTPlayback != nil {
+            print("⏸️ pausePreview (VT)")
+            previewAudioPlayer?.pause()
+            previewVTPlayback?.stop()
+            isPreviewPlaying = false
+            return
+        }
         guard case .media(let file, let player) = previewSource else { 
             print("❌ pausePreview: No media source in preview")
             return 
@@ -323,6 +354,15 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func stopPreview() {
+        if preferVTDecode, previewVTPlayback != nil {
+            previewAudioPlayer?.pause()
+            previewAudioPlayer?.seek(to: .zero)
+            previewVTPlayback?.stop()
+            isPreviewPlaying = false
+            previewCurrentTime = 0.0
+            previewVideoTexture = nil
+            return
+        }
         if case .media(let file, let player) = previewSource, let actualPlayer = previewPlayer {
             actualPlayer.pause()
             actualPlayer.seek(to: CMTime.zero)
@@ -333,6 +373,14 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func playProgram() {
+        if preferVTDecode, let vt = programVTPlayback {
+            print("▶️ playProgram (VT)")
+            programPrimedForPoster = false
+            programAudioPlayer?.play()
+            vt.start()
+            isProgramPlaying = true
+            return
+        }
         guard case .media(let file, let player) = programSource else { return }
         guard let actualPlayer = programPlayer else { return }
         actualPlayer.play()
@@ -341,6 +389,13 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func pauseProgram() {
+        if preferVTDecode, programVTPlayback != nil {
+            print("⏸️ pauseProgram (VT)")
+            programAudioPlayer?.pause()
+            programVTPlayback?.stop()
+            isProgramPlaying = false
+            return
+        }
         guard case .media(let file, let player) = programSource else { return }
         guard let actualPlayer = programPlayer else { return }
         actualPlayer.pause()
@@ -349,6 +404,15 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func stopProgram() {
+        if preferVTDecode, programVTPlayback != nil {
+            programAudioPlayer?.pause()
+            programAudioPlayer?.seek(to: .zero)
+            programVTPlayback?.stop()
+            isProgramPlaying = false
+            programCurrentTime = 0.0
+            programVideoTexture = nil
+            return
+        }
         if case .media(let file, let player) = programSource, let actualPlayer = programPlayer {
             actualPlayer.pause()
             actualPlayer.seek(to: CMTime.zero)
@@ -359,6 +423,13 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func seekPreview(to time: TimeInterval) {
+        if preferVTDecode, let vt = previewVTPlayback {
+            print("⏭️ seekPreview (VT): \(time)")
+            let cm = CMTime(seconds: time, preferredTimescale: 600)
+            previewAudioPlayer?.seek(to: cm)
+            vt.seek(to: time)
+            return
+        }
         guard case .media(let file, let player) = previewSource else { 
             print("❌ seekPreview: No media source in preview")
             return 
@@ -382,6 +453,13 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func seekProgram(to time: TimeInterval) {
+        if preferVTDecode, let vt = programVTPlayback {
+            print("⏭️ seekProgram (VT): \(time)")
+            let cm = CMTime(seconds: time, preferredTimescale: 600)
+            programAudioPlayer?.seek(to: cm)
+            vt.seek(to: time)
+            return
+        }
         guard case .media(let file, let player) = programSource else { return }
         guard let actualPlayer = programPlayer else { return }
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
@@ -398,6 +476,13 @@ final class PreviewProgramManager: ObservableObject {
     // MARK: - Private Implementation
     
     private func loadMediaToPreview(_ file: MediaFile) {
+        // Stop previous preview pipeline
+        previewVTPlayback?.stop()
+        previewVTPlayback = nil
+        previewAVPlayback?.stop()
+        previewAVPlayback = nil
+        previewVideoTexture = nil
+        
         print("🎬 PreviewProgramManager: Starting loadMediaToPreview for: \(file.name)")
         
         // Remove existing observer if any
@@ -411,78 +496,21 @@ final class PreviewProgramManager: ObservableObject {
             previousFile.url.stopAccessingSecurityScopedResource()
         }
         
-        // Clear previous player
-        previewPlayer = nil
-        
-        // Start accessing the security-scoped resource
+        // Start accessing security-scoped resource
         guard file.url.startAccessingSecurityScopedResource() else {
             print("❌ Failed to start accessing security-scoped resource for: \(file.name)")
             return
         }
         
-        print("✅ Security-scoped resource access granted for: \(file.name)")
-        
-        // FIXED: Use EXACTLY the same method as program (create from URL, not asset)
-        let playerItem = AVPlayerItem(url: file.url)
-        
-        // Create a new AVPlayer instance specifically for preview
-        let player = AVPlayer(playerItem: playerItem)
-        
-        // Important: Configure player for optimal performance
-        player.automaticallyWaitsToMinimizeStalling = false
-        player.allowsExternalPlayback = false
-        
-        // Set up status observer BEFORE setting the source (exactly like program)
-        var statusObserver: NSKeyValueObservation?
-        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, change in
-            Task { @MainActor in
-                print("🎬 PREVIEW Player item status changed to: \(item.status.rawValue) (\(item.status.description))")
-                
-                switch item.status {
-                case .readyToPlay:
-                    print("✅ PREVIEW Player item is ready to play")
-                    
-                case .failed:
-                    print("❌ PREVIEW Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
-                    
-                case .unknown:
-                    print("🤔 PREVIEW Player item status is still unknown")
-                    
-                @unknown default:
-                    print("🆕 PREVIEW Player item has unknown status: \(item.status.rawValue)")
-                }
-                
-                // Clean up observer when done
-                if item.status != .unknown {
-                    statusObserver?.invalidate()
-                    statusObserver = nil
-                }
-            }
-        }
-        
-        // Set source and player BEFORE setting up observer
-        let newSource = ContentSource.media(file, player: player)
-        previewSource = newSource
-        previewPlayer = player
-        
-        print("🎬 PreviewProgramManager: AVPlayer created for PREVIEW and source updated")
-        print("🔍 PREVIEW DEBUG: Player stored in previewPlayer: \(player)")
-        print("🔍 PREVIEW DEBUG: Player in ContentSource: \(String(describing: (previewSource as? ContentSource)))")
-        
-        // CRITICAL: Verify the player is actually stored correctly
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            print("🔍 PREVIEW VERIFICATION: previewPlayer after delay: \(String(describing: self.previewPlayer))")
-            print("🔍 PREVIEW VERIFICATION: Are they the same object? \(self.previewPlayer === player)")
-        }
-        
-        // Get duration using modern API (exactly like program)  
+        // Duration via AVAsset (async load)
+        let asset = AVURLAsset(url: file.url)
         Task {
             do {
-                let duration = try await playerItem.asset.load(.duration)
+                let duration = try await asset.load(.duration)
                 if duration.isValid {
                     await MainActor.run {
                         self.previewDuration = CMTimeGetSeconds(duration)
-                        print("📼 PREVIEW Media duration loaded: \(self.previewDuration) seconds")
+                        print("📼 PREVIEW duration loaded (asset): \(self.previewDuration) s")
                     }
                 }
             } catch {
@@ -490,21 +518,66 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        // Set up time observer for new player
-        let previewInterval = CMTime(seconds: 0.1, preferredTimescale: 600)
-        previewTimeObserver = player.addPeriodicTimeObserver(forInterval: previewInterval, queue: DispatchQueue.main) { [weak self] time in
+        if preferVTDecode && file.fileType == .video {
+            // VT path currently disabled by default. Fallthrough to AVPlayer path.
+        }
+
+        // AVPlayer path with AVPlayerItemVideoOutput + autoplay + GPU rendering
+        let playerItem = AVPlayerItem(url: file.url)
+
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+        output.suppressesPlayerRendering = true
+        playerItem.add(output)
+
+        let player = AVPlayer(playerItem: playerItem)
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.allowsExternalPlayback = false
+
+        if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
+            previewAVPlayback = playback
+            playback.setEffectRunner(previewEffectRunner)
+            playback.start()
+        }
+
+        // Autoplay when ready
+        var statusObserver: NSKeyValueObservation?
+        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
-                self?.previewCurrentTime = CMTimeGetSeconds(time)
+                if item.status != .unknown { statusObserver?.invalidate() }
+                if item.status == .readyToPlay {
+                    self?.isPreviewPlaying = true
+                    self?.previewPlayer?.play()
+                }
             }
         }
-        
-        print("📼 PREVIEW Media setup complete: \(file.name)")
-        
-        // Force UI update
+
+        let newSource = ContentSource.media(file, player: player)
+        previewSource = newSource
+        previewPlayer = player
+
+        // Keep time observer for UI labels
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+            self?.previewCurrentTime = CMTimeGetSeconds(t)
+        }
+
         objectWillChange.send()
+        print("📼 PREVIEW AVPlayer + ItemOutput + Metal playback configured")
     }
-    
+
     private func loadMediaToProgram(_ file: MediaFile) {
+        // Stop previous program pipeline
+        programVTPlayback?.stop()
+        programVTPlayback = nil
+        programAVPlayback?.stop()
+        programAVPlayback = nil
+        programVideoTexture = nil
+        
         print("🎬 PreviewProgramManager: Starting loadMediaToProgram for: \(file.name)")
         
         // Remove existing observer if any
@@ -518,67 +591,21 @@ final class PreviewProgramManager: ObservableObject {
             previousFile.url.stopAccessingSecurityScopedResource()
         }
         
-        // Clear previous player
-        programPlayer = nil
-        
-        // Start accessing the security-scoped resource
+        // Start accessing security-scoped resource
         guard file.url.startAccessingSecurityScopedResource() else {
             print("❌ Failed to start accessing security-scoped resource for PROGRAM: \(file.name)")
             return
         }
         
-        // Create AVPlayerItem first to monitor its status
-        let playerItem = AVPlayerItem(url: file.url)
-        
-        // Create a new AVPlayer instance specifically for program
-        let player = AVPlayer(playerItem: playerItem)
-        
-        // Important: Configure player for optimal performance  
-        player.automaticallyWaitsToMinimizeStalling = false
-        player.allowsExternalPlayback = false
-        
-        // Set up status observer BEFORE setting the source
-        var statusObserver: NSKeyValueObservation?
-        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, change in
-            Task { @MainActor in
-                print("🎬 PROGRAM Player item status changed to: \(item.status.rawValue) (\(item.status.description))")
-                
-                switch item.status {
-                case .readyToPlay:
-                    print("✅ PROGRAM Player item is ready to play")
-                    
-                case .failed:
-                    print("❌ PROGRAM Player item failed: \(item.error?.localizedDescription ?? "Unknown error")")
-                    
-                case .unknown:
-                    print("🤔 PROGRAM Player item status is still unknown")
-                    
-                @unknown default:
-                    print("🆕 PROGRAM Player item has unknown status: \(item.status.rawValue)")
-                }
-                
-                // Clean up observer when done
-                if item.status != .unknown {
-                    statusObserver?.invalidate()
-                    statusObserver = nil
-                }
-            }
-        }
-        
-        let newSource = ContentSource.media(file, player: player)
-        programSource = newSource
-        programPlayer = player
-        
-        print("🎬 PreviewProgramManager: AVPlayer created for PROGRAM and source updated")
-        
-        // Get duration using modern API
+        // Duration via AVAsset
+        let asset = AVURLAsset(url: file.url)
         Task {
             do {
-                let duration = try await playerItem.asset.load(.duration)
+                let duration = try await asset.load(.duration)
                 if duration.isValid {
                     await MainActor.run {
                         self.programDuration = CMTimeGetSeconds(duration)
-                        print("📼 PROGRAM Media duration loaded: \(self.programDuration) seconds")
+                        print("📼 PROGRAM duration loaded (asset): \(self.programDuration) s")
                     }
                 }
             } catch {
@@ -586,15 +613,52 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        // Set up time observer for new player
-        let programInterval = CMTime(seconds: 0.1, preferredTimescale: 600)
-        programTimeObserver = player.addPeriodicTimeObserver(forInterval: programInterval, queue: DispatchQueue.main) { [weak self] time in
-            Task { @MainActor in
-                self?.programCurrentTime = CMTimeGetSeconds(time)
-            }
+        if preferVTDecode && file.fileType == .video {
+            // VT path currently disabled by default. Fallthrough to AVPlayer path.
         }
         
-        print("📼 PROGRAM Media setup complete: \(file.name)")
+        // AVPlayer path with AVPlayerItemVideoOutput + autoplay + GPU rendering
+        let playerItem = AVPlayerItem(url: file.url)
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+        output.suppressesPlayerRendering = true
+        playerItem.add(output)
+
+        let player = AVPlayer(playerItem: playerItem)
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.allowsExternalPlayback = false
+
+        if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
+            programAVPlayback = playback
+            playback.setEffectRunner(programEffectRunner)
+            playback.start()
+        }
+
+        var statusObserver: NSKeyValueObservation?
+        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            Task { @MainActor in
+                if item.status != .unknown { statusObserver?.invalidate() }
+                if item.status == .readyToPlay {
+                    self?.isProgramPlaying = true
+                    self?.programPlayer?.play()
+                }
+            }
+        }
+
+        let newSource = ContentSource.media(file, player: player)
+        programSource = newSource
+        programPlayer = player
+
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+            self?.programCurrentTime = CMTimeGetSeconds(t)
+        }
+
+        print("📼 PROGRAM AVPlayer + ItemOutput + Metal playback configured")
     }
     
     private func loadImageToPreview(_ file: MediaFile) {
@@ -750,6 +814,10 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func clearPreview() {
+        previewVTPlayback?.stop()
+        previewVTPlayback = nil
+        previewVideoTexture = nil
+        previewAudioPlayer = nil
         // Stop accessing security-scoped resource if needed
         if case .media(let file, _) = previewSource {
             file.url.stopAccessingSecurityScopedResource()
@@ -761,15 +829,23 @@ final class PreviewProgramManager: ObservableObject {
         isPreviewPlaying = false
         previewCurrentTime = 0
         previewDuration = 0
+        previewVTReady = false
+        previewPrimedForPoster = false
     }
     
     private func clearProgram() {
+        programVTPlayback?.stop()
+        programVTPlayback = nil
+        programVideoTexture = nil
+        programAudioPlayer = nil
         programSource = .none
         programPlayer = nil
         programImage = nil
         isProgramPlaying = false
         programCurrentTime = 0
         programDuration = 0
+        programVTReady = false
+        programPrimedForPoster = false
     }
     
     private func removeTimeObservers() {
@@ -851,6 +927,9 @@ final class PreviewProgramManager: ObservableObject {
     
     // MARK: - Effect Integration
     
+    private var previewEffectRunner: EffectRunner?
+    private var programEffectRunner: EffectRunner?
+
     func addEffectToPreview(_ effectType: String) {
         print("✨ PreviewProgramManager: Adding \(effectType) effect to Preview output")
         effectManager.addEffectToPreview(effectType)
@@ -860,7 +939,7 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
-        
+        self.previewEffectRunner?.setChain(self.getPreviewEffectChain())
         print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
     }
     
@@ -873,7 +952,7 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
-        
+        self.programEffectRunner?.setChain(self.getProgramEffectChain())
         print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
     }
     
@@ -886,7 +965,7 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
-        
+        self.previewEffectRunner?.setChain(self.getPreviewEffectChain())
         print("✨ PreviewProgramManager: Preview now has \(getPreviewEffectChain()?.effects.count ?? 0) effects")
     }
     
@@ -899,7 +978,7 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
-        
+        self.programEffectRunner?.setChain(self.getProgramEffectChain())
         print("✨ PreviewProgramManager: Program now has \(getProgramEffectChain()?.effects.count ?? 0) effects")
     }
     
@@ -917,6 +996,7 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
+        self.previewEffectRunner?.setChain(self.getPreviewEffectChain())
     }
     
     func clearProgramEffects() {
@@ -925,6 +1005,36 @@ final class PreviewProgramManager: ObservableObject {
             self.objectWillChange.send()
             self.unifiedProductionManager.objectWillChange.send()
         }
+        self.programEffectRunner?.setChain(self.getProgramEffectChain())
+    }
+
+    private func createAudioOnlyPlayer(for asset: AVAsset) -> AVPlayer? {
+        let composition = AVMutableComposition()
+        let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+        do {
+            let audioTracks = asset.tracks(withMediaType: .audio)
+            guard !audioTracks.isEmpty else { return nil }
+            for track in audioTracks {
+                let compTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+                try compTrack?.insertTimeRange(timeRange, of: track, at: .zero)
+            }
+            let item = AVPlayerItem(asset: composition)
+            let player = AVPlayer(playerItem: item)
+            player.automaticallyWaitsToMinimizeStalling = false
+            player.allowsExternalPlayback = false
+            return player
+        } catch {
+            print("Audio-only composition error:", error)
+            return nil
+        }
+    }
+
+    var previewCurrentTexture: MTLTexture? {
+        previewAVPlayback?.latestTexture ?? previewVideoTexture
+    }
+
+    var programCurrentTexture: MTLTexture? {
+        programAVPlayback?.latestTexture ?? programVideoTexture
     }
 }
 
