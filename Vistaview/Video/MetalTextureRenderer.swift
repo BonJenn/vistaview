@@ -9,14 +9,14 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
     private let pipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
     private let inFlight = DispatchSemaphore(value: 3)
-    
+
     private struct ScaleUniforms {
         var scale: SIMD2<Float>
     }
-    
+
     // Supplier returns the current texture to display
     private let textureSupplier: () -> MTLTexture?
-    
+
     init?(mtkView: MTKView, textureSupplier: @escaping () -> MTLTexture?) {
         guard let device = mtkView.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
@@ -28,7 +28,7 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
         self.device = device
         self.commandQueue = queue
         self.textureSupplier = textureSupplier
-        
+
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = v
         desc.fragmentFunction = f
@@ -38,33 +38,33 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
         } catch {
             return nil
         }
-        
+
         let sampDesc = MTLSamplerDescriptor()
         sampDesc.minFilter = .linear
         sampDesc.magFilter = .linear
         sampDesc.sAddressMode = .clampToEdge
         sampDesc.tAddressMode = .clampToEdge
         self.sampler = device.makeSamplerState(descriptor: sampDesc)!
-        
+
         super.init()
     }
-    
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { }
-    
+
     func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let rpd = view.currentRenderPassDescriptor,
               let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
-        
+
         inFlight.wait()
         cb.addCompletedHandler { [weak self] _ in self?.inFlight.signal() }
-        
+
         enc.setRenderPipelineState(pipeline)
+
         if let tex = textureSupplier() {
             enc.setFragmentTexture(tex, index: 0)
-            
-            // Compute aspect-correct scale for "fit"
+
             let vw = max(1.0, view.drawableSize.width)
             let vh = max(1.0, view.drawableSize.height)
             let tw = max(1, tex.width)
@@ -88,7 +88,7 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
             var uniforms = ScaleUniforms(scale: SIMD2<Float>(1, 1))
             enc.setVertexBytes(&uniforms, length: MemoryLayout<ScaleUniforms>.size, index: 0)
         }
-        
+
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()

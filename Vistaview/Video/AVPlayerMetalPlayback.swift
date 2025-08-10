@@ -47,6 +47,8 @@ final class AVPlayerMetalPlayback {
     var toneMapEnabled: Bool = false
     var swapUV: Bool = false
 
+    var onSizeChange: ((Int, Int) -> Void)?
+
     init?(player: AVPlayer, itemOutput: AVPlayerItemVideoOutput, device: MTLDevice) {
         self.player = player
         self.itemOutput = itemOutput
@@ -185,6 +187,7 @@ final class AVPlayerMetalPlayback {
             heapPool.ensureHeap(width: w, height: h, pixelFormat: .bgra8Unorm, usage: [.shaderRead, .shaderWrite])
             outputTexture = converter.makeOutputTexture(width: w, height: h, heap: heapPool.heap)
             outputTexture?.label = "Playback BGRA Output \(w)x\(h)"
+            onSizeChange?(w, h)
         }
         guard let outBGRA = outputTexture else { return }
         

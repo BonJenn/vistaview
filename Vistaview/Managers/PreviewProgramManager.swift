@@ -108,6 +108,9 @@ final class PreviewProgramManager: ObservableObject {
     @Published var previewFPS: Double = 0
     @Published var programFPS: Double = 0
 
+    @Published var previewAspect: CGFloat = 16.0/9.0
+    @Published var programAspect: CGFloat = 16.0/9.0
+
     // MARK: - Computed Properties for UI
     
     /// Safe access to preview source display name
@@ -566,6 +569,11 @@ final class PreviewProgramManager: ObservableObject {
             playback.setEffectRunner(previewEffectRunner)
             playback.toneMapEnabled = hdrToneMapEnabled
             playback.targetFPS = targetFPS
+            playback.onSizeChange = { [weak self] w, h in
+                Task { @MainActor in
+                    if h > 0 { self?.previewAspect = CGFloat(w) / CGFloat(h) }
+                }
+            }
             playback.onFPSUpdate = { [weak self] fps in
                 Task { @MainActor in
                     self?.previewFPS = fps
@@ -686,6 +694,11 @@ final class PreviewProgramManager: ObservableObject {
             playback.setEffectRunner(programEffectRunner)
             playback.toneMapEnabled = hdrToneMapEnabled
             playback.targetFPS = targetFPS
+            playback.onSizeChange = { [weak self] w, h in
+                Task { @MainActor in
+                    if h > 0 { self?.programAspect = CGFloat(w) / CGFloat(h) }
+                }
+            }
             playback.onFPSUpdate = { [weak self] fps in
                 Task { @MainActor in
                     self?.programFPS = fps
@@ -749,9 +762,8 @@ final class PreviewProgramManager: ObservableObject {
                 let imageData = try Data(contentsOf: file.url)
                 if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     await MainActor.run {
-                        // Store the image directly in previewImage
                         self.previewImage = cgImage
-                        
+                        if cgImage.height > 0 { self.previewAspect = CGFloat(cgImage.width) / CGFloat(cgImage.height) }
                         // Set up the source without a player
                         let newSource = ContentSource.media(file, player: nil)
                         self.previewSource = newSource
@@ -804,9 +816,8 @@ final class PreviewProgramManager: ObservableObject {
                 let imageData = try Data(contentsOf: file.url)
                 if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     await MainActor.run {
-                        // Store the image directly in programImage
                         self.programImage = cgImage
-                        
+                        if cgImage.height > 0 { self.programAspect = CGFloat(cgImage.width) / CGFloat(cgImage.height) }
                         // Set up the source without a player
                         let newSource = ContentSource.media(file, player: nil)
                         self.programSource = newSource

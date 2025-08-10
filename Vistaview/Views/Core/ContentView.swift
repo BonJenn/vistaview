@@ -468,7 +468,7 @@ struct PreviewProgramCenterView: View {
             }
             if isPreview {
                 SimplePreviewMonitorView(productionManager: productionManager)
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.preview,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -477,7 +477,7 @@ struct PreviewProgramCenterView: View {
                     )
             } else {
                 SimpleProgramMonitorView(productionManager: productionManager)
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.program,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -531,6 +531,7 @@ struct SimplePreviewMonitorView: View {
                     productionManager: productionManager,
                     effectCount: effectCount
                 )
+                .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
                 
             case .media(let mediaFile, _):
                 if mediaFile.fileType == .image {
@@ -538,7 +539,7 @@ struct SimplePreviewMonitorView: View {
                         let processedImage = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
                         Image(decorative: processedImage, scale: 1.0)
                             .resizable()
-                            .aspectRatio(contentMode: .fit)
+                            .aspectRatio(contentMode: .fill)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
                             .id("preview-image-processed-\(mediaFile.id)-fx-\(effectCount)")
@@ -549,7 +550,7 @@ struct SimplePreviewMonitorView: View {
                     MetalVideoView(textureSupplier: {
                         productionManager.previewProgramManager.previewCurrentTexture
                     })
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
                     .background(Color.black)
                     .id("preview-avmetal-\(mediaFile.id)-fx-\(effectCount)")
                 } else {
@@ -627,6 +628,7 @@ struct SimpleProgramMonitorView: View {
                     productionManager: productionManager,
                     effectCount: effectCount
                 )
+                .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
                 
             case .media(let mediaFile, _):
                 if mediaFile.fileType == .image {
@@ -634,7 +636,7 @@ struct SimpleProgramMonitorView: View {
                         let processedImage = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
                         Image(decorative: programImageCG, scale: 1.0)
                             .resizable()
-                            .aspectRatio(contentMode: .fit)
+                            .aspectRatio(contentMode: .fill)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
                             .id("program-image-processed-\(mediaFile.id)-fx-\(effectCount)")
@@ -645,7 +647,7 @@ struct SimpleProgramMonitorView: View {
                     MetalVideoView(textureSupplier: {
                         productionManager.previewProgramManager.programCurrentTexture
                     })
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
                     .background(Color.black)
                     .id("program-avmetal-\(mediaFile.id)-fx-\(effectCount)")
                 } else {
@@ -1782,7 +1784,7 @@ struct OptimizedPreviewCameraView: View {
             if let processedImage = getCachedOrProcessedImage() {
                 Image(nsImage: processedImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
                     .id("preview-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
@@ -1845,7 +1847,7 @@ struct OptimizedProgramCameraView: View {
             if let processedImage = getCachedOrProcessedImage() {
                 Image(nsImage: processedImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
                     .id("program-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
