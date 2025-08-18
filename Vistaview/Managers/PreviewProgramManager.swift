@@ -58,6 +58,16 @@ final class PreviewProgramManager: ObservableObject {
     @Published var previewDuration: TimeInterval = 0
     @Published var programDuration: TimeInterval = 0
     
+    // Media control properties
+    @Published var previewLoopEnabled = false
+    @Published var programLoopEnabled = false
+    @Published var previewMuted = false
+    @Published var programMuted = false
+    @Published var previewRate: Float = 1.0
+    @Published var programRate: Float = 1.0
+    @Published var previewVolume: Float = 1.0
+    @Published var programVolume: Float = 1.0
+    
     // Preview images for UI display
     @Published var previewImage: CGImage?
     @Published var programImage: CGImage?
@@ -306,6 +316,8 @@ final class PreviewProgramManager: ObservableObject {
         if preferVTDecode, let vt = previewVTPlayback {
             print("▶️ playPreview (VT)")
             previewPrimedForPoster = false
+            previewAudioPlayer?.rate = previewRate
+            previewAudioPlayer?.volume = previewMuted ? 0.0 : previewVolume
             previewAudioPlayer?.play()
             vt.start()
             isPreviewPlaying = true
@@ -328,6 +340,8 @@ final class PreviewProgramManager: ObservableObject {
         }
         
         print("🎬 About to play preview player: \(actualPlayer)")
+        actualPlayer.rate = previewRate
+        actualPlayer.volume = previewMuted ? 0.0 : previewVolume
         actualPlayer.play()
         isPreviewPlaying = true
         print("▶️ Preview playing: \(file.name)")
@@ -385,6 +399,8 @@ final class PreviewProgramManager: ObservableObject {
         if preferVTDecode, let vt = programVTPlayback {
             print("▶️ playProgram (VT)")
             programPrimedForPoster = false
+            programAudioPlayer?.rate = programRate
+            programAudioPlayer?.volume = programMuted ? 0.0 : programVolume
             programAudioPlayer?.play()
             vt.start()
             isProgramPlaying = true
@@ -392,6 +408,8 @@ final class PreviewProgramManager: ObservableObject {
         }
         guard case .media(let file, let player) = programSource else { return }
         guard let actualPlayer = programPlayer else { return }
+        actualPlayer.rate = programRate
+        actualPlayer.volume = programMuted ? 0.0 : programVolume
         actualPlayer.play()
         isProgramPlaying = true
         print("▶️ Program playing: \(file.name)")
@@ -535,6 +553,9 @@ final class PreviewProgramManager: ObservableObject {
             previewPlayer = player
             previewSource = .media(file, player: player)
             
+            // Add playback end notification for looping
+            setupPlayerNotifications(for: player, isPreview: true)
+            
             let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
             previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
                 self?.previewCurrentTime = CMTimeGetSeconds(t)
@@ -563,6 +584,9 @@ final class PreviewProgramManager: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
+
+        // Add playback end notification for looping
+        setupPlayerNotifications(for: player, isPreview: true)
 
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             previewAVPlayback = playback
@@ -593,6 +617,8 @@ final class PreviewProgramManager: ObservableObject {
                 if item.status != .unknown { statusObserver?.invalidate() }
                 if item.status == .readyToPlay {
                     self?.isPreviewPlaying = true
+                    self?.previewPlayer?.rate = self?.previewRate ?? 1.0
+                    self?.previewPlayer?.volume = (self?.previewMuted ?? false) ? 0.0 : (self?.previewVolume ?? 1.0)
                     self?.previewPlayer?.play()
                 }
             }
@@ -661,6 +687,9 @@ final class PreviewProgramManager: ObservableObject {
             programPlayer = player
             programSource = .media(file, player: player)
             
+            // Add playback end notification for looping
+            setupPlayerNotifications(for: player, isPreview: false)
+            
             let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
             programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
                 self?.programCurrentTime = CMTimeGetSeconds(t)
@@ -688,6 +717,9 @@ final class PreviewProgramManager: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
+
+        // Add playback end notification for looping
+        setupPlayerNotifications(for: player, isPreview: false)
 
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             programAVPlayback = playback
@@ -717,6 +749,8 @@ final class PreviewProgramManager: ObservableObject {
                 if item.status != .unknown { statusObserver?.invalidate() }
                 if item.status == .readyToPlay {
                     self?.isProgramPlaying = true
+                    self?.programPlayer?.rate = self?.programRate ?? 1.0
+                    self?.programPlayer?.volume = (self?.programMuted ?? false) ? 0.0 : (self?.programVolume ?? 1.0)
                     self?.programPlayer?.play()
                 }
             }
@@ -1113,6 +1147,35 @@ final class PreviewProgramManager: ObservableObject {
     
     func captureNextProgramFrame() {
         programAVPlayback?.captureNextFrame()
+    }
+    
+    // MARK: - Private Helper Methods
+    
+    private func setupPlayerNotifications(for player: AVPlayer, isPreview: Bool) {
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
+            if isPreview && self.previewLoopEnabled {
+                print("🔁 Preview loop: Restarting playback")
+                player.seek(to: CMTime.zero)
+                player.play()
+            } else if !isPreview && self.programLoopEnabled {
+                print("🔁 Program loop: Restarting playback")
+                player.seek(to: CMTime.zero)
+                player.play()
+            } else {
+                // Normal end of playback
+                if isPreview {
+                    self.isPreviewPlaying = false
+                } else {
+                    self.isProgramPlaying = false
+                }
+            }
+        }
     }
 }
 

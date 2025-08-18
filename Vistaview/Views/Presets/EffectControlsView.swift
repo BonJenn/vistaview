@@ -13,7 +13,9 @@ struct EffectControlsView: View {
                             set: { newVal in
                                 var p = preset
                                 p.isBlurEnabled = newVal
-                                presetManager.updatePreset(p)
+                                Task {
+                                    _ = await presetManager.updatePreset(p)
+                                }
                             }
                         ))
                         HStack {
@@ -24,7 +26,9 @@ struct EffectControlsView: View {
                                     set: { newVal in
                                         var p = preset
                                         p.blurAmount = newVal
-                                        presetManager.updatePreset(p)
+                                        Task {
+                                            _ = await presetManager.updatePreset(p)
+                                        }
                                     }
                                 ),
                                 in: 0...1
@@ -43,7 +47,9 @@ struct EffectControlsView: View {
                                             set: { newVal in
                                                 var p = preset
                                                 p.effects[idx].amount = newVal
-                                                presetManager.updatePreset(p)
+                                                Task {
+                                                    _ = await presetManager.updatePreset(p)
+                                                }
                                             }
                                         ),
                                         in: 0...1
@@ -61,4 +67,3 @@ struct EffectControlsView: View {
         }
     }
 }
-

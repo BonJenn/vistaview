@@ -3,34 +3,52 @@ import AVFoundation
 
 struct ContentView: View {
     @StateObject private var productionManager = UnifiedProductionManager()
+    @EnvironmentObject var licenseManager: LicenseManager
     @State private var mediaFiles: [MediaFile] = []
     
     @State private var isDropTarget = false
     
     var body: some View {
-        HSplitView {
-            // Left Pane: VJ Controls
-            VStack {
-                VJPreviewProgramPane(
-                    previewSource: productionManager.previewProgramManager.previewSource,
-                    programSource: productionManager.previewProgramManager.programSource,
-                    onTake: {
-                        productionManager.previewProgramManager.take()
-                    },
-                    productionManager: productionManager
-                )
-                
-                MediaSourceView()
-            }
-            .frame(minWidth: 400, idealWidth: 600, maxWidth: .infinity)
+        VStack(spacing: 0) {
+            // License status banner
+            LicenseStatusBanner(licenseManager: licenseManager)
             
-            // Right Pane
-            VStack {
-                Text("Settings & Controls")
-                    .font(.headline)
-                Spacer()
+            HSplitView {
+                // Left Pane: VJ Controls
+                VStack {
+                    VJPreviewProgramPane(
+                        previewSource: productionManager.previewProgramManager.previewSource,
+                        programSource: productionManager.previewProgramManager.programSource,
+                        onTake: {
+                            productionManager.previewProgramManager.take()
+                        },
+                        productionManager: productionManager
+                    )
+                    .gated(.previewProgram, licenseManager: licenseManager)
+                    
+                    MediaSourceView()
+                }
+                .frame(minWidth: 400, idealWidth: 600, maxWidth: .infinity)
+                
+                // Right Pane
+                VStack {
+                    TabView {
+                        GatedEffectsView(
+                            presetManager: productionManager.presetManager,
+                            licenseManager: licenseManager
+                        )
+                        .tabItem {
+                            Label("Effects", systemImage: "camera.filters")
+                        }
+                        
+                        Text("Other Controls")
+                            .tabItem {
+                                Label("Controls", systemImage: "slider.horizontal.3")
+                            }
+                    }
+                }
+                .frame(minWidth: 250, idealWidth: 300, maxWidth: 400)
             }
-            .frame(minWidth: 250, idealWidth: 300, maxWidth: 400)
         }
         .environmentObject(productionManager)
         .onDrop(of: [.fileURL], isTargeted: $isDropTarget) { providers in
