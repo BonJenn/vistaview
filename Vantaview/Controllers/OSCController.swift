@@ -11,7 +11,7 @@ class OSCController: ObservableObject {
     
     private var listener: NWListener?
     private var connection: NWConnection?
-    private let logger = Logger(subsystem: "com.vistaview.app", category: "OSC")
+    private let logger = Logger(subsystem: "com.vantaview.app", category: "OSC")
     
     // Weak reference to avoid retain cycles
     weak var outputMappingManager: OutputMappingManager?
@@ -203,35 +203,35 @@ class OSCController: ObservableObject {
     private func setupDefaultMappings() {
         // Set up some default OSC mappings
         addParameterMapping(
-            address: "/vistaview/output/position/x",
+            address: "/vantaview/output/position/x",
             parameter: .positionX,
             inputRange: OSCRange(min: 0.0, max: 1.0),
             outputRange: OSCRange(min: 0.0, max: 1.0)
         )
         
         addParameterMapping(
-            address: "/vistaview/output/position/y",
+            address: "/vantaview/output/position/y",
             parameter: .positionY,
             inputRange: OSCRange(min: 0.0, max: 1.0),
             outputRange: OSCRange(min: 0.0, max: 1.0)
         )
         
         addParameterMapping(
-            address: "/vistaview/output/scale",
+            address: "/vantaview/output/scale",
             parameter: .scale,
             inputRange: OSCRange(min: 0.0, max: 1.0),
             outputRange: OSCRange(min: 0.1, max: 3.0)
         )
         
         addParameterMapping(
-            address: "/vistaview/output/rotation",
+            address: "/vantaview/output/rotation",
             parameter: .rotation,
             inputRange: OSCRange(min: 0.0, max: 1.0),
             outputRange: OSCRange(min: -180.0, max: 180.0)
         )
         
         addParameterMapping(
-            address: "/vistaview/output/opacity",
+            address: "/vantaview/output/opacity",
             parameter: .opacity,
             inputRange: OSCRange(min: 0.0, max: 1.0),
             outputRange: OSCRange(min: 0.0, max: 1.0)

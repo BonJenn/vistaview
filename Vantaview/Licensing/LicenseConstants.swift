@@ -1,8 +1,8 @@
 //
 //  LicenseConstants.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import Foundation
@@ -30,29 +30,29 @@ struct LicenseConstants {
     
     /// URL for server's JSON Web Key Set (for JWT verification)
     /// TODO: Replace with actual production URL
-    static let jwkSetURL = URL(string: "https://vistaview.app/.well-known/jwks.json")!
+    static let jwkSetURL = URL(string: "https://vantaview.app/.well-known/jwks.json")!
     
     /// JWT issuer expected in tokens
-    static let jwtIssuer = "vistaview.app"
+    static let jwtIssuer = "vantaview.app"
     
     /// JWT audience expected in tokens
-    static let jwtAudience = "vistaview-app"
+    static let jwtAudience = "vantaview-app"
     
     // MARK: - API Endpoints
     
-    /// Base URL for Vistaview API
-    static let apiBaseURL = URL(string: "https://vistaview.app/api")!
+    /// Base URL for Vantaview API
+    static let apiBaseURL = URL(string: "https://vantaview.app/api")!
     
     /// License verification endpoint
     static let licenseEndpoint = "license/verify"
     
     /// Billing management portal URL
-    static let billingPortalURL = URL(string: "https://vistaview.app/billing")!
+    static let billingPortalURL = URL(string: "https://vantaview.app/billing")!
     
     // MARK: - Keychain Configuration
     
     /// Keychain service identifier for storing cached licenses
-    static let keychainService = "app.vistaview.license"
+    static let keychainService = "app.vantaview.license"
     
     /// Keychain account for cached license data
     static let keychainAccount = "cached_license"

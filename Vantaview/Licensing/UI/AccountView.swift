@@ -1,8 +1,8 @@
 //
 //  AccountView.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import SwiftUI
@@ -15,9 +15,9 @@ struct AccountView: View {
     
     var body: some View {
         Form {
-            Section("Account") {
+            Section(header: Text("Account")) {
                 HStack {
-                    Text("Vistaview ID")
+                    Text("Vantaview ID")
                     Spacer()
                     Text(authManager.userID ?? "Not available")
                         .foregroundColor(.secondary)
@@ -36,31 +36,22 @@ struct AccountView: View {
                     HStack {
                         Text("Member since")
                         Spacer()
-                        Text(user.createdAt, style: .date)
+                        Text("N/A") // TODO: Get from API when user model has createdAt
                             .foregroundColor(.secondary)
-                    }
-                    
-                    if !user.emailConfirmed {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("Email not confirmed")
-                                .foregroundColor(.orange)
-                        }
                     }
                 }
             }
             
-            Section("Subscription") {
+            Section(header: Text("Subscription")) {
                 subscriptionStatusSection
             }
             
-            Section("Actions") {
+            Section(header: Text("Actions")) {
                 actionButtonsSection
             }
             
             #if DEBUG
-            Section("Debug") {
+            Section(header: Text("Debug")) {
                 debugSection
             }
             #endif

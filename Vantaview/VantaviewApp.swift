@@ -2,7 +2,7 @@ import SwiftUI
 import Cocoa
 
 @main
-struct VistaviewApp: App {
+struct VantaviewApp: App {
     @StateObject private var authManager = AuthenticationManager()
     @StateObject private var licenseManager = LicenseManager()
     
@@ -22,13 +22,15 @@ struct VistaviewApp: App {
                                 }
                             }
                         }
+                        .frame(minWidth: 1200, minHeight: 800) // Full app size
                 } else {
                     SignInView(authManager: authManager)
-                        .frame(minWidth: 600, minHeight: 500)
+                        .frame(width: 400, height: 650) // Adjusted for proper fit
                 }
             }
             .environmentObject(authManager)
         }
+        .windowResizability(authManager.isAuthenticated ? .contentSize : .contentSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 if authManager.isAuthenticated {

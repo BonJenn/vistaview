@@ -1,8 +1,8 @@
 //
 //  SupabaseConfig.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import Foundation
@@ -14,7 +14,7 @@ struct SupabaseConfig {
     static let projectURL = URL(string: "https://iaxqbatmntobejiwtbqx.supabase.co")!
     
     /// Your Supabase anon key (paste the real key here)
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlheHFiYXRtbnRvYmVqaXd0YnF4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUwMzk0MzcsImV4cCI6MjA3MDYxNTQzN30.AWaDbQCIKFBKxJ_kRoUrn5Nsqq0DvJZBLtF1q44bkek"
+    static let anonKey = "paste-your-eyJ...-key-here"
     
     /// License verification endpoint
     static let licenseVerificationURL = projectURL.appendingPathComponent("functions/v1/verify-license")

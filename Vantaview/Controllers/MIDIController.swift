@@ -12,7 +12,7 @@ class MIDIController: ObservableObject {
     
     private var midiClient: MIDIClientRef = 0
     private var inputPort: MIDIPortRef = 0
-    private let logger = Logger(subsystem: "com.vistaview.app", category: "MIDI")
+    private let logger = Logger(subsystem: "com.vantaview.app", category: "MIDI")
     
     // Weak reference to avoid retain cycles
     weak var outputMappingManager: OutputMappingManager?
@@ -36,7 +36,7 @@ class MIDIController: ObservableObject {
     
     private func setupMIDI() {
         do {
-            let clientName = "Vistaview" as CFString
+            let clientName = "Vantaview" as CFString
             let status = MIDIClientCreate(clientName, { _, _ in
                 // MIDI system changed notification
                 Task { @MainActor in
@@ -49,7 +49,7 @@ class MIDIController: ObservableObject {
                 return
             }
             
-            let portName = "Vistaview Input" as CFString
+            let portName = "Vantaview Input" as CFString
             let portStatus = MIDIInputPortCreate(midiClient, portName, { packetList, refCon, connRefCon in
                 // Handle MIDI input
                 guard let refCon = refCon else { return }

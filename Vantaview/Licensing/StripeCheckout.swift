@@ -1,8 +1,8 @@
 //
 //  StripeCheckout.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import Foundation
@@ -23,8 +23,8 @@ class StripeCheckout {
         var components = URLComponents(string: "https://checkout.stripe.com/pay")!
         components.queryItems = [
             URLQueryItem(name: "price", value: priceID),
-            URLQueryItem(name: "success_url", value: "vistaview://checkout/success"),
-            URLQueryItem(name: "cancel_url", value: "vistaview://checkout/cancel"),
+            URLQueryItem(name: "success_url", value: "vantaview://checkout/success"),
+            URLQueryItem(name: "cancel_url", value: "vantaview://checkout/cancel"),
             URLQueryItem(name: "client_reference_id", value: userID)
         ]
         

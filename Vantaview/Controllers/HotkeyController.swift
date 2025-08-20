@@ -9,7 +9,7 @@ class HotkeyController: ObservableObject {
     @Published var registeredHotkeys: [String] = []
     @Published var hasAccessibilityPermission: Bool = false
     
-    private let logger = Logger(subsystem: "com.vistaview.app", category: "Hotkeys")
+    private let logger = Logger(subsystem: "com.vantaview.app", category: "Hotkeys")
     private var eventTap: CFMachPort?
     
     // Weak reference to avoid retain cycles

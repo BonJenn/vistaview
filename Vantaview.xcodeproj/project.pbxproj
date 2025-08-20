@@ -40,25 +40,25 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		9800B3892E0C88DB00AABCE9 /* Vistaview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vistaview.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		9800B39A2E0C88DE00AABCE9 /* VistaviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VistaviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		9800B3A42E0C88DE00AABCE9 /* VistaviewUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VistaviewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9800B3892E0C88DB00AABCE9 /* Vantaview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vantaview.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9800B39A2E0C88DE00AABCE9 /* VantaviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VantaviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9800B3A42E0C88DE00AABCE9 /* VantaviewUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VantaviewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		9800B38B2E0C88DB00AABCE9 /* Vistaview */ = {
+		9800B38B2E0C88DB00AABCE9 /* Vantaview */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Vistaview;
+			path = Vantaview;
 			sourceTree = "<group>";
 		};
-		9800B39D2E0C88DE00AABCE9 /* VistaviewTests */ = {
+		9800B39D2E0C88DE00AABCE9 /* VantaviewTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = VistaviewTests;
+			path = VantaviewTests;
 			sourceTree = "<group>";
 		};
-		9800B3A72E0C88DE00AABCE9 /* VistaviewUITests */ = {
+		9800B3A72E0C88DE00AABCE9 /* VantaviewUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = VistaviewUITests;
+			path = VantaviewUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -92,9 +92,9 @@
 		9800B3802E0C88DA00AABCE9 = {
 			isa = PBXGroup;
 			children = (
-				9800B38B2E0C88DB00AABCE9 /* Vistaview */,
-				9800B39D2E0C88DE00AABCE9 /* VistaviewTests */,
-				9800B3A72E0C88DE00AABCE9 /* VistaviewUITests */,
+				9800B38B2E0C88DB00AABCE9 /* Vantaview */,
+				9800B39D2E0C88DE00AABCE9 /* VantaviewTests */,
+				9800B3A72E0C88DE00AABCE9 /* VantaviewUITests */,
 				98AD706B2E189DB700A6B1EB /* Frameworks */,
 				9800B38A2E0C88DB00AABCE9 /* Products */,
 			);
@@ -103,9 +103,9 @@
 		9800B38A2E0C88DB00AABCE9 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9800B3892E0C88DB00AABCE9 /* Vistaview.app */,
-				9800B39A2E0C88DE00AABCE9 /* VistaviewTests.xctest */,
-				9800B3A42E0C88DE00AABCE9 /* VistaviewUITests.xctest */,
+				9800B3892E0C88DB00AABCE9 /* Vantaview.app */,
+				9800B39A2E0C88DE00AABCE9 /* VantaviewTests.xctest */,
+				9800B3A42E0C88DE00AABCE9 /* VantaviewUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -120,9 +120,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		9800B3882E0C88DB00AABCE9 /* Vistaview */ = {
+		9800B3882E0C88DB00AABCE9 /* Vantaview */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 9800B3AE2E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "Vistaview" */;
+			buildConfigurationList = 9800B3AE2E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "Vantaview" */;
 			buildPhases = (
 				9800B3852E0C88DB00AABCE9 /* Sources */,
 				9800B3862E0C88DB00AABCE9 /* Frameworks */,
@@ -134,19 +134,19 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				9800B38B2E0C88DB00AABCE9 /* Vistaview */,
+				9800B38B2E0C88DB00AABCE9 /* Vantaview */,
 			);
-			name = Vistaview;
+			name = Vantaview;
 			packageProductDependencies = (
 				98AD706E2E189DD600A6B1EB /* HaishinKit */,
 			);
 			productName = Vistaview;
-			productReference = 9800B3892E0C88DB00AABCE9 /* Vistaview.app */;
+			productReference = 9800B3892E0C88DB00AABCE9 /* Vantaview.app */;
 			productType = "com.apple.product-type.application";
 		};
-		9800B3992E0C88DE00AABCE9 /* VistaviewTests */ = {
+		9800B3992E0C88DE00AABCE9 /* VantaviewTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 9800B3B12E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VistaviewTests" */;
+			buildConfigurationList = 9800B3B12E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VantaviewTests" */;
 			buildPhases = (
 				9800B3962E0C88DE00AABCE9 /* Sources */,
 				9800B3972E0C88DE00AABCE9 /* Frameworks */,
@@ -158,18 +158,18 @@
 				9800B39C2E0C88DE00AABCE9 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				9800B39D2E0C88DE00AABCE9 /* VistaviewTests */,
+				9800B39D2E0C88DE00AABCE9 /* VantaviewTests */,
 			);
-			name = VistaviewTests;
+			name = VantaviewTests;
 			packageProductDependencies = (
 			);
 			productName = VistaviewTests;
-			productReference = 9800B39A2E0C88DE00AABCE9 /* VistaviewTests.xctest */;
+			productReference = 9800B39A2E0C88DE00AABCE9 /* VantaviewTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		9800B3A32E0C88DE00AABCE9 /* VistaviewUITests */ = {
+		9800B3A32E0C88DE00AABCE9 /* VantaviewUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 9800B3B42E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VistaviewUITests" */;
+			buildConfigurationList = 9800B3B42E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VantaviewUITests" */;
 			buildPhases = (
 				9800B3A02E0C88DE00AABCE9 /* Sources */,
 				9800B3A12E0C88DE00AABCE9 /* Frameworks */,
@@ -181,13 +181,13 @@
 				9800B3A62E0C88DE00AABCE9 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				9800B3A72E0C88DE00AABCE9 /* VistaviewUITests */,
+				9800B3A72E0C88DE00AABCE9 /* VantaviewUITests */,
 			);
-			name = VistaviewUITests;
+			name = VantaviewUITests;
 			packageProductDependencies = (
 			);
 			productName = VistaviewUITests;
-			productReference = 9800B3A42E0C88DE00AABCE9 /* VistaviewUITests.xctest */;
+			productReference = 9800B3A42E0C88DE00AABCE9 /* VantaviewUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -213,7 +213,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 9800B3842E0C88DB00AABCE9 /* Build configuration list for PBXProject "Vistaview" */;
+			buildConfigurationList = 9800B3842E0C88DB00AABCE9 /* Build configuration list for PBXProject "Vantaview" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -230,9 +230,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				9800B3882E0C88DB00AABCE9 /* Vistaview */,
-				9800B3992E0C88DE00AABCE9 /* VistaviewTests */,
-				9800B3A32E0C88DE00AABCE9 /* VistaviewUITests */,
+				9800B3882E0C88DB00AABCE9 /* Vantaview */,
+				9800B3992E0C88DE00AABCE9 /* VantaviewTests */,
+				9800B3A32E0C88DE00AABCE9 /* VantaviewUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -288,12 +288,12 @@
 /* Begin PBXTargetDependency section */
 		9800B39C2E0C88DE00AABCE9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 9800B3882E0C88DB00AABCE9 /* Vistaview */;
+			target = 9800B3882E0C88DB00AABCE9 /* Vantaview */;
 			targetProxy = 9800B39B2E0C88DE00AABCE9 /* PBXContainerItemProxy */;
 		};
 		9800B3A62E0C88DE00AABCE9 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 9800B3882E0C88DB00AABCE9 /* Vistaview */;
+			target = 9800B3882E0C88DB00AABCE9 /* Vantaview */;
 			targetProxy = 9800B3A52E0C88DE00AABCE9 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -422,7 +422,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Vistaview/Vistaview.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Vistaview/Vantaview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -432,7 +432,9 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vistaview/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for live preview and streaming.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access for live audio streaming.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -450,7 +452,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Vistaview/Vistaview.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Vistaview/Vantaview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -460,7 +462,9 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Vistaview/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for live preview and streaming.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access for live audio streaming.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -487,7 +491,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vistaview.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vistaview";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vantaview.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vantaview";
 			};
 			name = Debug;
 		};
@@ -505,7 +509,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vistaview.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vistaview";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vantaview.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vantaview";
 			};
 			name = Release;
 		};
@@ -544,7 +548,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		9800B3842E0C88DB00AABCE9 /* Build configuration list for PBXProject "Vistaview" */ = {
+		9800B3842E0C88DB00AABCE9 /* Build configuration list for PBXProject "Vantaview" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				9800B3AC2E0C88DE00AABCE9 /* Debug */,
@@ -553,7 +557,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		9800B3AE2E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "Vistaview" */ = {
+		9800B3AE2E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "Vantaview" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				9800B3AF2E0C88DE00AABCE9 /* Debug */,
@@ -562,7 +566,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		9800B3B12E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VistaviewTests" */ = {
+		9800B3B12E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VantaviewTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				9800B3B22E0C88DE00AABCE9 /* Debug */,
@@ -571,7 +575,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		9800B3B42E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VistaviewUITests" */ = {
+		9800B3B42E0C88DE00AABCE9 /* Build configuration list for PBXNativeTarget "VantaviewUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				9800B3B52E0C88DE00AABCE9 /* Debug */,

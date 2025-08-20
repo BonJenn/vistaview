@@ -1,13 +1,13 @@
 //
-//  VistaviewUITestsLaunchTests.swift
-//  VistaviewUITests
+//  VantaviewUITestsLaunchTests.swift
+//  VantaviewUITests
 //
 //  Created by Jonathan Benn on 6/25/25.
 //
 
 import XCTest
 
-final class VistaviewUITestsLaunchTests: XCTestCase {
+final class VantaviewUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

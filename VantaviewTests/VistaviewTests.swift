@@ -1,14 +1,14 @@
 //
-//  VistaviewTests.swift
-//  VistaviewTests
+//  VantaviewTests.swift
+//  VantaviewTests
 //
 //  Created by Jonathan Benn on 6/25/25.
 //
 
 import Testing
-@testable import Vistaview
+@testable import Vantaview
 
-struct VistaviewTests {
+struct VantaviewTests {
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.
