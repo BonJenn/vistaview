@@ -1,6 +1,6 @@
 //
 //  VJPreviewProgramPane.swift
-//  Vistaview
+//  Vantaview
 //
 //  VJ-style Preview/Program control pane with stacked layout
 //

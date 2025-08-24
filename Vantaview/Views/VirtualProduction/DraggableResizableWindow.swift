@@ -1,6 +1,6 @@
 //
 //  DraggableResizableWindow.swift
-//  Vistaview - SIMPLE draggable window that actually works
+//  Vantaview - SIMPLE draggable window that actually works
 //
 
 import SwiftUI

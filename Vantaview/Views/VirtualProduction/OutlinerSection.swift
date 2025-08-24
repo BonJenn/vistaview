@@ -1,6 +1,6 @@
 //
 //  OutlinerSection.swift
-//  Vistaview
+//  Vantaview
 //
 
 import SwiftUI

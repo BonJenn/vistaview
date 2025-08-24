@@ -16,14 +16,14 @@
 			containerPortal = 9800B3812E0C88DB00AABCE9 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 9800B3882E0C88DB00AABCE9;
-			remoteInfo = Vistaview;
+			remoteInfo = Vantaview;
 		};
 		9800B3A52E0C88DE00AABCE9 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 9800B3812E0C88DB00AABCE9 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 9800B3882E0C88DB00AABCE9;
-			remoteInfo = Vistaview;
+			remoteInfo = Vantaview;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -140,7 +140,7 @@
 			packageProductDependencies = (
 				98AD706E2E189DD600A6B1EB /* HaishinKit */,
 			);
-			productName = Vistaview;
+			productName = Vantaview;
 			productReference = 9800B3892E0C88DB00AABCE9 /* Vantaview.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -163,7 +163,7 @@
 			name = VantaviewTests;
 			packageProductDependencies = (
 			);
-			productName = VistaviewTests;
+			productName = VantaviewTests;
 			productReference = 9800B39A2E0C88DE00AABCE9 /* VantaviewTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
@@ -186,7 +186,7 @@
 			name = VantaviewUITests;
 			packageProductDependencies = (
 			);
-			productName = VistaviewUITests;
+			productName = VantaviewUITests;
 			productReference = 9800B3A42E0C88DE00AABCE9 /* VantaviewUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
@@ -422,16 +422,16 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Vistaview/Vantaview.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Vantaview/Vantaview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"Vistaview/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"Vantaview/Preview Content\"";
 				DEVELOPMENT_TEAM = YF28W3NGG6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Vistaview/Info.plist;
+				INFOPLIST_FILE = Vantaview/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for live preview and streaming.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access for live audio streaming.";
@@ -440,7 +440,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.Vistaview;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.Vantaview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -452,16 +452,16 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Vistaview/Vantaview.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Vantaview/Vantaview.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"Vistaview/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"Vantaview/Preview Content\"";
 				DEVELOPMENT_TEAM = YF28W3NGG6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Vistaview/Info.plist;
+				INFOPLIST_FILE = Vantaview/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access for live preview and streaming.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This app needs microphone access for live audio streaming.";
@@ -470,7 +470,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.Vistaview;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.Vantaview;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -487,7 +487,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.VistaviewTests;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.VantaviewTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -505,7 +505,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.VistaviewTests;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.VantaviewTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -521,11 +521,11 @@
 				DEVELOPMENT_TEAM = YF28W3NGG6;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.VistaviewUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.VantaviewUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Vistaview;
+				TEST_TARGET_NAME = Vantaview;
 			};
 			name = Debug;
 		};
@@ -537,11 +537,11 @@
 				DEVELOPMENT_TEAM = YF28W3NGG6;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = Vistaview.VistaviewUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = Vantaview.VantaviewUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Vistaview;
+				TEST_TARGET_NAME = Vantaview;
 			};
 			name = Release;
 		};

@@ -1,6 +1,6 @@
 //
 //  VirtualProductionCommands.swift
-//  Vistaview - Keyboard Commands for Virtual Production
+//  Vantaview - Keyboard Commands for Virtual Production
 //
 
 import SwiftUI

@@ -1,6 +1,6 @@
 //
 //  ObjectPropertiesView.swift
-//  Vistaview - Raycast-Inspired Object Properties
+//  Vantaview - Raycast-Inspired Object Properties
 //
 
 import SwiftUI

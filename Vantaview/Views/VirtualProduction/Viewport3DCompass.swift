@@ -1,6 +1,6 @@
 //
 //  Viewport3DCompass.swift
-//  Vistaview - Blender-style 3D orientation compass
+//  Vantaview - Blender-style 3D orientation compass
 //
 
 import SwiftUI

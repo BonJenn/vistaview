@@ -1,6 +1,6 @@
 //
 //  AxisGizmo.swift
-//  Vistaview - Camera-Synced 3D Compass
+//  Vantaview - Camera-Synced 3D Compass
 //
 
 import SwiftUI

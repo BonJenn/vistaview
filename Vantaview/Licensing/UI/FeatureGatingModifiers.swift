@@ -1,8 +1,8 @@
 //
 //  FeatureGatingModifiers.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import SwiftUI
@@ -175,11 +175,11 @@ struct LicenseStatusBanner: View {
     private var statusSuggestion: String? {
         switch licenseManager.status {
         case .trial(let days) where days <= 3:
-            return "Upgrade to continue using Vistaview after your trial"
+            return "Upgrade to continue using Vantaview after your trial"
         case .grace:
             return "Reconnect to the internet to verify your subscription"
         case .expired:
-            return "Renew your subscription to continue using Vistaview"
+            return "Renew your subscription to continue using Vantaview"
         case .error:
             return "Check your internet connection"
         default:

@@ -1,6 +1,6 @@
 //
 //  VirtualCameraOutlinerSection.swift
-//  Vistaview
+//  Vantaview
 //
 
 import SwiftUI

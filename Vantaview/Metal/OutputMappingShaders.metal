@@ -56,18 +56,14 @@ kernel void outputMappingCompute(texture2d<float, access::read> inputTexture [[t
                                 constant OutputMappingUniforms& uniforms [[buffer(0)]],
                                 uint2 gid [[thread_position_in_grid]]) {
     
-    // Check bounds
     if (gid.x >= outputTexture.get_width() || gid.y >= outputTexture.get_height()) {
         return;
     }
     
-    // Normalize coordinates
     float2 outputCoord = float2(gid) / float2(outputTexture.get_width(), outputTexture.get_height());
     
-    // Apply inverse transformation to find input coordinate
-    float2 centerOffset = outputCoord - 0.5;
+    float2 centerOffset = (outputCoord - 0.5) - uniforms.translation;
     
-    // Apply rotation (inverse)
     float cosR = cos(-uniforms.rotation);
     float sinR = sin(-uniforms.rotation);
     float2 rotated = float2(
@@ -75,28 +71,18 @@ kernel void outputMappingCompute(texture2d<float, access::read> inputTexture [[t
         centerOffset.x * sinR + centerOffset.y * cosR
     );
     
-    // Apply scale (inverse)
     float2 scaled = rotated / uniforms.scale;
     
-    // Apply translation (inverse) and convert back to texture coordinates
-    float2 inputCoord = scaled + 0.5 - uniforms.translation;
+    float2 inputCoord = scaled + 0.5;
     
-    // Sample input texture if coordinates are valid
     float4 color = float4(0.0);
-    if (inputCoord.x >= 0.0 && inputCoord.x <= 1.0 && 
-        inputCoord.y >= 0.0 && inputCoord.y <= 1.0) {
-        
-        // Convert to pixel coordinates for sampling
+    if (all(inputCoord >= 0.0) && all(inputCoord <= 1.0)) {
         uint2 inputPixel = uint2(inputCoord * float2(inputTexture.get_width(), inputTexture.get_height()));
-        
-        // Clamp to texture bounds
         inputPixel = clamp(inputPixel, uint2(0), uint2(inputTexture.get_width() - 1, inputTexture.get_height() - 1));
-        
         color = inputTexture.read(inputPixel);
         color.a *= uniforms.opacity;
     }
     
-    // Write to output texture
     outputTexture.write(color, gid);
 }
 
@@ -106,18 +92,14 @@ kernel void outputMappingComputeBilinear(texture2d<float, access::read> inputTex
                                         constant OutputMappingUniforms& uniforms [[buffer(0)]],
                                         uint2 gid [[thread_position_in_grid]]) {
     
-    // Check bounds
     if (gid.x >= outputTexture.get_width() || gid.y >= outputTexture.get_height()) {
         return;
     }
     
-    // Normalize coordinates
     float2 outputCoord = float2(gid) / float2(outputTexture.get_width(), outputTexture.get_height());
     
-    // Apply inverse transformation to find input coordinate
-    float2 centerOffset = outputCoord - 0.5;
+    float2 centerOffset = (outputCoord - 0.5) - uniforms.translation;
     
-    // Apply rotation (inverse)
     float cosR = cos(-uniforms.rotation);
     float sinR = sin(-uniforms.rotation);
     float2 rotated = float2(
@@ -125,25 +107,16 @@ kernel void outputMappingComputeBilinear(texture2d<float, access::read> inputTex
         centerOffset.x * sinR + centerOffset.y * cosR
     );
     
-    // Apply scale (inverse)
     float2 scaled = rotated / uniforms.scale;
     
-    // Apply translation (inverse) and convert back to texture coordinates
-    float2 inputCoord = scaled + 0.5 - uniforms.translation;
+    float2 inputCoord = scaled + 0.5;
     
-    // Sample input texture with bilinear interpolation if coordinates are valid
     float4 color = float4(0.0);
-    if (inputCoord.x >= 0.0 && inputCoord.x <= 1.0 && 
-        inputCoord.y >= 0.0 && inputCoord.y <= 1.0) {
-        
-        // Convert to pixel coordinates
+    if (all(inputCoord >= 0.0) && all(inputCoord <= 1.0)) {
         float2 pixelCoord = inputCoord * float2(inputTexture.get_width(), inputTexture.get_height()) - 0.5;
-        
-        // Get integer and fractional parts
         int2 pixelInt = int2(floor(pixelCoord));
         float2 pixelFrac = pixelCoord - float2(pixelInt);
         
-        // Sample four neighboring pixels
         uint inputWidth = inputTexture.get_width();
         uint inputHeight = inputTexture.get_height();
         
@@ -157,7 +130,6 @@ kernel void outputMappingComputeBilinear(texture2d<float, access::read> inputTex
         float4 c01 = inputTexture.read(uint2(p01));
         float4 c11 = inputTexture.read(uint2(p11));
         
-        // Bilinear interpolation
         float4 c0 = mix(c00, c10, pixelFrac.x);
         float4 c1 = mix(c01, c11, pixelFrac.x);
         color = mix(c0, c1, pixelFrac.y);
@@ -165,7 +137,6 @@ kernel void outputMappingComputeBilinear(texture2d<float, access::read> inputTex
         color.a *= uniforms.opacity;
     }
     
-    // Write to output texture
     outputTexture.write(color, gid);
 }
 
@@ -217,18 +188,15 @@ kernel void outputMappingComputeFast(texture2d<float, access::read> inputTexture
                                     constant OutputMappingUniforms& uniforms [[buffer(0)]],
                                     uint2 gid [[thread_position_in_grid]]) {
     
-    // Early bounds check with fast exit
     if (gid.x >= outputTexture.get_width() || gid.y >= outputTexture.get_height()) {
         return;
     }
     
-    // Fast path: if no significant transformation, just copy with scaling
     bool hasRotation = abs(uniforms.rotation) > 0.001;
     bool hasTranslation = length(uniforms.translation) > 0.0001;
     bool hasScaling = abs(length(uniforms.scale) - sqrt(2.0)) > 0.0001;
     
     if (!hasRotation && !hasTranslation && !hasScaling) {
-        // Direct copy path for maximum performance
         uint2 inputPixel = clamp(gid, uint2(0), uint2(inputTexture.get_width() - 1, inputTexture.get_height() - 1));
         float4 color = inputTexture.read(inputPixel);
         color.a *= uniforms.opacity;
@@ -236,13 +204,10 @@ kernel void outputMappingComputeFast(texture2d<float, access::read> inputTexture
         return;
     }
     
-    // Optimized transformation path
     float2 outputCoord = float2(gid) / float2(outputTexture.get_width(), outputTexture.get_height());
-    float2 centerOffset = outputCoord - 0.5;
+    float2 centerOffset = (outputCoord - 0.5) - uniforms.translation;
     
     float2 transformed = centerOffset;
-    
-    // Apply rotation only if needed
     if (hasRotation) {
         float cosR = cos(-uniforms.rotation);
         float sinR = sin(-uniforms.rotation);
@@ -252,19 +217,14 @@ kernel void outputMappingComputeFast(texture2d<float, access::read> inputTexture
         );
     }
     
-    // Apply scale
     transformed /= uniforms.scale;
     
-    // Apply translation and convert back to texture coordinates
-    float2 inputCoord = transformed + 0.5 - uniforms.translation;
+    float2 inputCoord = transformed + 0.5;
     
-    // Fast bounds check and sample
     float4 color = float4(0.0);
     if (all(inputCoord >= 0.0) && all(inputCoord <= 1.0)) {
-        // Nearest neighbor sampling for speed (LED walls don't need bilinear)
         uint2 inputPixel = uint2(inputCoord * float2(inputTexture.get_width(), inputTexture.get_height()));
         inputPixel = clamp(inputPixel, uint2(0), uint2(inputTexture.get_width() - 1, inputTexture.get_height() - 1));
-        
         color = inputTexture.read(inputPixel);
         color.a *= uniforms.opacity;
     }

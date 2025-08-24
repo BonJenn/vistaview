@@ -1,6 +1,6 @@
 //
 //  QuickCameraTestView.swift
-//  Vistaview
+//  Vantaview
 //
 //  Simple camera test to diagnose connection issues
 //

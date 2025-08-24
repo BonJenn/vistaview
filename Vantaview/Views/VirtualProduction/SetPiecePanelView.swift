@@ -1,6 +1,6 @@
 //
 //  SetPiecePanelView.swift
-//  Vistaview - Raycast-Inspired Set Pieces Panel
+//  Vantaview - Raycast-Inspired Set Pieces Panel
 //
 
 import SwiftUI

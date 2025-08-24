@@ -11,7 +11,7 @@
             shouldBeEnabled = "Yes"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
-            filePath = "Vistaview/Managers/ExternalDisplayManager.swift"
+            filePath = "Vantaview/Managers/ExternalDisplayManager.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "46"

@@ -1,6 +1,6 @@
 //
 //  StudioToolButton.swift
-//  Vistaview
+//  Vantaview
 //
 
 import SwiftUI

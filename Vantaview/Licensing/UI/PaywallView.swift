@@ -1,8 +1,8 @@
 //
 //  PaywallView.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import SwiftUI
@@ -28,7 +28,7 @@ struct PaywallView: View {
         VStack(spacing: 0) {
             // Header with close button
             HStack {
-                Text("Upgrade Vistaview")
+                Text("Upgrade Vantaview")
                     .font(.title)
                     .fontWeight(.bold)
                 

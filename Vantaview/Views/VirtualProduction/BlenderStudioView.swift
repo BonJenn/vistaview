@@ -1,6 +1,6 @@
 //
 //  BlenderStudioView.swift
-//  Vistaview - Virtual Production Studio Builder
+//  Vantaview - Virtual Production Studio Builder
 //
 
 import SwiftUI

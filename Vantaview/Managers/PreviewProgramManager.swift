@@ -1,6 +1,6 @@
 //
 //  PreviewProgramManager.swift
-//  Vistaview
+//  Vantaview
 //
 //  Manager for handling Preview/Program workflow in VJ-style production
 //

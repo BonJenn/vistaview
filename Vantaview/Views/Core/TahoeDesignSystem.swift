@@ -1,6 +1,6 @@
 //
 //  TahoeDesignSystem.swift
-//  Vistaview
+//  Vantaview
 //
 //  macOS 26 Tahoe Liquid Glass Design System
 //  Preserves all app functionality while enhancing visual aesthetics

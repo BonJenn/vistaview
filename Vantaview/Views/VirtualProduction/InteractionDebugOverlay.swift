@@ -1,6 +1,6 @@
 //
 //  InteractionDebugOverlay.swift
-//  Vistaview - Debug Camera & Drag Interactions
+//  Vantaview - Debug Camera & Drag Interactions
 //
 
 import SwiftUI

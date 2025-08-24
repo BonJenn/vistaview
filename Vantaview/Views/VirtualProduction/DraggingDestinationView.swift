@@ -1,6 +1,6 @@
 //
 //  DraggingDestinationView.swift
-//  Vistaview - Dedicated Drag & Drop Handler
+//  Vantaview - Dedicated Drag & Drop Handler
 //
 
 import AppKit

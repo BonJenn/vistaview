@@ -1,6 +1,6 @@
 //
 //  DropFeedbackOverlay.swift
-//  Vistaview - Visual Drop Feedback
+//  Vantaview - Visual Drop Feedback
 //
 
 import SwiftUI

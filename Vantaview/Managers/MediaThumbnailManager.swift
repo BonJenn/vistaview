@@ -1,6 +1,6 @@
 //
 //  MediaThumbnailManager.swift
-//  Vistaview
+//  Vantaview
 //
 //  Manager for generating and caching media thumbnails
 //

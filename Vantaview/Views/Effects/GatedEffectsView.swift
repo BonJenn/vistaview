@@ -1,8 +1,8 @@
 //
 //  GatedEffectsView.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import SwiftUI

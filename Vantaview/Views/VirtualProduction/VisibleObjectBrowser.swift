@@ -1,6 +1,6 @@
 //
 //  VisibleObjectBrowser.swift
-//  Vistaview - Always visible object browser with draggable thumbnails
+//  Vantaview - Always visible object browser with draggable thumbnails
 //
 
 import SwiftUI

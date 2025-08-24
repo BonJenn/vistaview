@@ -1,6 +1,6 @@
 //
 //  KeyboardFeedbackOverlay.swift
-//  Vistaview - Visual feedback for keyboard shortcuts
+//  Vantaview - Visual feedback for keyboard shortcuts
 //
 
 import SwiftUI

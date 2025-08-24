@@ -347,7 +347,8 @@ struct FinalCutProStyleView: View {
                 // Output Mapping Controls (middle section - flexible height with max limit)
                 OutputMappingControlsView(
                     outputMappingManager: productionManager.outputMappingManager,
-                    externalDisplayManager: productionManager.externalDisplayManager
+                    externalDisplayManager: productionManager.externalDisplayManager,
+                    productionManager: productionManager
                 )
                 .frame(maxHeight: 300)
                 

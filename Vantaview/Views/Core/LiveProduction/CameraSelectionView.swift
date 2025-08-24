@@ -1,6 +1,6 @@
 //
 //  CameraSelectionView.swift
-//  Vistaview
+//  Vantaview
 //
 //  Created by AI Assistant
 //

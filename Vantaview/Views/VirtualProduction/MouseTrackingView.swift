@@ -1,6 +1,6 @@
 //
 //  MouseTrackingView.swift
-//  Vistaview - Mouse tracking for cursor-based operations
+//  Vantaview - Mouse tracking for cursor-based operations
 //
 
 import SwiftUI

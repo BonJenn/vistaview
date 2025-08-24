@@ -1,6 +1,6 @@
 //
 //  PerformanceMonitor.swift
-//  Vistaview
+//  Vantaview
 //
 //  Created by AI Assistant for Performance Optimization
 //
@@ -21,7 +21,7 @@ final class PerformanceMonitor: ObservableObject {
     private var timer: Timer?
     private var lastUpdateTime: CFTimeInterval = 0
     private var frameCount = 0
-    private let logger = Logger(subsystem: "com.vistaview.performance", category: "monitor")
+    private let logger = Logger(subsystem: "com.vantaview.performance", category: "monitor")
     
     // PERFORMANCE: Reduce timer frequency from 2 seconds to 5 seconds to save CPU
     private let updateInterval: TimeInterval = 5.0

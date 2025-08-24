@@ -1,6 +1,6 @@
 //
 //  VirtualStudioManager.swift
-//  Vistaview
+//  Vantaview
 //
 
 import Foundation

@@ -1,6 +1,6 @@
 //
 //  TransformController.swift
-//  Vistaview - Blender-Style Transform Controls
+//  Vantaview - Blender-Style Transform Controls
 //
 
 import SwiftUI

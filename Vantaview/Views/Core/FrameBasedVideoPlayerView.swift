@@ -17,7 +17,7 @@ class VideoFrameObserver: ObservableObject {
     private var lastNoBufferLogTime: TimeInterval = 0 // Track last log time
     private var callbackCount = 0 // Track display link callbacks
     private let frameProcessor: ((CGImage) -> CGImage?)?
-    private let processingQueue = DispatchQueue(label: "vistaview.video.fx.processing", qos: .userInteractive)
+    private let processingQueue = DispatchQueue(label: "vantaview.video.fx.processing", qos: .userInteractive)
 
     init(player: AVPlayer, isPreview: Bool = false, frameProcessor: ((CGImage) -> CGImage?)? = nil) {
         self.player = player

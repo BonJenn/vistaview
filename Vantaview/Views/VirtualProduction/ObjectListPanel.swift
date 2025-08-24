@@ -1,6 +1,6 @@
 //
 //  ObjectListPanel.swift
-//  Vistaview - Scene object management panel
+//  Vantaview - Scene object management panel
 //
 
 import SwiftUI

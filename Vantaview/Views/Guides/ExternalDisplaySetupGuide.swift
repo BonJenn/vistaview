@@ -48,7 +48,7 @@ struct ExternalDisplaySetupGuide: View {
                     setupStep(
                         number: "2",
                         title: "Detect Display",
-                        description: "Vistaview automatically scans for connected displays every 5 seconds.",
+                        description: "Vantaview automatically scans for connected displays every 5 seconds.",
                         icon: "magnifyingglass.circle",
                         color: .green
                     ) {

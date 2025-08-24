@@ -1,6 +1,6 @@
 //
 //  CameraDisplayTest.swift
-//  Vistaview
+//  Vantaview
 //
 //  Simple test to verify camera image display
 //

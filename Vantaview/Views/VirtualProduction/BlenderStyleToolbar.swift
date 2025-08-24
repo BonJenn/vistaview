@@ -1,6 +1,6 @@
 //
 //  BlenderStyleToolbar.swift
-//  Vistaview - Blender-inspired object placement toolbar
+//  Vantaview - Blender-inspired object placement toolbar
 //
 
 import SwiftUI

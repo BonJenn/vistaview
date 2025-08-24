@@ -14,11 +14,31 @@ class OutputMappingManager: ObservableObject {
     @Published var isEnabled: Bool = true
     @Published var showMappingPanel: Bool = false
     
-    // Real-time editing
+    // REAL-TIME EDITING ENHANCEMENTS
     @Published var isDragging: Bool = false
     @Published var isResizing: Bool = false
+    @Published var isHovering: Bool = false
     @Published var snapToEdges: Bool = true
     @Published var snapThreshold: CGFloat = 10.0
+    @Published var showGizmo: Bool = true
+    @Published var showGrid: Bool = false
+    @Published var gridOpacity: CGFloat = 0.3
+    
+    // PREMIERE PRO-STYLE SCRUBBING
+    @Published var isScrubbingX: Bool = false
+    @Published var isScrubbingY: Bool = false
+    @Published var isScrubbingW: Bool = false
+    @Published var isScrubbingH: Bool = false
+    @Published var scrubStartValue: CGFloat = 0
+    @Published var scrubSensitivity: CGFloat = 1.0
+    @Published var precisionMode: Bool = false  // Hold shift for precision
+    
+    // LIVE PREVIEW & FEEDBACK
+    @Published var livePreviewEnabled: Bool = true
+    @Published var previewOpacity: CGFloat = 1.0
+    @Published var showBounds: Bool = true
+    @Published var boundsColor: Color = .yellow
+    @Published var showCenterCross: Bool = false
     
     // Output canvas settings
     @Published var canvasSize: CGSize = CGSize(width: 1920, height: 1080)
@@ -75,7 +95,7 @@ class OutputMappingManager: ObservableObject {
         
         // Setup presets storage
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        presetsURL = documentsPath.appendingPathComponent("VistaviewOutputPresets.json")
+        presetsURL = documentsPath.appendingPathComponent("VantaviewOutputPresets.json")
         
         setupDefaultMapping()
         loadPresets()
@@ -184,38 +204,109 @@ class OutputMappingManager: ObservableObject {
     }
     
     func setPosition(_ position: CGPoint) {
-        currentMapping.position = position
+        let clampedX = max(0.0, min(1.0 - currentMapping.scaledSize.width, position.x))
+        let clampedY = max(0.0, min(1.0 - currentMapping.scaledSize.height, position.y))
+        currentMapping.position = CGPoint(x: clampedX, y: clampedY)
         if snapToEdges {
             currentMapping.snapToEdges(in: canvasSize, threshold: snapThreshold)
         }
+        publishAndNotify()
     }
     
     func setSize(_ size: CGSize) {
+        let oldCenter = currentMapping.center
         currentMapping.setSize(size, maintainAspectRatio: currentMapping.aspectRatioLocked)
+        currentMapping.position = CGPoint(
+            x: oldCenter.x - currentMapping.scaledSize.width / 2,
+            y: oldCenter.y - currentMapping.scaledSize.height / 2
+        )
+        setPosition(currentMapping.position)
+        publishAndNotify()
     }
     
     func setRotation(_ rotation: Float) {
         currentMapping.rotation = rotation
+        publishAndNotify()
     }
     
     func setScale(_ scale: CGFloat) {
-        currentMapping.scale = max(0.1, min(5.0, scale))
+        let clamped = max(0.1, min(5.0, scale))
+        let oldCenter = currentMapping.center
+        currentMapping.scale = clamped
+        currentMapping.position = CGPoint(
+            x: oldCenter.x - currentMapping.scaledSize.width / 2,
+            y: oldCenter.y - currentMapping.scaledSize.height / 2
+        )
+        setPosition(currentMapping.position)
+        publishAndNotify()
     }
     
     func setOpacity(_ opacity: Float) {
         currentMapping.opacity = max(0.0, min(1.0, opacity))
+        publishAndNotify()
     }
     
+    func setPositionX(_ normalizedX: CGFloat) {
+        setPosition(CGPoint(x: normalizedX, y: currentMapping.position.y))
+    }
+    
+    func setPositionY(_ normalizedY: CGFloat) {
+        setPosition(CGPoint(x: currentMapping.position.x, y: normalizedY))
+    }
+    
+    func setWidth(_ normalizedWidth: CGFloat) {
+        let clampedW = max(0.01, min(1.0, normalizedWidth))
+        setSize(CGSize(width: clampedW, height: currentMapping.size.height))
+    }
+    
+    func setHeight(_ normalizedHeight: CGFloat) {
+        let clampedH = max(0.01, min(1.0, normalizedHeight))
+        setSize(CGSize(width: currentMapping.size.width, height: clampedH))
+    }
+
+    func startScrubbing(for parameter: MappingParameter, initialValue: CGFloat) {
+        switch parameter {
+        case .positionX:
+            isScrubbingX = true
+            scrubStartValue = initialValue
+        case .positionY:
+            isScrubbingY = true
+            scrubStartValue = initialValue
+        case .width:
+            isScrubbingW = true
+            scrubStartValue = initialValue
+        case .height:
+            isScrubbingH = true
+            scrubStartValue = initialValue
+        default:
+            break
+        }
+    }
+    
+    func stopScrubbing() {
+        isScrubbingX = false
+        isScrubbingY = false
+        isScrubbingW = false
+        isScrubbingH = false
+    }
+    
+    func setPrecisionMode(_ enabled: Bool) {
+        precisionMode = enabled
+        scrubSensitivity = enabled ? 0.2 : 1.0
+    }
+
     // MARK: - Quick Actions
     
     func fitToScreen() {
         currentMapping.fitToScreen()
         logger.info("🎯 Fit output to screen")
+        publishAndNotify()
     }
     
     func centerOutput() {
         currentMapping.centerOutput(in: canvasSize)
         logger.info("🎯 Centered output")
+        publishAndNotify()
     }
     
     func resetMapping() {
@@ -223,11 +314,13 @@ class OutputMappingManager: ObservableObject {
         currentMapping.outputResolution = canvasSize
         selectedPreset = nil
         logger.info("🎯 Reset output mapping")
+        publishAndNotify()
     }
     
     func toggleAspectRatioLock() {
         currentMapping.aspectRatioLocked.toggle()
         logger.info("🎯 Aspect ratio lock: \(self.currentMapping.aspectRatioLocked ? "ON" : "OFF")")
+        publishAndNotify()
     }
     
     // MARK: - Preset Management
@@ -426,15 +519,20 @@ class OutputMappingManager: ObservableObject {
         // OPTIMIZATION: Set encoder label for profiling
         computeEncoder.label = "OutputMappingTransform"
         
-        // Set up uniforms (pre-calculate as much as possible)
+        let centerNormalized = simd_float2(
+            Float(mapping.position.x + mapping.scaledSize.width / 2),
+            Float(mapping.position.y + mapping.scaledSize.height / 2)
+        )
+        let translationFromCenter = centerNormalized - simd_float2(0.5, 0.5)
+
         var uniforms = OutputMappingUniforms(
             transformMatrix: mapping.transformMatrix,
             outputSize: simd_float2(Float(canvasSize.width), Float(canvasSize.height)),
             inputSize: simd_float2(Float(sourceTexture.width), Float(sourceTexture.height)),
             opacity: mapping.opacity,
-            rotation: mapping.rotation * .pi / 180.0, // Convert to radians
+            rotation: mapping.rotation * .pi / 180.0,
             scale: simd_float2(Float(mapping.scale * mapping.size.width), Float(mapping.scale * mapping.size.height)),
-            translation: simd_float2(Float(mapping.position.x), Float(mapping.position.y))
+            translation: translationFromCenter
         )
         
         // Set compute pipeline and resources
@@ -591,6 +689,15 @@ class OutputMappingManager: ObservableObject {
         
         return validPosition && validSize && validScale && validOpacity
     }
+
+    private func publishAndNotify() {
+        self.currentMapping = self.currentMapping
+        NotificationCenter.default.post(
+            name: .outputMappingDidChange,
+            object: self,
+            userInfo: ["mapping": currentMapping]
+        )
+    }
 }
 
 // MARK: - Convenience Extensions
@@ -643,4 +750,20 @@ struct OutputMappingUniforms {
     var rotation: Float
     var scale: simd_float2
     var translation: simd_float2
+}
+
+// MARK: - Supporting Types
+
+enum MappingParameter: String, CaseIterable {
+    case positionX = "Position X"
+    case positionY = "Position Y"
+    case width = "Width"
+    case height = "Height"
+    case rotation = "Rotation"
+    case scale = "Scale"
+    case opacity = "Opacity"
+}
+
+extension Notification.Name {
+    static let outputMappingDidChange = Notification.Name("outputMappingDidChange")
 }

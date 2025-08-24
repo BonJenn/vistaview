@@ -1,6 +1,6 @@
 //
 //  CommandPaletteView.swift
-//  Vistaview - Raycast-Inspired Command Palette
+//  Vantaview - Raycast-Inspired Command Palette
 //
 
 import SwiftUI

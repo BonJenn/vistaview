@@ -1,6 +1,6 @@
 //
 //  VirtualCameraIntegration.swift
-//  Vistaview
+//  Vantaview
 //
 //  Created by You, rescued by ChatGPT.
 //

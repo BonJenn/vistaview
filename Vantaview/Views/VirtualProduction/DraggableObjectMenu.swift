@@ -1,6 +1,6 @@
 //
 //  DraggableObjectMenu.swift
-//  Vistaview - Draggable object menu with visual thumbnails
+//  Vantaview - Draggable object menu with visual thumbnails
 //
 
 import SwiftUI

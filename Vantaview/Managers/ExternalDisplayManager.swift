@@ -56,28 +56,66 @@ class ExternalDisplayManager: ObservableObject {
         print("🖥️ External Display Manager: Production manager set")
     }
     
+    // MARK: - Private Properties (add these)
+    private var lastUpdateTime: CFTimeInterval = 0
+    private let updateThrottleInterval: CFTimeInterval = 1.0/120.0  // 120fps
+    
     private func setupCameraFeedSubscriptions() {
         guard let productionManager = productionManager else { return }
         
         cancellables.removeAll()
         
         if isFullScreenActive {
-            print("🖥️ External Display: Setting up camera feed subscriptions")
+            print("🖥️ External Display: Setting up LIVE image subscriptions")
             
-            productionManager.cameraFeedManager.$selectedFeedForLiveProduction
-                .sink { [weak self] selectedFeed in
-                    Task { @MainActor in
-                        self?.handleSelectedFeedChange(selectedFeed)
+            // Subscribe to program source changes for immediate updates
+            productionManager.previewProgramManager.$programSource
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] programSource in
+                    self?.handleProgramSourceChange(programSource)
+                }
+                .store(in: &cancellables)
+            
+            // Subscribe to output mapping changes for real-time transformation
+            NotificationCenter.default.publisher(for: .outputMappingDidChange)
+                .throttle(for: .milliseconds(8), scheduler: DispatchQueue.main, latest: true)  // ~120fps
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] notification in
+                    if let mapping = notification.userInfo?["mapping"] as? OutputMapping {
+                        self?.handleOutputMappingChange(mapping)
                     }
                 }
                 .store(in: &cancellables)
         }
     }
     
-    private func handleSelectedFeedChange(_ selectedFeed: CameraFeed?) {
-        print("🔄 External Display: Selected feed changed to \(selectedFeed?.device.displayName ?? "none")")
+    private func handleProgramSourceChange(_ programSource: ContentSource) {
+        print("🔄 External Display: Program source changed to \(programSource)")
+        
+        // Update all external windows immediately
+        if let window = externalWindow,
+           let professionalView = window.contentView as? ProfessionalVideoView {
+            professionalView.updateProgramSource(programSource)
+        }
     }
     
+    private func handleOutputMappingChange(_ mapping: OutputMapping) {
+        let currentTime = CACurrentMediaTime()
+        
+        // Throttle updates for smooth performance
+        if currentTime - lastUpdateTime < updateThrottleInterval {
+            return
+        }
+        
+        lastUpdateTime = currentTime
+        
+        // Immediately apply new mapping to external display
+        if let window = externalWindow,
+           let professionalView = window.contentView as? ProfessionalVideoView {
+            professionalView.updateOutputMapping(mapping)
+        }
+    }
+
     // MARK: - Display Scanning
     
     private func scanForDisplays() {
@@ -211,15 +249,10 @@ class ExternalDisplayManager: ObservableObject {
             return
         }
         
-        guard let metalDevice = outputMappingManager.metalDevice as MTLDevice? else {
-            print("❌ [DEBUG] Metal device is not available")
-            showErrorAlert("Graphics Device Error", "Metal graphics device is not available. External display requires hardware acceleration.")
-            return
-        }
-        
+        let metalDevice = outputMappingManager.metalDevice
         print("✅ [DEBUG] All components validated successfully")
         print("✅ [DEBUG] Metal device: \(metalDevice.name)")
-        
+
         guard availableDisplays.contains(where: { $0.id == display.id }) else {
             print("❌ [DEBUG] Display \(display.name) is no longer available")
             
@@ -234,12 +267,7 @@ class ExternalDisplayManager: ObservableObject {
         print("🖥️ [DEBUG] Display bounds: \(display.bounds)")
         print("🖥️ [DEBUG] Is main display: \(display.isMain)")
         
-        // Close existing window if any (with error handling)
-        do {
-            stopFullScreenOutput()
-        } catch {
-            print("⚠️ [DEBUG] Error stopping previous output: \(error)")
-        }
+        stopFullScreenOutput()
         
         // Set up camera feed subscriptions
         setupCameraFeedSubscriptions()
@@ -256,19 +284,18 @@ class ExternalDisplayManager: ObservableObject {
     private func createExternalWindowSafe(for display: DisplayInfo, productionManager: UnifiedProductionManager) throws {
         print("🚀 [LED WALL] Creating INSTANT external window")
         
-        // Find target screen efficiently
-        var targetScreen: NSScreen?
-        let nonMainScreens = NSScreen.screens.filter { $0 != NSScreen.main }
+        let screens = NSScreen.screens
+        let nonMainScreens: [NSScreen] = {
+            if let main = NSScreen.main {
+                return screens.filter { $0 !== main }
+            } else {
+                return screens
+            }
+        }()
         
-        if let largest = nonMainScreens.max(by: { s1, s2 in
+        let targetScreen: NSScreen? = nonMainScreens.max(by: { s1, s2 in
             (s1.frame.width * s1.frame.height) < (s2.frame.width * s2.frame.height)
-        }) {
-            targetScreen = largest
-        } else if let firstExternal = nonMainScreens.first {
-            targetScreen = firstExternal
-        } else {
-            targetScreen = NSScreen.main
-        }
+        }) ?? nonMainScreens.first ?? NSScreen.main
         
         guard let screen = targetScreen else {
             throw ExternalDisplayError.noMatchingScreen(displayName: display.name)
@@ -291,14 +318,13 @@ class ExternalDisplayManager: ObservableObject {
             screen: screen
         )
         
-        window.title = "Vistaview LED Output"
+        window.title = "Vantaview LED Output"
         window.backgroundColor = .black
         window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hasShadow = false
         window.isOpaque = true
         
-        // CORRECT: Use AVFoundation-based view like Final Cut Pro
         let videoView = ProfessionalVideoView(
             productionManager: productionManager,
             displayInfo: display,
@@ -320,14 +346,7 @@ class ExternalDisplayManager: ObservableObject {
     
     func toggleFullScreen() {
         guard let window = externalWindow else { return }
-        
-        if window.styleMask.contains(.fullScreen) {
-            window.toggleFullScreen(nil)
-            print("🖥️ Exited full-screen mode")
-        } else {
-            window.toggleFullScreen(nil)
-            print("🖥️ Entered full-screen mode")
-        }
+        window.toggleFullScreen(nil)
     }
     
     func stopFullScreenOutput() {
@@ -386,7 +405,7 @@ class ExternalDisplayManager: ObservableObject {
             defer: false
         )
         
-        testWindow.title = "Vistaview Test Window"
+        testWindow.title = "Vantaview Test Window"
         testWindow.backgroundColor = .red
         testWindow.makeKeyAndOrderFront(nil)
         
@@ -429,64 +448,83 @@ class ExternalDisplayManager: ObservableObject {
             return false
         }
         
-        guard productionManager.outputMappingManager.metalDevice != nil else {
-            print("❌ ExternalDisplayManager: No Metal device")
-            return false
-        }
+        _ = productionManager.outputMappingManager.metalDevice
         
         return true
     }
 }
 
-// MARK: - PROFESSIONAL Video View (Final Cut Pro Style)
+// MARK: - ENHANCED PROFESSIONAL Video View
 
 class ProfessionalVideoView: NSView {
     private var productionManager: UnifiedProductionManager
     private let displayInfo: ExternalDisplayManager.DisplayInfo
     private var cancellables = Set<AnyCancellable>()
     
-    // Core video display layer
+    // REAL-TIME VIDEO LAYERS
     private var videoLayer: CALayer!
+    private var overlayLayer: CALayer!
+    private var transformLayer: CALayer!
+    
+    // LIVE IMAGE PROCESSING
+    private var currentOutputMapping: OutputMapping = OutputMapping()
     private var lastProcessedFrameCount: Int = 0
+    
+    private let metalDevice: MTLDevice
+    private let commandQueue: MTLCommandQueue
     
     // Performance tracking
     private var frameCount = 0
     private var lastFPSTime = CACurrentMediaTime()
     private var fps: Double = 0
     
+    private var frameTimer: Timer?
+    
     init(productionManager: UnifiedProductionManager, displayInfo: ExternalDisplayManager.DisplayInfo, frame: CGRect) {
         self.productionManager = productionManager
         self.displayInfo = displayInfo
+        self.metalDevice = productionManager.outputMappingManager.metalDevice
+        self.commandQueue = self.metalDevice.makeCommandQueue()!
         super.init(frame: frame)
         
-        setupVideoLayer()
-        setupCameraObservation()
+        setupAdvancedVideoLayers()
+        setupRealtimeImageObservation()
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) not supported")
     }
     
-    private func setupVideoLayer() {
-        // Simple, efficient CALayer for video display
+    private func setupAdvancedVideoLayers() {
+        wantsLayer = true
+        
+        layer = CALayer()
+        layer?.backgroundColor = CGColor.black
+        
+        transformLayer = CALayer()
+        transformLayer.frame = bounds
+        transformLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        layer?.addSublayer(transformLayer)
+        
         videoLayer = CALayer()
         videoLayer.frame = bounds
         videoLayer.backgroundColor = CGColor.black
-        videoLayer.contentsGravity = .resizeAspectFill
-        
-        // Optimize for video playback
+        videoLayer.contentsGravity = .resizeAspect
         videoLayer.isOpaque = true
         videoLayer.drawsAsynchronously = true
+        transformLayer.addSublayer(videoLayer)
         
-        // Enable layer backing
-        wantsLayer = true
-        layer = videoLayer
+        overlayLayer = CALayer()
+        overlayLayer.frame = bounds
+        layer?.addSublayer(overlayLayer)
         
-        print("🚀 Professional video layer initialized")
+        print("🚀 Advanced video layers initialized")
     }
     
-    private func setupCameraObservation() {
-        // Direct observation of program source changes
+
+    private func setupRealtimeImageObservation() {
+        // Observe program source changes
         productionManager.previewProgramManager.$programSource
             .receive(on: DispatchQueue.main)
             .sink { [weak self] programSource in
@@ -494,13 +532,23 @@ class ProfessionalVideoView: NSView {
             }
             .store(in: &cancellables)
         
-        // Start initial observation
+        // Start with current program source
         handleProgramSourceChange(productionManager.previewProgramManager.programSource)
+    }
+    
+    func updateProgramSource(_ programSource: ContentSource) {
+        handleProgramSourceChange(programSource)
+    }
+    
+    func updateOutputMapping(_ mapping: OutputMapping) {
+        currentOutputMapping = mapping
+        applyTransformToVideoLayer()
     }
     
     private func handleProgramSourceChange(_ programSource: ContentSource) {
         // Clear previous observers
         cancellables.removeAll()
+        stopFrameTimer()
         
         // Re-add program source observer
         productionManager.previewProgramManager.$programSource
@@ -514,46 +562,203 @@ class ProfessionalVideoView: NSView {
         
         switch programSource {
         case .camera(let feed):
-            print("🚀 Setting up camera observation for \(feed.device.displayName)")
+            print("🚀 LIVE: Setting up camera feed for \(feed.device.displayName)")
             
-            // Observe camera frames directly
             feed.$previewImage
                 .compactMap { $0 }
+                .throttle(for: .milliseconds(16), scheduler: DispatchQueue.main, latest: true)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] cgImage in
-                    self?.displayFrame(cgImage)
+                    self?.displayLiveFrame(cgImage)
+                }
+                .store(in: &cancellables)
+            
+            feed.$frameCount
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] frameCount in
+                    if frameCount > (self?.lastProcessedFrameCount ?? 0) {
+                        self?.lastProcessedFrameCount = frameCount
+                    }
                 }
                 .store(in: &cancellables)
                 
         case .media(let mediaFile, _):
-            displayPlaceholder(text: "Media: \(mediaFile.name)", color: .systemPurple)
+            if mediaFile.fileType == .image {
+                displayMediaPreview(mediaFile)
+            } else {
+                startProgramFrameTimer()
+            }
             
         case .virtual(let camera):
-            displayPlaceholder(text: "Virtual: \(camera.name)", color: .systemTeal)
+            displayVirtualCameraPreview(camera)
             
         case .none:
             displayPlaceholder(text: "No Program Source", color: .systemGray)
         }
     }
     
-    private func displayFrame(_ cgImage: CGImage) {
-        // Apply effects if they exist
+    private func displayLiveFrame(_ cgImage: CGImage) {
         var processedImage = cgImage
         
         if let effectChain = productionManager.previewProgramManager.getProgramEffectChain(),
-           !effectChain.effects.isEmpty {
+           !effectChain.effects.isEmpty,
+           effectChain.isEnabled {
             if let effectsProcessed = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
                 processedImage = effectsProcessed
             }
         }
         
-        // EFFICIENT: Direct layer contents update (no Metal overhead)
         CATransaction.begin()
-        CATransaction.setDisableActions(true)  // No animations for performance
+        CATransaction.setDisableActions(true)
         videoLayer.contents = processedImage
         CATransaction.commit()
         
         updateFPS()
+    }
+    
+    private func displayMediaPreview(_ mediaFile: MediaFile) {
+        print("🎬 Displaying media preview: \(mediaFile.name)")
+        if mediaFile.fileType == .image {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                if let image = NSImage(contentsOf: mediaFile.url),
+                   let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    DispatchQueue.main.async {
+                        self?.displayLiveFrame(cgImage)
+                    }
+                }
+            }
+        } else {
+            startProgramFrameTimer()
+        }
+    }
+    
+    private func displayVirtualCameraPreview(_ camera: VirtualCamera) {
+        print("🎥 Displaying virtual camera: \(camera.name)")
+        
+        // TODO: Integrate with virtual camera renderer
+        displayPlaceholder(text: "Virtual: \(camera.name)", color: .systemTeal)
+    }
+    
+    private func applyTransformToVideoLayer() {
+        let mapping = currentOutputMapping
+        
+        CATransaction.begin()
+        CATransaction.setDisableActions(false)
+        CATransaction.setAnimationDuration(0.08)
+        
+        // Center-based translation
+        let scaledW = mapping.size.width * mapping.scale
+        let scaledH = mapping.size.height * mapping.scale
+        let centerXNorm = mapping.position.x + scaledW / 2.0
+        let centerYNorm = mapping.position.y + scaledH / 2.0
+        let dx = (centerXNorm - 0.5) * bounds.width
+        let dy = (centerYNorm - 0.5) * bounds.height
+        
+        // Ensure center anchor and position are kept
+        transformLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        
+        var transform = CATransform3DIdentity
+        transform = CATransform3DTranslate(transform, dx, dy, 0)
+        if abs(mapping.rotation) > 0.01 {
+            let radians = mapping.rotation * .pi / 180.0
+            transform = CATransform3DRotate(transform, CGFloat(radians), 0, 0, 1)
+        }
+        transform = CATransform3DScale(transform, scaledW, scaledH, 1.0)
+        
+        transformLayer.transform = transform
+        transformLayer.opacity = Float(mapping.opacity)
+        
+        CATransaction.commit()
+    }
+    
+    // MARK: - Metal Helper Methods
+    
+    private func convertCGImageToMetalTexture(_ cgImage: CGImage) -> MTLTexture? {
+        let device = productionManager.outputMappingManager.metalDevice
+        let textureLoader = MTKTextureLoader(device: device)
+        
+        do {
+            let options: [MTKTextureLoader.Option: Any] = [
+                .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                .textureStorageMode: MTLStorageMode.private.rawValue
+            ]
+            
+            return try textureLoader.newTexture(cgImage: cgImage, options: options)
+        } catch {
+            print("❌ Failed to convert CGImage to Metal texture: \(error)")
+            return nil
+        }
+    }
+    
+    private func convertMetalTextureToCGImage(_ texture: MTLTexture) -> CGImage? {
+        let width = texture.width
+        let height = texture.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        let totalBytes = height * bytesPerRow
+        
+        var readableTexture = texture
+        
+        if texture.storageMode == .private {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: texture.pixelFormat,
+                width: width,
+                height: height,
+                mipmapped: false
+            )
+            desc.usage = [.shaderRead]
+            desc.storageMode = .shared
+            
+            guard let stagingTexture = metalDevice.makeTexture(descriptor: desc),
+                  let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let blit = commandBuffer.makeBlitCommandEncoder() else {
+                print("❌ Failed to create staging resources for readback")
+                return nil
+            }
+            
+            let origin = MTLOrigin(x: 0, y: 0, z: 0)
+            let size = MTLSize(width: width, height: height, depth: 1)
+            blit.copy(
+                from: texture,
+                sourceSlice: 0,
+                sourceLevel: 0,
+                sourceOrigin: origin,
+                sourceSize: size,
+                to: stagingTexture,
+                destinationSlice: 0,
+                destinationLevel: 0,
+                destinationOrigin: origin
+            )
+            blit.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            
+            readableTexture = stagingTexture
+        }
+        
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: totalBytes, alignment: 64)
+        defer { buffer.deallocate() }
+        
+        let region = MTLRegionMake2D(0, 0, width, height)
+        readableTexture.getBytes(buffer, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        )
+        
+        guard let context = CGContext(
+            data: buffer,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo.rawValue
+        ) else { return nil }
+        
+        return context.makeImage()
     }
     
     private func displayPlaceholder(text: String, color: NSColor) {
@@ -609,13 +814,33 @@ class ProfessionalVideoView: NSView {
             }
         }
     }
+
+    private func startProgramFrameTimer() {
+        stopFrameTimer()
+        frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if let tex = self.productionManager.previewProgramManager.programCurrentTexture,
+               let cg = self.convertMetalTextureToCGImage(tex) {
+                self.displayLiveFrame(cg)
+            }
+        }
+        RunLoop.main.add(frameTimer!, forMode: .common)
+    }
     
+    private func stopFrameTimer() {
+        frameTimer?.invalidate()
+        frameTimer = nil
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        transformLayer.frame = bounds
+        transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY) // keep centered
         videoLayer.frame = bounds
+        overlayLayer.frame = bounds
         CATransaction.commit()
     }
     

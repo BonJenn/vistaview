@@ -1,6 +1,6 @@
 //
 //  Enhanced3DViewport.swift  
-//  Vistaview - Functional 3D Viewport with Integrated Drag & Drop
+//  Vantaview - Functional 3D Viewport with Integrated Drag & Drop
 //
 
 import SwiftUI

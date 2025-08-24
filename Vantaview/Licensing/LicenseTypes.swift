@@ -1,15 +1,15 @@
 //
 //  LicenseTypes.swift
-//  Vistaview
+//  Vantaview
 //
-//  Created by Vistaview on 12/19/24.
+//  Created by Vantaview on 12/19/24.
 //
 
 import Foundation
 
 // MARK: - Plan Tiers
 
-/// Subscription tiers available in Vistaview
+/// Subscription tiers available in Vantaview
 enum PlanTier: String, CaseIterable, Codable {
     case stream = "stream"
     case live = "live" 

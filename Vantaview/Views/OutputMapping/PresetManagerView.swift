@@ -439,7 +439,7 @@ struct ExportImportView: View {
             isPresented: $showFileExporter,
             document: PresetExportDocument(presets: mappingManager.presets),
             contentType: .json,
-            defaultFilename: "VistaviewOutputPresets"
+            defaultFilename: "VantaviewOutputPresets"
         ) { result in
             switch result {
             case .success(let url):
