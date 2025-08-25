@@ -56,7 +56,7 @@ struct AdvancedXYWHControls: View {
                                 get: { currentMapping.position.x * canvasSize.width },
                                 set: { outputMappingManager.setPositionX($0 / canvasSize.width) }
                             ),
-                            range: 0...(canvasSize.width - currentMapping.size.width * canvasSize.width),
+                            range: 0...canvasSize.width,
                             format: "%.0f",
                             suffix: "px",
                             color: .blue,
@@ -83,7 +83,7 @@ struct AdvancedXYWHControls: View {
                                 get: { currentMapping.position.y * canvasSize.height },
                                 set: { outputMappingManager.setPositionY($0 / canvasSize.height) }
                             ),
-                            range: 0...(canvasSize.height - currentMapping.size.height * canvasSize.height),
+                            range: 0...canvasSize.height,
                             format: "%.0f",
                             suffix: "px",
                             color: .green,
@@ -113,7 +113,7 @@ struct AdvancedXYWHControls: View {
                                 get: { currentMapping.size.width * canvasSize.width },
                                 set: { outputMappingManager.setWidth($0 / canvasSize.width) }
                             ),
-                            range: 10...(canvasSize.width - currentMapping.position.x * canvasSize.width),
+                            range: 1...canvasSize.width,
                             format: "%.0f",
                             suffix: "px",
                             color: .purple,
@@ -140,7 +140,7 @@ struct AdvancedXYWHControls: View {
                                 get: { currentMapping.size.height * canvasSize.height },
                                 set: { outputMappingManager.setHeight($0 / canvasSize.height) }
                             ),
-                            range: 10...(canvasSize.height - currentMapping.position.y * canvasSize.height),
+                            range: 1...canvasSize.height,
                             format: "%.0f",
                             suffix: "px",
                             color: .orange,
@@ -345,7 +345,7 @@ struct ScrubbableValueField: View {
             isEditing = true
         }
         .gesture(
-            DragGesture(minimumDistance: 1)
+            DragGesture(minimumDistance: 0)
                 .onChanged { dragValue in
                     if !isDragging {
                         isDragging = true

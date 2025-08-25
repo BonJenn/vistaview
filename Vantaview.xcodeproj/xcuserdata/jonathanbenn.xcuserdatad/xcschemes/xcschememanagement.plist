@@ -4,7 +4,7 @@
 <dict>
 	<key>SchemeUserState</key>
 	<dict>
-		<key>Vantaview.xcscheme_^#shared#^_</key>
+		<key>Copy of Vantaview.xcscheme</key>
 		<dict>
 			<key>orderHint</key>
 			<integer>0</integer>
@@ -12,7 +12,30 @@
 		<key>Vantaview.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
+			<integer>1</integer>
+		</dict>
+		<key>Vistaview.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
 			<integer>0</integer>
+		</dict>
+	</dict>
+	<key>SuppressBuildableAutocreation</key>
+	<dict>
+		<key>9800B3882E0C88DB00AABCE9</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>9800B3992E0C88DE00AABCE9</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>9800B3A32E0C88DE00AABCE9</key>
+		<dict>
+			<key>primary</key>
+			<true/>
 		</dict>
 	</dict>
 </dict>

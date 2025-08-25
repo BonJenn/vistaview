@@ -115,14 +115,6 @@ class OutputMappingManager: ObservableObject {
     }
     
     private func setupBindings() {
-        // Auto-save when mapping changes
-        $currentMapping
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-            .store(in: &cancellables)
-        
         // Update selected preset when mapping changes
         $currentMapping
             .sink { [weak self] mapping in

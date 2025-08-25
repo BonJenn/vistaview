@@ -8,6 +8,8 @@ class PreviewRenderer: NSObject, MTKViewDelegate {
     private var blurEnabled: Bool
     private var blurAmount: Float
 
+    private var heartbeatBuffer: MTLBuffer?
+
     init?(mtkView: MTKView, blurEnabled: Bool, blurAmount: Float) {
         guard let device = mtkView.device ?? MTLCreateSystemDefaultDevice(),
               let commandQueue = device.makeCommandQueue() else {
@@ -22,6 +24,7 @@ class PreviewRenderer: NSObject, MTKViewDelegate {
 
         super.init()
         mtkView.device = device
+        heartbeatBuffer = device.makeBuffer(length: 4, options: .storageModeShared)
         setupPipeline(mtkView: mtkView)
     }
 
@@ -51,12 +54,45 @@ class PreviewRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        let capturing = MTLCaptureManager.shared().isCapturing
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            if capturing, let hb = heartbeatBuffer, let cb = commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() {
+                cb.label = "PreviewRenderer_NoCB"
+                blit.fill(buffer: hb, range: 0..<4, value: 0)
+                blit.endEncoding()
+                cb.commit()
+            }
+            return
+        }
+
         guard let drawable = view.currentDrawable,
-              let descriptor = view.currentRenderPassDescriptor,
-              let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor),
-              let pipelineState = pipelineState else {
-            print("⚠️ draw skipped due to nil")
+              let descriptor = view.currentRenderPassDescriptor else {
+            if capturing, let hb = heartbeatBuffer, let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.fill(buffer: hb, range: 0..<4, value: 0)
+                blit.endEncoding()
+                commandBuffer.commit()
+            }
+            return
+        }
+
+        guard let pipelineState = pipelineState else {
+            if capturing, let hb = heartbeatBuffer, let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.fill(buffer: hb, range: 0..<4, value: 0)
+                blit.endEncoding()
+                commandBuffer.present(drawable)
+                commandBuffer.commit()
+            }
+            return
+        }
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+            if capturing, let hb = heartbeatBuffer, let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.fill(buffer: hb, range: 0..<4, value: 0)
+                blit.endEncoding()
+                commandBuffer.present(drawable)
+                commandBuffer.commit()
+            }
             return
         }
 

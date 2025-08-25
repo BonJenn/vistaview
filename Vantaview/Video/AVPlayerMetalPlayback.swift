@@ -3,6 +3,9 @@ import AVFoundation
 import CoreVideo
 import Metal
 import QuartzCore
+#if os(macOS)
+import AppKit
+#endif
 
 final class AVPlayerMetalPlayback {
     private let device: MTLDevice
@@ -16,6 +19,14 @@ final class AVPlayerMetalPlayback {
     private var displayLink: CVDisplayLink?
     private let lock = NSLock()
     
+    private final class CallbackBox {
+        weak var owner: AVPlayerMetalPlayback?
+        init(owner: AVPlayerMetalPlayback) { self.owner = owner }
+    }
+    private var callbackBox: CallbackBox?
+    
+    private var isActive = false
+
     private let player: AVPlayer
     private let itemOutput: AVPlayerItemVideoOutput
     
@@ -40,9 +51,6 @@ final class AVPlayerMetalPlayback {
     var onWatchdog: (() -> Void)?
     private var lastWatchdogFire: CFTimeInterval = 0
 
-    // Capture next frame control
-    private var captureNextFrameRequested = false
-
     // HDR tone map toggle (auto-enabled if PQ/HLG detected)
     var toneMapEnabled: Bool = false
     var swapUV: Bool = false
@@ -64,38 +72,52 @@ final class AVPlayerMetalPlayback {
         let scope = capMgr.makeCaptureScope(commandQueue: queue)
         scope.label = "PlaybackCaptureScope"
         self.captureScope = scope
-        // Set as default so Xcode's Capture GPU Frame uses this scope
-        capMgr.defaultCaptureScope = scope
+        // Ensure Xcode's default capture scope doesn't auto-start for us
+        if capMgr.defaultCaptureScope === scope { capMgr.defaultCaptureScope = nil }
         
+        self.callbackBox = CallbackBox(owner: self)
         var link: CVDisplayLink?
         guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess, let link else { return nil }
         self.displayLink = link
+        let userPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(callbackBox!).toOpaque())
         CVDisplayLinkSetOutputCallback(link, { (_, _, _, _, _, user) -> CVReturn in
-            let obj = Unmanaged<AVPlayerMetalPlayback>.fromOpaque(user!).takeUnretainedValue()
-            obj.pullFrame()
+            guard let user else { return kCVReturnSuccess }
+            let box = Unmanaged<CallbackBox>.fromOpaque(user).takeUnretainedValue()
+            guard let owner = box.owner else { return kCVReturnSuccess }
+            owner.pullFrame()
             return kCVReturnSuccess
-        }, UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
+        }, userPtr)
     }
     
     deinit {
         stop()
+        if let link = displayLink {
+            CVDisplayLinkSetOutputCallback(link, { _,_,_,_,_,_ in kCVReturnSuccess }, nil)
+        }
+        callbackBox?.owner = nil
+        callbackBox = nil
+        if let cache = textureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
     }
     
     func setEffectRunner(_ runner: EffectRunner?) {
         self.effectRunner = runner
     }
-    
+
+    func enableAutoCaptureOnWatchdog(_ enabled: Bool) {
+        // no-op: programmatic GPU capture disabled
+    }
+
     func captureNextFrame() {
-        captureNextFrameRequested = true
+        // no-op: programmatic GPU capture disabled
     }
 
     private func makeParams(for pixelBuffer: CVPixelBuffer, pixelFormat: OSType) -> ConvertParams {
-        // Column-major YUV->RGB (Rec.709 full-range by default)
-        // Columns correspond to Y, U, V contributions respectively.
         var m = simd_float3x3(
-            simd_float3(1.0,  1.0,    1.0),          // Y column
-            simd_float3(0.0, -0.1873, 1.8556),       // U column
-            simd_float3(1.5748, -0.4681, 0.0)        // V column
+            simd_float3(1.0,  1.0,    1.0),
+            simd_float3(0.0, -0.1873, 1.8556),
+            simd_float3(1.5748, -0.4681, 0.0)
         )
         var yOffset: Float = 0.0
         var uvOffset: Float = 0.5
@@ -105,16 +127,15 @@ final class AVPlayerMetalPlayback {
         if let matrix = CVBufferGetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue() as? String {
             if matrix == kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String {
                 m = simd_float3x3(
-                    simd_float3(1.0,  1.0,    1.0),           // Y
-                    simd_float3(0.0, -0.344136, 1.7720),       // U
-                    simd_float3(1.4020, -0.714136, 0.0)        // V
+                    simd_float3(1.0,  1.0,    1.0),
+                    simd_float3(0.0, -0.344136, 1.7720),
+                    simd_float3(1.4020, -0.714136, 0.0)
                 )
             } else if matrix == kCVImageBufferYCbCrMatrix_ITU_R_2020 as String {
-                // Optional: Rec.2020 non-constant luminance approximation (column-major)
                 m = simd_float3x3(
-                    simd_float3(1.0,  1.0,    1.0),           // Y
-                    simd_float3(0.0, -0.16455, 1.8814),        // U
-                    simd_float3(1.4746, -0.57135, 0.0)         // V
+                    simd_float3(1.0,  1.0,    1.0),
+                    simd_float3(0.0, -0.16455, 1.8814),
+                    simd_float3(1.4746, -0.57135, 0.0)
                 )
             }
         }
@@ -151,23 +172,37 @@ final class AVPlayerMetalPlayback {
     }
 
     func start() {
-        guard let link = displayLink, !CVDisplayLinkIsRunning(link) else { return }
+        isActive = true
+        lastFrameTime = CACurrentMediaTime()
+        fpsAccumulator = 0
+        fpsCount = 0
+        lowFPSConsecutive = 0
+
+        guard let link = displayLink else { return }
+        // If already running, do nothing
+        if CVDisplayLinkIsRunning(link) { return }
         CVDisplayLinkStart(link)
     }
     
     func stop() {
-        if let link = displayLink, CVDisplayLinkIsRunning(link) {
+        isActive = false
+        latestTexture = nil
+
+        guard let link = displayLink else { return }
+        // SAFETY: unbind callback first so no more calls can hit self while stopping
+        CVDisplayLinkSetOutputCallback(link, { _,_,_,_,_,_ in kCVReturnSuccess }, nil)
+        if CVDisplayLinkIsRunning(link) {
             CVDisplayLinkStop(link)
         }
     }
-    
+
     private func pullFrame() {
-        guard let cache = textureCache, let converter = converter else { return }
+        guard let cache = textureCache, let converter = converter, isActive else { return }
         
-        // Host time -> seconds
         let hostTimeTicks = CVGetCurrentHostTime()
         let hostTimeSec = Double(hostTimeTicks) / CVGetHostClockFrequency()
         let itemTime = itemOutput.itemTime(forHostTime: hostTimeSec)
+
         guard itemOutput.hasNewPixelBuffer(forItemTime: itemTime),
               let pb = itemOutput.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else {
             return
@@ -202,20 +237,6 @@ final class AVPlayerMetalPlayback {
             self?.inFlight.signal()
         }
 
-        if captureNextFrameRequested {
-            captureNextFrameRequested = false
-            let desc = MTLCaptureDescriptor()
-            desc.captureObject = commandQueue
-            do {
-                try MTLCaptureManager.shared().startCapture(with: desc)
-            } catch {
-                print("Failed to start capture: \(error)")
-            }
-            cb.addCompletedHandler { _ in
-                MTLCaptureManager.shared().stopCapture()
-            }
-        }
-        
         cb.pushDebugGroup("PlaybackFrame")
         
         // Plane textures: choose correct formats for 8-bit vs 10-bit NV12 using pixel format type
@@ -236,7 +257,7 @@ final class AVPlayerMetalPlayback {
         // Per-frame color params
         let params = makeParams(for: pb, pixelFormat: fmt)
 
-        // NV12 -> BGRA (with color correctness and optional tone map)
+        // NV12 -> BGRA
         converter.encode(commandBuffer: cb, luma: yTex, chroma: uvTex, output: outBGRA, params: params)
         
         // Effects (if any)
@@ -250,7 +271,7 @@ final class AVPlayerMetalPlayback {
             self.latestTexture = finalTex
             self.lock.unlock()
             
-            // FPS + watchdog
+            // FPS + watchdog (no auto capture)
             let now = CACurrentMediaTime()
             let dt = now - self.lastFrameTime
             self.lastFrameTime = now
@@ -272,10 +293,12 @@ final class AVPlayerMetalPlayback {
                     if self.lowFPSConsecutive >= 6 && (tNow - self.lastWatchdogFire) > 60 {
                         self.lastWatchdogFire = tNow
                         self.onWatchdog?()
-                        // Auto-capture one frame for analysis
-                        self.captureNextFrame()
                     }
                 }
+            }
+
+            if self.frameIndex % 600 == 0 {
+                CVMetalTextureCacheFlush(cache, 0)
             }
         }
         
@@ -304,13 +327,12 @@ final class AVPlayerMetalPlayback {
         return tex
     }
 
-    // HDR transfer function detection without relying on unavailable CoreVideo constants
     private func isHDRTransferFunction(_ tf: String) -> Bool {
         let s = tf.lowercased()
         if s.contains("itu_r_2100_pq") { return true }
-        if s.contains("smpte") && s.contains("2084") { return true } // SMPTE ST 2084 (PQ)
-        if s.contains("hlg") { return true } // HLG
-        if s.contains("arib") && s.contains("b67") { return true } // ARIB STD-B67 (HLG)
+        if s.contains("smpte") && s.contains("2084") { return true }
+        if s.contains("hlg") { return true }
+        if s.contains("arib") && s.contains("b67") { return true }
         return false
     }
 }

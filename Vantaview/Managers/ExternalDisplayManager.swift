@@ -65,28 +65,26 @@ class ExternalDisplayManager: ObservableObject {
         
         cancellables.removeAll()
         
-        if isFullScreenActive {
-            print("🖥️ External Display: Setting up LIVE image subscriptions")
-            
-            // Subscribe to program source changes for immediate updates
-            productionManager.previewProgramManager.$programSource
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] programSource in
-                    self?.handleProgramSourceChange(programSource)
+        print("🖥️ External Display: Setting up subscriptions")
+        
+        // Subscribe to program source changes for immediate updates
+        productionManager.previewProgramManager.$programSource
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] programSource in
+                self?.handleProgramSourceChange(programSource)
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to output mapping changes for real-time transformation
+        NotificationCenter.default.publisher(for: .outputMappingDidChange)
+            .throttle(for: .milliseconds(8), scheduler: DispatchQueue.main, latest: true)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let mapping = notification.userInfo?["mapping"] as? OutputMapping {
+                    self?.handleOutputMappingChange(mapping)
                 }
-                .store(in: &cancellables)
-            
-            // Subscribe to output mapping changes for real-time transformation
-            NotificationCenter.default.publisher(for: .outputMappingDidChange)
-                .throttle(for: .milliseconds(8), scheduler: DispatchQueue.main, latest: true)  // ~120fps
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] notification in
-                    if let mapping = notification.userInfo?["mapping"] as? OutputMapping {
-                        self?.handleOutputMappingChange(mapping)
-                    }
-                }
-                .store(in: &cancellables)
-        }
+            }
+            .store(in: &cancellables)
     }
     
     private func handleProgramSourceChange(_ programSource: ContentSource) {
@@ -342,6 +340,12 @@ class ExternalDisplayManager: ObservableObject {
         self.isFullScreenActive = true
         
         print("🚀 PROFESSIONAL Video View CREATED!")
+
+        setupCameraFeedSubscriptions()
+        if let professionalView = window.contentView as? ProfessionalVideoView {
+            professionalView.updateProgramSource(productionManager.previewProgramManager.programSource)
+            professionalView.updateOutputMapping(productionManager.outputMappingManager.currentMapping)
+        }
     }
     
     func toggleFullScreen() {
@@ -643,10 +647,8 @@ class ProfessionalVideoView: NSView {
         let mapping = currentOutputMapping
         
         CATransaction.begin()
-        CATransaction.setDisableActions(false)
-        CATransaction.setAnimationDuration(0.08)
+        CATransaction.setDisableActions(true)
         
-        // Center-based translation
         let scaledW = mapping.size.width * mapping.scale
         let scaledH = mapping.size.height * mapping.scale
         let centerXNorm = mapping.position.x + scaledW / 2.0
@@ -654,7 +656,6 @@ class ProfessionalVideoView: NSView {
         let dx = (centerXNorm - 0.5) * bounds.width
         let dy = (centerYNorm - 0.5) * bounds.height
         
-        // Ensure center anchor and position are kept
         transformLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
         
