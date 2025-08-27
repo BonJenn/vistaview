@@ -71,6 +71,12 @@ struct VantaviewApp: App {
             return
         }
         
+        #if DEBUG
+        licenseManager.debugImpersonatedTier = .pro
+        licenseManager.debugOfflineMode = false
+        licenseManager.debugExpiredMode = false
+        #endif
+        
         // Set current user for license caching
         licenseManager.setCurrentUser(userID)
         

@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var productionMode: ProductionMode = .live
     @State private var showingStudioSelector = false
     @State private var showingVirtualCameraDemo = false
+    @EnvironmentObject var licenseManager: LicenseManager
     
     // Live Production States
     @State private var rtmpURL = "rtmp://live.twitch.tv/live/"
@@ -54,6 +55,7 @@ struct ContentView: View {
                     VirtualProductionView()
                         .environmentObject(productionManager.studioManager)
                         .environmentObject(productionManager)
+                        .gated(.virtualSet3D, licenseManager: licenseManager)
                 case .live:
                     FinalCutProStyleView(
                         productionManager: productionManager,
@@ -161,6 +163,7 @@ struct TopToolbarView: View {
     @Binding var productionMode: ProductionMode
     @Binding var showingStudioSelector: Bool
     @Binding var showingVirtualCameraDemo: Bool
+    @EnvironmentObject var licenseManager: LicenseManager
     
     var body: some View {
         HStack {
@@ -206,6 +209,7 @@ struct TopToolbarView: View {
                     .foregroundColor(productionMode == .virtual ? .white : .primary)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .gated(.virtualSet3D, licenseManager: licenseManager)
                 
                 Button(action: {
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
@@ -305,6 +309,7 @@ struct TopToolbarView: View {
                     Image(systemName: "video.3d")
                 }
                 .help("Virtual Camera Demo")
+                .gated(.virtualSet3D, licenseManager: licenseManager)
             }
         }
         .padding()
@@ -323,6 +328,7 @@ struct FinalCutProStyleView: View {
     @Binding var mediaFiles: [MediaFile]
     @Binding var selectedPlatform: String
     @EnvironmentObject var layerManager: LayerStackManager
+    @EnvironmentObject var licenseManager: LicenseManager
     
     var body: some View {
         HSplitView {
@@ -355,6 +361,7 @@ struct FinalCutProStyleView: View {
                     previewProgramManager: productionManager.previewProgramManager
                 )
                 .frame(height: 180)
+                .gated(.effectsBasic, licenseManager: licenseManager)
                 
                 Divider()
                 
@@ -365,6 +372,7 @@ struct FinalCutProStyleView: View {
                     productionManager: productionManager
                 )
                 .frame(maxHeight: 300)
+                .gated(.multiScreen, licenseManager: licenseManager)
                 
                 Divider()
                 
@@ -483,6 +491,7 @@ struct PreviewProgramCenterView: View {
                         .lineLimit(1)
                 }
             }
+            
             if isPreview {
                 SimplePreviewMonitorView(productionManager: productionManager)
                     .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
@@ -995,7 +1004,7 @@ struct CameraDeviceButton: View {
                                 .font(.title2)
                             Text(hasActiveFeed ? "STOP" : (device.isAvailable ? "START" : "BUSY"))
                                 .font(.caption2)
-                                .fontWeight(.semibold)
+                                .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
                         }
                         .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
                     )

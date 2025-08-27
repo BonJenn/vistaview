@@ -316,10 +316,6 @@ struct FrameBasedVideoPlayerView: View {
             print("🎬 FrameBasedVideoPlayerView (\(isPreview ? "PREVIEW" : "PROGRAM")): View appeared")
             // Let PreviewProgramManager control playback timing
         }
-        .onDisappear {
-            print("🎬 FrameBasedVideoPlayerView (\(isPreview ? "PREVIEW" : "PROGRAM")): View disappeared, pausing playback")
-            player.pause()
-        }
         .background(Color.black)
         .clipped()
         .id("frame-video-player-\(isPreview ? "preview" : "program")-\(player.description)")
