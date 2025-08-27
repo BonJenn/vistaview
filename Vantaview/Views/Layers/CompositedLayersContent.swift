@@ -35,16 +35,8 @@ struct CompositedLayersContent: View {
         switch model.source {
         case .camera(let feedId):
             if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
-                if let ns = feed.previewNSImage {
-                    Image(nsImage: ns)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .background(Color.black)
-                } else {
-                    Color.black.overlay(
-                        ProgressView().scaleEffect(0.5)
-                    )
-                }
+                CameraFeedLiveLayerView(feed: feed)
+                    .background(Color.black)
             } else {
                 Color.black.overlay(
                     Text("Camera offline").font(.caption).foregroundColor(.white)
