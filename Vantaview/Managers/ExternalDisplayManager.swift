@@ -5,6 +5,8 @@ import Combine
 import Metal
 import MetalKit
 import CoreImage
+import AVFoundation
+import AVKit
 
 @MainActor
 class ExternalDisplayManager: ObservableObject {
@@ -18,7 +20,9 @@ class ExternalDisplayManager: ObservableObject {
     private var productionManager: UnifiedProductionManager?
     private var cancellables = Set<AnyCancellable>()
     private var displayChangeTimer: Timer?
-    
+
+    private var layerManager: LayerStackManager?
+
     struct DisplayInfo: Identifiable, Equatable {
         let id: CGDirectDisplayID
         let name: String
@@ -54,6 +58,14 @@ class ExternalDisplayManager: ObservableObject {
     func setProductionManager(_ manager: UnifiedProductionManager) {
         self.productionManager = manager
         print("🖥️ External Display Manager: Production manager set")
+    }
+
+    func setLayerStackManager(_ manager: LayerStackManager) {
+        self.layerManager = manager
+        // If window already live, connect immediately
+        if let window = externalWindow, let professionalView = window.contentView as? ProfessionalVideoView {
+            professionalView.setLayerManager(manager, productionManager: productionManager)
+        }
     }
     
     // MARK: - Private Properties (add these)
@@ -330,6 +342,10 @@ class ExternalDisplayManager: ObservableObject {
         )
         
         window.contentView = videoView
+        if let layerManager {
+            videoView.setLayerManager(layerManager, productionManager: productionManager)
+        }
+
         window.setFrame(windowRect, display: true, animate: false)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -469,6 +485,14 @@ class ProfessionalVideoView: NSView {
     private var videoLayer: CALayer!
     private var overlayLayer: CALayer!
     private var transformLayer: CALayer!
+
+    private var layersContainer: CALayer!
+
+    private var pipLayers: [UUID: CALayer] = [:]
+    private var pipSubscriptions: [UUID: AnyCancellable] = [:]
+    private var pipVideoLayers: [UUID: AVPlayerLayer] = [:]
+    private var pipVideoPlayers: [UUID: AVQueuePlayer] = [:]
+    private var pipVideoLoopers: [UUID: AVPlayerLooper] = [:]
     
     // LIVE IMAGE PROCESSING
     private var currentOutputMapping: OutputMapping = OutputMapping()
@@ -518,6 +542,11 @@ class ProfessionalVideoView: NSView {
         videoLayer.isOpaque = true
         videoLayer.drawsAsynchronously = true
         transformLayer.addSublayer(videoLayer)
+
+        layersContainer = CALayer()
+        layersContainer.frame = bounds
+        layersContainer.isOpaque = false
+        transformLayer.addSublayer(layersContainer)
         
         overlayLayer = CALayer()
         overlayLayer.frame = bounds
@@ -547,6 +576,11 @@ class ProfessionalVideoView: NSView {
     func updateOutputMapping(_ mapping: OutputMapping) {
         currentOutputMapping = mapping
         applyTransformToVideoLayer()
+        // Keep layersContainer frame in sync
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layersContainer.frame = bounds
+        CATransaction.commit()
     }
     
     private func handleProgramSourceChange(_ programSource: ContentSource) {
@@ -839,12 +873,163 @@ class ProfessionalVideoView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         transformLayer.frame = bounds
-        transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY) // keep centered
+        transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
         videoLayer.frame = bounds
+        layersContainer.frame = bounds
         overlayLayer.frame = bounds
         CATransaction.commit()
     }
-    
+
+    func setLayerManager(_ manager: LayerStackManager?, productionManager: UnifiedProductionManager?) {
+        // Clear old
+        pipSubscriptions.values.forEach { $0.cancel() }
+        pipSubscriptions.removeAll()
+        pipLayers.values.forEach { $0.removeFromSuperlayer() }
+        pipLayers.removeAll()
+        for (_, layer) in pipVideoLayers { layer.removeFromSuperlayer() }
+        pipVideoLayers.removeAll()
+        pipVideoPlayers.values.forEach { $0.pause() }
+        pipVideoPlayers.removeAll()
+        pipVideoLoopers.removeAll()
+
+        if let manager, let productionManager {
+            self.cancellables.insert(
+                manager.$layers
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] _ in self?.refreshPipLayers(manager: manager, pm: productionManager) }
+            )
+            // Initial build
+            refreshPipLayers(manager: manager, pm: productionManager)
+        }
+    }
+
+    private func refreshPipLayers(manager: LayerStackManager, pm: UnifiedProductionManager) {
+        // Remove missing
+        let alive = Set(manager.layers.map { $0.id })
+        for (id, layerObj) in pipLayers where !alive.contains(id) {
+            layerObj.removeFromSuperlayer()
+            pipLayers.removeValue(forKey: id)
+            pipSubscriptions[id]?.cancel()
+            pipSubscriptions.removeValue(forKey: id)
+            if let av = pipVideoLayers[id] {
+                av.removeFromSuperlayer()
+                pipVideoLayers.removeValue(forKey: id)
+            }
+            if let p = pipVideoPlayers[id] {
+                p.pause()
+                pipVideoPlayers.removeValue(forKey: id)
+            }
+            pipVideoLoopers.removeValue(forKey: id)
+        }
+
+        // Sort by zIndex for ordering
+        let sorted = manager.layers.sorted { $0.zIndex < $1.zIndex }
+
+        // Ensure layers exist and are configured
+        for model in sorted {
+            // Create or get
+            let lay: CALayer
+            if let existing = pipLayers[model.id] {
+                lay = existing
+            } else {
+                lay = CALayer()
+                lay.isOpaque = false
+                lay.masksToBounds = true
+                lay.contentsGravity = .resizeAspect
+                layersContainer.addSublayer(lay)
+                pipLayers[model.id] = lay
+            }
+
+            // Visibility and ordering
+            lay.isHidden = !model.isEnabled
+            lay.opacity = model.opacity
+
+            // Geometry
+            let w = bounds.width * model.sizeNorm.width
+            let h = bounds.height * model.sizeNorm.height
+            lay.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+            lay.position = CGPoint(x: bounds.width * model.centerNorm.x,
+                                   y: bounds.height * model.centerNorm.y)
+
+            // Rotation
+            var t = CATransform3DIdentity
+            if abs(model.rotationDegrees) > 0.01 {
+                let r = CGFloat(model.rotationDegrees * .pi / 180)
+                t = CATransform3DRotate(t, r, 0, 0, 1)
+            }
+            lay.transform = t
+
+            // Bind source
+            switch model.source {
+            case .camera(let feedId):
+                if pipSubscriptions[model.id] == nil {
+                    if let feed = pm.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
+                        let sub = feed.$previewImage
+                            .receive(on: DispatchQueue.main)
+                            .sink { [weak lay] cg in
+                                guard let lay else { return }
+                                CATransaction.begin()
+                                CATransaction.setDisableActions(true)
+                                lay.contents = cg
+                                CATransaction.commit()
+                            }
+                        pipSubscriptions[model.id] = sub
+                    }
+                }
+            case .media(let file):
+                switch file.fileType {
+                case .image:
+                    if let ns = NSImage(contentsOf: file.url),
+                       let cg = ns.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
+                        lay.contents = cg
+                        CATransaction.commit()
+                    }
+                case .video:
+                    // Ensure AVPlayerLayer
+                    let avLayer: AVPlayerLayer
+                    if let exist = pipVideoLayers[model.id] {
+                        avLayer = exist
+                    } else {
+                        avLayer = AVPlayerLayer()
+                        avLayer.videoGravity = .resizeAspect
+                        lay.addSublayer(avLayer)
+                        pipVideoLayers[model.id] = avLayer
+                    }
+                    avLayer.frame = lay.bounds
+
+                    // Ensure Player + Looper
+                    if pipVideoPlayers[model.id] == nil {
+                        let asset = AVURLAsset(url: file.url)
+                        let item = AVPlayerItem(asset: asset)
+                        let player = AVQueuePlayer(items: [item])
+                        let looper = AVPlayerLooper(player: player, templateItem: item)
+                        player.isMuted = true
+                        player.play()
+                        avLayer.player = player
+                        pipVideoPlayers[model.id] = player
+                        pipVideoLoopers[model.id] = looper
+                    } else {
+                        avLayer.player = pipVideoPlayers[model.id]
+                    }
+                case .audio:
+                    break
+                }
+            }
+        }
+
+        // Apply ordering (zPosition)
+        for (i, model) in sorted.enumerated() {
+            pipLayers[model.id]?.zPosition = CGFloat(i + 1)
+        }
+
+        // Apply ordering (zPosition)
+        for (i, model) in sorted.enumerated() {
+            pipLayers[model.id]?.zPosition = CGFloat(i + 1)
+        }
+    }
+
     deinit {
         cancellables.removeAll()
         print("🚀 Professional video view deinitialized")

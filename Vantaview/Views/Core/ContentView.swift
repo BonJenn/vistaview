@@ -33,6 +33,8 @@ struct ContentView: View {
     @State private var lastUIUpdate = Date()
     private let uiUpdateThreshold: TimeInterval = 1.0/20.0 // 20fps UI updates
     
+    @StateObject private var layerManager = LayerStackManager()
+
     var body: some View {
         VStack(spacing: 0) {
             // Top Toolbar
@@ -62,6 +64,7 @@ struct ContentView: View {
                         mediaFiles: $mediaFiles,
                         selectedPlatform: $selectedPlatform
                     )
+                    .environmentObject(layerManager)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,6 +81,11 @@ struct ContentView: View {
             await productionManager.initialize()
             print("ContentView: Validating production manager initialization...")
             validateProductionManagerInitialization()
+
+            await MainActor.run {
+                layerManager.setProductionManager(productionManager)
+                productionManager.externalDisplayManager.setLayerStackManager(layerManager)
+            }
         }
         .fileImporter(
             isPresented: $showingFilePicker,
@@ -314,6 +322,7 @@ struct FinalCutProStyleView: View {
     @Binding var showingFilePicker: Bool
     @Binding var mediaFiles: [MediaFile]
     @Binding var selectedPlatform: String
+    @EnvironmentObject var layerManager: LayerStackManager
     
     var body: some View {
         HSplitView {
@@ -335,6 +344,11 @@ struct FinalCutProStyleView: View {
             
             // Right Panel - Output & Streaming Controls
             VStack(spacing: 0) {
+                // Layers Panel (new)
+                LayerStackPanel(layerManager: layerManager, productionManager: productionManager)
+                    .frame(height: 200)
+                    .padding(.horizontal, 8)
+
                 // Effects List Panel (top section)
                 EffectsListPanel(
                     effectManager: productionManager.effectManager,
@@ -374,6 +388,8 @@ struct FinalCutProStyleView: View {
 struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Binding var mediaFiles: [MediaFile]
+    
+    @EnvironmentObject var layerManager: LayerStackManager
     
     var body: some View {
         GeometryReader { geo in
@@ -613,10 +629,12 @@ struct SimplePreviewMonitorView: View {
 
 struct SimpleProgramMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
+    @EnvironmentObject var layerManager: LayerStackManager
     
     private var effectCount: Int {
         productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
     }
+    @State private var lastDropCanvasSize: CGSize = .zero
     
     var body: some View {
         ZStack {
@@ -662,6 +680,10 @@ struct SimpleProgramMonitorView: View {
                 NoSourceView(isPreview: false)
             }
             
+            // Render actual composited PIP layers on top (what-you-see-is-what-you-send)
+            CompositedLayersContent(productionManager: productionManager)
+                .environmentObject(layerManager)
+
             if effectCount > 0 {
                 VStack {
                     Spacer()
@@ -695,7 +717,20 @@ struct SimpleProgramMonitorView: View {
                 }
                 Spacer()
             }
+            
+            // Interactive PIP editor overlay (on top of program)
+            LayersInteractiveOverlay()
+                .environmentObject(layerManager)
+                .allowsHitTesting(true)
         }
+        // Track canvas size for drop normalization
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { lastDropCanvasSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
+            }
+        )
         .dropDestination(for: EffectDragItem.self) { items, _ in
             guard let item = items.first else { return false }
             Task { @MainActor in
@@ -705,17 +740,28 @@ struct SimpleProgramMonitorView: View {
             }
             return true
         } isTargeted: { _ in }
+        // Accept media files to create PIP layers
+        .dropDestination(for: MediaFile.self) { items, location in
+            guard let file = items.first else { return false }
+            let norm = normalizeDropPoint(location, in: lastDropCanvasSize)
+            let defaultSize = CGSize(width: 0.35, height: 0.35)
+            layerManager.addMediaLayer(file: file, centerNorm: norm, sizeNorm: defaultSize)
+            return true
+        } isTargeted: { _ in }
+        // Accept camera drags to create PIP layers
+        .dropDestination(for: CameraFeedDragItem.self) { items, location in
+            guard let item = items.first else { return false }
+            let norm = normalizeDropPoint(location, in: lastDropCanvasSize)
+            layerManager.addCameraLayer(feedId: item.feedId, name: item.name, centerNorm: norm, sizeNorm: CGSize(width: 0.3, height: 0.3))
+            return true
+        } isTargeted: { _ in }
     }
-}
 
-struct PersistentVideoPlayerView: View {
-    let player: AVPlayer
-    let mediaFile: MediaFile
-    let isPreview: Bool
-    
-    var body: some View {
-        FrameBasedVideoPlayerView(player: player, isPreview: isPreview)
-            .id("persistent-video-\(mediaFile.id)-\(isPreview ? "preview" : "program")")
+    private func normalizeDropPoint(_ p: CGPoint, in size: CGSize) -> CGPoint {
+        guard size.width > 0 && size.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        let x = max(0, min(1, p.x / size.width))
+        let y = max(0, min(1, p.y / size.height))
+        return CGPoint(x: x, y: y)
     }
 }
 
@@ -1066,6 +1112,21 @@ struct LiveCameraFeedButton: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
+        // Make camera tiles draggable to Program monitor
+        .draggable(CameraFeedDragItem(feedId: feed.id, name: feed.device.displayName)) {
+            VStack(spacing: 2) {
+                Image(systemName: "video.fill")
+                    .font(.title2)
+                Text(feed.device.displayName)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+            }
+            .padding(8)
+            .background(Color.blue.opacity(0.8))
+            .foregroundColor(.white)
+            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
+            .shadow(radius: 4)
+        }
     }
 }
 
