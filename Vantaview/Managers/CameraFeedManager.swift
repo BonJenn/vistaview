@@ -618,6 +618,9 @@ final class CameraFeedManager: ObservableObject {
         } else {
             print("✅ Selected feed is connected and ready")
         }
+
+        // The streaming pipeline now mirrors the Program output from PreviewProgramManager.
+        print("ℹ️ Streaming will mirror Program output; no direct camera attach triggered.")
     }
     
     /// Get the current frame from the selected live production feed

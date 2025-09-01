@@ -2,6 +2,10 @@ import Foundation
 import SwiftUI
 import HaishinKit
 import AVFoundation
+import CoreVideo
+import CoreMedia
+import CoreImage
+import Metal
 
 @MainActor
 class StreamingViewModel: ObservableObject {
@@ -9,11 +13,36 @@ class StreamingViewModel: ObservableObject {
     private let connection = RTMPConnection()
     private let stream: RTMPStream
     private var previewView: MTHKView?
-    
+    // private var programStream: RTMPStream?
+
     @Published var isPublishing = false
     @Published var cameraSetup = false
     @Published var statusMessage = "Initializing..."
-    
+    @Published var mirrorProgramOutput: Bool = true
+
+    enum AudioSource: String, CaseIterable, Identifiable {
+        case microphone, program, none
+        var id: String { rawValue }
+        var displayName: String {
+            switch self {
+            case .microphone: return "Microphone"
+            case .program: return "Program Audio"
+            case .none: return "None"
+            }
+        }
+    }
+    @Published var selectedAudioSource: AudioSource = .microphone
+
+    // Program mirroring
+    weak var programManager: PreviewProgramManager?
+    private var frameTimer: Timer?
+    private let programTargetFPS: Double = 30
+    private let programCIContext = CIContext(options: [.cacheIntermediates: false])
+    private var programPixelBufferPool: CVPixelBufferPool?
+    private var programVideoFormat: CMVideoFormatDescription?
+    private var lastPTS: CMTime = .zero
+    private var frameDuration: CMTime { CMTime(value: 1, timescale: CMTimeScale(programTargetFPS)) }
+
     init() {
         stream = RTMPStream(connection: connection)
         setupAudioSession()
@@ -43,6 +72,12 @@ class StreamingViewModel: ObservableObject {
     }
     
     func setupCameraWithDevice(_ videoDevice: AVCaptureDevice) async {
+        if mirrorProgramOutput {
+            print("🪞 Program mirroring active: skipping setupCameraWithDevice")
+            statusMessage = "Program mirroring: camera disabled"
+            cameraSetup = false
+            return
+        }
         statusMessage = "Setting up selected camera..."
         print("🎥 Setting up camera with specific device: \(videoDevice.localizedName)")
         
@@ -50,7 +85,6 @@ class StreamingViewModel: ObservableObject {
             print("✅ Using selected camera: \(videoDevice.localizedName)")
             statusMessage = "Connecting to: \(videoDevice.localizedName)"
             
-            // Attach camera to mixer - this should work with the device directly
             print("📹 Attaching selected camera to mixer...")
             try await mixer.attachVideo(videoDevice)
             
@@ -66,28 +100,26 @@ class StreamingViewModel: ObservableObject {
     }
     
     func setupCamera() async {
+        if mirrorProgramOutput {
+            print("🪞 Program mirroring active: skipping setupCamera")
+            statusMessage = "Program mirroring: camera disabled"
+            cameraSetup = false
+            return
+        }
         statusMessage = "Setting up camera..."
         print("🎥 Starting automatic camera setup...")
         
         do {
-            // Configure mixer first
             print("📝 Configuring mixer...")
             try await mixer.setFrameRate(30)
             try await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
             
-            // Add stream as output
-            print("🔗 Adding stream to mixer...")
-            try await mixer.addOutput(stream)
-            
-            // Find and attach camera
             print("🔍 Looking for camera devices...")
             
             #if os(macOS)
-            // On macOS, try different camera types
             let cameraDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
                 ?? AVCaptureDevice.default(for: .video)
             #else
-            // On iOS, try front camera first, then back
             let cameraDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
                 ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
             #endif
@@ -101,7 +133,6 @@ class StreamingViewModel: ObservableObject {
             print("✅ Found camera: \(videoDevice.localizedName)")
             statusMessage = "Found camera: \(videoDevice.localizedName)"
             
-            // Attach camera to mixer
             print("📹 Attaching camera to mixer...")
             try await mixer.attachVideo(videoDevice)
             
@@ -118,56 +149,37 @@ class StreamingViewModel: ObservableObject {
     func attachPreview(_ view: MTHKView) async {
         print("🖼️ Attaching preview view...")
         previewView = view
-        
-        do {
-            try await stream.addOutput(view)
-            statusMessage = "✅ Preview attached"
-            print("✅ Preview attached successfully")
-        } catch {
-            statusMessage = "❌ Preview error: \(error.localizedDescription)"
-            print("❌ Preview attachment error:", error)
-        }
+
+        print("ℹ️ Skipping HK preview attach (publisher is Program-only)")
+        statusMessage = "✅ Preview ready"
     }
-    
+
+    func bindToProgramManager(_ manager: PreviewProgramManager) {
+        self.programManager = manager
+        print("🔗 StreamingViewModel bound to PreviewProgramManager")
+    }
+
     func start(rtmpURL: String, streamKey: String) async throws {
         print("🚀 Starting stream...")
         statusMessage = "Starting stream..."
-        
-        guard cameraSetup else {
-            let error = StreamingError.noCamera
-            statusMessage = "❌ Camera not ready"
-            print("❌ Camera not set up yet")
-            throw error
-        }
-        
-        // Attach microphone
-        if let audioDevice = AVCaptureDevice.default(for: .audio) {
-            do {
-                print("🎤 Attaching microphone...")
-                try await mixer.attachAudio(audioDevice)
-                print("✅ Microphone attached")
-            } catch {
-                print("⚠️ Audio attachment error:", error)
-                statusMessage = "⚠️ Audio error (continuing): \(error.localizedDescription)"
-            }
-        } else {
-            print("⚠️ No microphone found")
-            statusMessage = "⚠️ No microphone found"
-        }
-        
-        // Connect and publish
+
+        // Program-only publishing: do not involve mixer or camera at all.
+        cameraSetup = false
+
         do {
             print("🌐 Connecting to: \(rtmpURL)")
             statusMessage = "Connecting to server..."
             try await connection.connect(rtmpURL)
             
-            print("📡 Publishing stream with key: \(streamKey)")
+            print("📡 Publishing Program stream with key: \(streamKey)")
             statusMessage = "Publishing stream..."
             try await stream.publish(streamKey)
             
             isPublishing = true
-            statusMessage = "✅ Streaming live!"
-            print("✅ Streaming started successfully")
+            statusMessage = "✅ Live (Program output)"
+            print("✅ Streaming started successfully (Program-only)")
+
+            startProgramFramePump()
         } catch {
             statusMessage = "❌ Stream error: \(error.localizedDescription)"
             print("❌ Streaming start error:", error)
@@ -179,6 +191,8 @@ class StreamingViewModel: ObservableObject {
     func stop() async {
         print("🛑 Stopping stream...")
         statusMessage = "Stopping stream..."
+
+        stopProgramFramePump()
         
         do {
             try await stream.close()
@@ -192,7 +206,133 @@ class StreamingViewModel: ObservableObject {
             isPublishing = false
         }
     }
-    
+
+    func applyAudioSourceChange() {
+        guard isPublishing else { return }
+        // TODO: Implement dynamic audio source switching once program audio tap is integrated.
+        print("ℹ️ Audio source change requested: \(selectedAudioSource.displayName) (will apply with AVAudioMix tap integration)")
+    }
+
+    // MARK: - Program frame pump
+    private func startProgramFramePump() {
+        guard frameTimer == nil else { return }
+        print("🖼️ Starting Program frame pump at \(programTargetFPS) FPS")
+        lastPTS = .zero
+        frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / programTargetFPS, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.pushCurrentProgramFrame()
+            }
+        }
+        RunLoop.main.add(frameTimer!, forMode: .common)
+    }
+
+    private func stopProgramFramePump() {
+        frameTimer?.invalidate()
+        frameTimer = nil
+        print("🖼️ Stopped Program frame pump")
+    }
+
+    private func pushCurrentProgramFrame() async {
+        guard isPublishing else { return }
+        guard let pb = makeProgramPixelBuffer() else { return }
+
+        if programVideoFormat == nil {
+            var fdesc: CMVideoFormatDescription?
+            if CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescriptionOut: &fdesc) == noErr {
+                programVideoFormat = fdesc
+            }
+        }
+
+        lastPTS = CMTimeAdd(lastPTS, frameDuration)
+
+        var timing = CMSampleTimingInfo(duration: frameDuration, presentationTimeStamp: lastPTS, decodeTimeStamp: .invalid)
+        var sb: CMSampleBuffer?
+        guard let fdesc = programVideoFormat,
+              CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescription: fdesc, sampleTiming: &timing, sampleBufferOut: &sb) == noErr,
+              let sampleBuffer = sb else {
+            return
+        }
+
+        // Directly feed Program frame to the publishing RTMP stream
+        await stream.appendVideo(sampleBuffer)
+    }
+
+    private func makeProgramPixelBuffer() -> CVPixelBuffer? {
+        guard let pm = programManager else { return nil }
+
+        if let tex = pm.programCurrentTexture, let pb = pixelBuffer(from: tex) {
+            return pb
+        }
+
+        if let cg = pm.programImage, let pb = pixelBuffer(from: cg) {
+            return pb
+        }
+
+        if case .camera(let feed) = pm.programSource, let pb = feed.currentFrame {
+            return pb
+        }
+
+        return nil
+    }
+
+    private func pixelBuffer(from texture: MTLTexture) -> CVPixelBuffer? {
+        let width = texture.width
+        let height = texture.height
+
+        if programPixelBufferPool == nil {
+            let attrs: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                kCVPixelBufferMetalCompatibilityKey as String: true
+            ]
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attrs as CFDictionary, &pool)
+            programPixelBufferPool = pool
+        }
+
+        var pb: CVPixelBuffer?
+        if let pool = programPixelBufferPool {
+            CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pb)
+        }
+        guard let pixelBuffer = pb else { return nil }
+
+        guard let ciImage = CIImage(mtlTexture: texture, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else {
+            return nil
+        }
+        let flipped = ciImage.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -ciImage.extent.height))
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        programCIContext.render(flipped, to: pixelBuffer)
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        return pixelBuffer
+    }
+
+    private func pixelBuffer(from image: CGImage) -> CVPixelBuffer? {
+        let width = image.width
+        let height = image.height
+
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        var pb: CVPixelBuffer?
+        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb) == kCVReturnSuccess,
+              let pixelBuffer = pb else { return nil }
+
+        let ciImage = CIImage(cgImage: image)
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        programCIContext.render(ciImage, to: pixelBuffer)
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        return pixelBuffer
+    }
+
     // Add a new method to reset the mixer and use a specific device
     func resetAndSetupWithDevice(_ videoDevice: AVCaptureDevice) async {
         print("🔄 Resetting StreamingViewModel to use device: \(videoDevice.localizedName)")
@@ -205,14 +345,6 @@ class StreamingViewModel: ObservableObject {
         // Reset the mixer
         await mixer.setFrameRate(30)
         await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
-        
-        // Re-add stream as output
-        do {
-            try await mixer.addOutput(stream)
-            print("✅ Re-added stream to mixer")
-        } catch {
-            print("❌ Error re-adding stream to mixer: \(error)")
-        }
         
         // Now setup with the specific device
         await setupCameraWithDevice(videoDevice)

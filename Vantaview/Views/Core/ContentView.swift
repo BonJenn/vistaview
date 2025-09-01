@@ -23,7 +23,7 @@ struct ContentView: View {
     @EnvironmentObject var licenseManager: LicenseManager
     
     // Live Production States
-    @State private var rtmpURL = "rtmp://live.twitch.tv/live/"
+    @State private var rtmpURL = "rtmp://live.twitch.tv/app"
     @State private var streamKey = ""
     @State private var selectedTab = 0
     @State private var showingFilePicker = false
@@ -87,6 +87,8 @@ struct ContentView: View {
             await MainActor.run {
                 layerManager.setProductionManager(productionManager)
                 productionManager.externalDisplayManager.setLayerStackManager(layerManager)
+
+                productionManager.streamingViewModel.bindToProgramManager(productionManager.previewProgramManager)
             }
         }
         .fileImporter(
@@ -1358,6 +1360,24 @@ struct OutputControlsPanel: View {
                                 SecureField("Stream key", text: $streamKey)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                             }
+                            HStack {
+                                Text("Audio:")
+                                    .frame(width: 70, alignment: .leading)
+                                Picker("Audio Source", selection:
+                                    Binding(
+                                        get: { productionManager.streamingViewModel.selectedAudioSource },
+                                        set: {
+                                            productionManager.streamingViewModel.selectedAudioSource = $0
+                                            productionManager.streamingViewModel.applyAudioSourceChange()
+                                        }
+                                    )
+                                ) {
+                                    ForEach(StreamingViewModel.AudioSource.allCases) { src in
+                                        Text(src.displayName).tag(src)
+                                    }
+                                }
+                                .pickerStyle(SegmentedPickerStyle())
+                            }
                             Button(action: {
                                 Task {
                                     await toggleStreaming()
@@ -1377,6 +1397,18 @@ struct OutputControlsPanel: View {
                     }
                 }
                 .padding()
+            }
+        }
+        .onChange(of: selectedPlatform) { _, newValue in
+            switch newValue {
+            case "Twitch":
+                rtmpURL = "rtmp://live.twitch.tv/app"
+            case "YouTube":
+                rtmpURL = "rtmp://a.rtmp.youtube.com/live2"
+            case "Facebook":
+                rtmpURL = "rtmp://live-api-s.facebook.com:80/rtmp/"
+            default:
+                break
             }
         }
     }

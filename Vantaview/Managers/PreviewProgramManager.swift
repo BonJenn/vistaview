@@ -714,6 +714,7 @@ final class PreviewProgramManager: ObservableObject {
         output.suppressesPlayerRendering = true
         playerItem.add(output)
 
+
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
@@ -1179,24 +1180,20 @@ final class PreviewProgramManager: ObservableObject {
     }
 }
 
-// MARK: - Convenience Extensions
-
+// MARK: - Convenience extensions for ContentSource
 extension MediaFile {
-    /// Create a ContentSource from this media file
     func asContentSource() -> ContentSource {
         return .media(self, player: nil)
     }
 }
 
 extension CameraFeed {
-    /// Create a ContentSource from this camera feed
     func asContentSource() -> ContentSource {
         return .camera(self)
     }
 }
 
 extension VirtualCamera {
-    /// Create a ContentSource from this virtual camera
     func asContentSource() -> ContentSource {
         return .virtual(self)
     }
