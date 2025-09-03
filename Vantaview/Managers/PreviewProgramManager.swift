@@ -12,6 +12,7 @@ import CoreVideo
 import Metal
 import MetalKit
 import CoreImage
+import AVKit
 
 
 /// Represents different types of content that can be displayed
@@ -50,6 +51,10 @@ final class PreviewProgramManager: ObservableObject {
     @Published var previewPlayer: AVPlayer?
     @Published var programPlayer: AVPlayer?
     
+    // @Published var programAudioOutput: AVPlayerItemAudioOutput?
+
+    @Published var programAudioTap: PlayerAudioTap?
+
     // Playback state
     @Published var isPreviewPlaying = false
     @Published var isProgramPlaying = false
@@ -593,7 +598,7 @@ final class PreviewProgramManager: ObservableObject {
             playback.setEffectRunner(previewEffectRunner)
             playback.toneMapEnabled = hdrToneMapEnabled
             playback.targetFPS = targetFPS
-            playback.onSizeChange = { [weak self] w, h in
+            playback.onSizeChange = { [weak self] (w: Int, h: Int) in
                 Task { @MainActor in
                     if h > 0 { self?.previewAspect = CGFloat(w) / CGFloat(h) }
                 }
@@ -687,6 +692,12 @@ final class PreviewProgramManager: ObservableObject {
             programPlayer = player
             programSource = .media(file, player: player)
             
+            if let item = player.currentItem {
+                self.programAudioTap = PlayerAudioTap(playerItem: item)
+            } else {
+                self.programAudioTap = nil
+            }
+            
             // Add playback end notification for looping
             setupPlayerNotifications(for: player, isPreview: false)
             
@@ -714,10 +725,11 @@ final class PreviewProgramManager: ObservableObject {
         output.suppressesPlayerRendering = true
         playerItem.add(output)
 
-
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
+
+        self.programAudioTap = PlayerAudioTap(playerItem: playerItem)
 
         // Add playback end notification for looping
         setupPlayerNotifications(for: player, isPreview: false)
@@ -727,7 +739,7 @@ final class PreviewProgramManager: ObservableObject {
             playback.setEffectRunner(programEffectRunner)
             playback.toneMapEnabled = hdrToneMapEnabled
             playback.targetFPS = targetFPS
-            playback.onSizeChange = { [weak self] w, h in
+            playback.onSizeChange = { [weak self] (w: Int, h: Int) in
                 Task { @MainActor in
                     if h > 0 { self?.programAspect = CGFloat(w) / CGFloat(h) }
                 }
@@ -951,6 +963,7 @@ final class PreviewProgramManager: ObservableObject {
         programDuration = 0
         programVTReady = false
         programPrimedForPoster = false
+        programAudioTap = nil
     }
     
     private func removeTimeObservers() {
@@ -1156,7 +1169,7 @@ final class PreviewProgramManager: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
-            queue: .main
+            queue: OperationQueue.main
         ) { [weak self] _ in
             guard let self = self else { return }
             

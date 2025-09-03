@@ -40,8 +40,16 @@ final class MediaMixer {
         await mixer.setSessionPreset(desiredPreset)
     }
 
-    func attachAudio(_ device: AVCaptureDevice) async throws {
+    func attachAudio(_ device: AVCaptureDevice?) async throws {
         try await mixer.attachAudio(device, track: 0, configuration: nil)
+    }
+
+    func stopAllAudioCapture() async {
+        do {
+            try await mixer.attachAudio(nil, track: 0, configuration: nil)
+        } catch {
+            // ignore
+        }
     }
 
     func resetForProgramMirror() async {
@@ -72,6 +80,10 @@ extension RTMPStream {
 
     // async forwarder for actor isolation
     func appendVideo(_ sampleBuffer: CMSampleBuffer) async {
+        await (self as HaishinKit.HKStream).append(sampleBuffer)
+    }
+
+    func appendAudio(_ sampleBuffer: CMSampleBuffer) async {
         await (self as HaishinKit.HKStream).append(sampleBuffer)
     }
 }

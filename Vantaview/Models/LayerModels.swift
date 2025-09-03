@@ -27,6 +27,11 @@ struct CompositedLayer: Identifiable, Equatable {
 
     var source: LayerSource
 
+    var audioMuted: Bool = false
+    var audioGain: Float = 1.0
+    var audioSolo: Bool = false
+    var audioPan: Float = 0.0  // -1 (left) ... 0 (center) ... +1 (right)
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -36,7 +41,11 @@ struct CompositedLayer: Identifiable, Equatable {
         sizeNorm: CGSize = CGSize(width: 0.25, height: 0.25),
         rotationDegrees: Float = 0,
         opacity: Float = 1.0,
-        source: LayerSource
+        source: LayerSource,
+        audioMuted: Bool = false,
+        audioGain: Float = 1.0,
+        audioSolo: Bool = false,
+        audioPan: Float = 0.0
     ) {
         self.id = id
         self.name = name
@@ -47,5 +56,9 @@ struct CompositedLayer: Identifiable, Equatable {
         self.rotationDegrees = rotationDegrees
         self.opacity = opacity
         self.source = source
+        self.audioMuted = audioMuted
+        self.audioGain = audioGain
+        self.audioSolo = audioSolo
+        self.audioPan = audioPan
     }
 }

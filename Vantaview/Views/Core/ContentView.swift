@@ -89,6 +89,9 @@ struct ContentView: View {
                 productionManager.externalDisplayManager.setLayerStackManager(layerManager)
 
                 productionManager.streamingViewModel.bindToProgramManager(productionManager.previewProgramManager)
+
+                productionManager.streamingViewModel.bindToLayerManager(layerManager)
+                productionManager.streamingViewModel.bindToProductionManager(productionManager)
             }
         }
         .fileImporter(
@@ -1051,7 +1054,7 @@ struct LiveCameraFeedButton: View {
                 productionManager.objectWillChange.send()
             }
         }) {
-            VStack(spacing: 4) {
+            VStack {
                 if let nsImage = feed.previewNSImage {
                     Image(nsImage: nsImage)
                         .resizable()
@@ -1377,6 +1380,16 @@ struct OutputControlsPanel: View {
                                     }
                                 }
                                 .pickerStyle(SegmentedPickerStyle())
+                            }
+                            if productionManager.streamingViewModel.selectedAudioSource == .program {
+                                Toggle("Include PiP Audio", isOn:
+                                    Binding(
+                                        get: { productionManager.streamingViewModel.includePiPAudioInProgram },
+                                        set: { productionManager.streamingViewModel.includePiPAudioInProgram = $0 }
+                                    )
+                                )
+                                .toggleStyle(CheckboxToggleStyle())
+                                .padding(.leading, 70)
                             }
                             Button(action: {
                                 Task {

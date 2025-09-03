@@ -7,6 +7,8 @@ struct LayerAVPlayerView: NSViewRepresentable {
     var isMuted: Bool = true
     var autoplay: Bool = true
     var loop: Bool = true
+    let layerId: UUID
+    @EnvironmentObject var layerManager: LayerStackManager
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
@@ -29,6 +31,10 @@ struct LayerAVPlayerView: NSViewRepresentable {
     private func configurePlayer(for view: AVPlayerView) {
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
+
+        let tap = PlayerAudioTap(playerItem: item)
+        layerManager.registerPiPAudioTap(for: layerId, tap: tap)
+
         let player = AVQueuePlayer(items: [item])
         view.player = player
 

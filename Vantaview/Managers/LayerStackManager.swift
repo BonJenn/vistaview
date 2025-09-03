@@ -1,13 +1,20 @@
 import Foundation
-import SwiftUI
+import AVFoundation
 
 @MainActor
 final class LayerStackManager: ObservableObject {
     @Published var layers: [CompositedLayer] = []
-
     @Published var selectedLayerID: UUID?
 
     private weak var productionManager: UnifiedProductionManager?
+
+    var pipAudioTaps: [UUID: PlayerAudioTap] = [:]
+
+    struct AudioMeter: Equatable {
+        var rms: Float
+        var peak: Float
+    }
+    @Published var pipAudioMeters: [UUID: AudioMeter] = [:]
 
     func setProductionManager(_ pm: UnifiedProductionManager) {
         self.productionManager = pm
@@ -63,6 +70,8 @@ final class LayerStackManager: ObservableObject {
     func removeLayer(_ id: UUID) {
         layers.removeAll { $0.id == id }
         if selectedLayerID == id { selectedLayerID = nil }
+        pipAudioTaps.removeValue(forKey: id)
+        pipAudioMeters.removeValue(forKey: id)
         objectWillChange.send()
     }
 
@@ -79,5 +88,17 @@ final class LayerStackManager: ObservableObject {
         guard let i = layers.firstIndex(where: { $0.id == layer.id }) else { return }
         layers[i] = layer
         objectWillChange.send()
+    }
+
+    func registerPiPAudioTap(for id: UUID, tap: PlayerAudioTap?) {
+        if let tap {
+            pipAudioTaps[id] = tap
+        } else {
+            pipAudioTaps.removeValue(forKey: id)
+        }
+    }
+
+    func updatePiPAudioMeter(for id: UUID, rms: Float, peak: Float) {
+        pipAudioMeters[id] = AudioMeter(rms: rms, peak: peak)
     }
 }

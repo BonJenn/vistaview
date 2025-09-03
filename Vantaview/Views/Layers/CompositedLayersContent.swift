@@ -57,7 +57,8 @@ struct CompositedLayersContent: View {
                     )
                 }
             case .video:
-                LayerAVPlayerView(url: file.url, isMuted: true, autoplay: true, loop: true)
+                LayerAVPlayerView(url: file.url, isMuted: true, autoplay: true, loop: true, layerId: model.id)
+                    .environmentObject(layerManager)
                     .background(Color.black)
             case .audio:
                 Color.clear
