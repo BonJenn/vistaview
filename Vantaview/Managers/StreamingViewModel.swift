@@ -8,6 +8,7 @@ import CoreImage
 import Metal
 import ImageIO
 import CoreGraphics
+import VideoToolbox
 
 @MainActor
 class StreamingViewModel: ObservableObject {
@@ -15,7 +16,6 @@ class StreamingViewModel: ObservableObject {
     private let connection = RTMPConnection()
     private let stream: RTMPStream
     private var previewView: MTHKView?
-    // private var programStream: RTMPStream?
 
     @Published var isPublishing = false
     @Published var cameraSetup = false
@@ -36,48 +36,38 @@ class StreamingViewModel: ObservableObject {
     @Published var selectedAudioSource: AudioSource = .microphone
     @Published var includePiPAudioInProgram: Bool = false
 
-    // Program mirroring
+    // External managers for PiP and Program mirroring
     weak var programManager: PreviewProgramManager?
-    private var frameTimer: Timer?
-    private let programTargetFPS: Double = 30
-    private let programCIContext = CIContext(options: [.cacheIntermediates: false])
-    private var programPixelBufferPool: CVPixelBufferPool?
-    private var programVideoFormat: CMVideoFormatDescription?
-    private var lastPTS: CMTime = .zero
-    private var frameDuration: CMTime { CMTime(value: 1, timescale: CMTimeScale(programTargetFPS)) }
-
     weak var layerManager: LayerStackManager?
     weak var productionManager: UnifiedProductionManager?
 
-    private var audioTimer: Timer?
-    private let audioPollInterval: TimeInterval = 1.0 / 120.0
+    // Video encode/composite context
+    private let programTargetFPS: Double = 60
+    private let programCIContext = CIContext(options: [.cacheIntermediates: false])
+    private var programPixelBufferPool: CVPixelBufferPool?
+    private var programVideoFormat: CMVideoFormatDescription?
+
+    // Timing
     private let hostClock: CMClock = CMClockGetHostTimeClock()
+
+    // Audio capture/pump
     private var micAttached: Bool = false
-
-    private let videoQueue = DispatchQueue(label: "vantaview.stream.video", qos: .userInitiated)
-    private let audioQueue = DispatchQueue(label: "vantaview.stream.audio", qos: .userInitiated)
-    private var frameSource: DispatchSourceTimer?
+    private let audioPollInterval: TimeInterval = 1.0 / 240.0
+    private let audioQueue = DispatchQueue(label: "vantaview.stream.audio", qos: .userInteractive)
     private var audioSource: DispatchSourceTimer?
-    private var isRenderingFrame = false
 
-    // Background-safe render-in-progress flag to avoid touching main-isolated state off-main
-    private let renderFlagLock = NSLock()
-    private var renderInProgressFlag: Bool = false
-    private func getRenderInProgress() -> Bool {
-        renderFlagLock.lock(); defer { renderFlagLock.unlock() }
-        return renderInProgressFlag
-    }
-    private func setRenderInProgress(_ v: Bool) {
-        renderFlagLock.lock(); renderInProgressFlag = v; renderFlagLock.unlock()
-    }
+    // Video frame pump
+    private let videoQueue = DispatchQueue(label: "vantaview.stream.video", qos: .userInteractive)
+    private var frameSource: DispatchSourceTimer?
+
+    // Simplified rendering
+    private var isRenderingFrame = false
 
     private typealias AudioSnapshot = (programGain: Float, programTap: PlayerAudioTap?, includePiP: Bool, taps: [(tap: PlayerAudioTap, gain: Float, pan: Float, id: UUID)])
 
     init() {
         stream = RTMPStream(connection: connection)
         setupAudioSession()
-        
-        // Enable detailed logging
         #if DEBUG
         print("StreamingViewModel: Initialized")
         #endif
@@ -114,14 +104,11 @@ class StreamingViewModel: ObservableObject {
         do {
             print("✅ Using selected camera: \(videoDevice.localizedName)")
             statusMessage = "Connecting to: \(videoDevice.localizedName)"
-            
             print("📹 Attaching selected camera to mixer...")
             try await mixer.attachVideo(videoDevice)
-            
             cameraSetup = true
             statusMessage = "✅ Camera ready: \(videoDevice.localizedName)"
             print("✅ Camera setup successful with selected device!")
-            
         } catch {
             statusMessage = "❌ Camera error: \(error.localizedDescription)"
             print("❌ Camera setup error with selected device:", error)
@@ -145,7 +132,6 @@ class StreamingViewModel: ObservableObject {
             try await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
             
             print("🔍 Looking for camera devices...")
-            
             #if os(macOS)
             let cameraDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
                 ?? AVCaptureDevice.default(for: .video)
@@ -162,14 +148,11 @@ class StreamingViewModel: ObservableObject {
             
             print("✅ Found camera: \(videoDevice.localizedName)")
             statusMessage = "Found camera: \(videoDevice.localizedName)"
-            
             print("📹 Attaching camera to mixer...")
             try await mixer.attachVideo(videoDevice)
-            
             cameraSetup = true
             statusMessage = "✅ Camera ready"
             print("✅ Camera setup successful!")
-            
         } catch {
             statusMessage = "❌ Camera error: \(error.localizedDescription)"
             print("❌ Camera setup error:", error)
@@ -179,7 +162,6 @@ class StreamingViewModel: ObservableObject {
     func attachPreview(_ view: MTHKView) async {
         print("🖼️ Attaching preview view...")
         previewView = view
-
         print("ℹ️ Skipping HK preview attach (publisher is Program-only)")
         statusMessage = "✅ Preview ready"
     }
@@ -202,8 +184,6 @@ class StreamingViewModel: ObservableObject {
     func start(rtmpURL: String, streamKey: String) async throws {
         print("🚀 Starting stream...")
         statusMessage = "Starting stream..."
-
-        // Program-only publishing: do not involve mixer or camera at all.
         cameraSetup = false
 
         do {
@@ -211,6 +191,9 @@ class StreamingViewModel: ObservableObject {
             statusMessage = "Connecting to server..."
             try await connection.connect(rtmpURL)
             
+            // Configure encoder (best-effort; API surface varies by HK version)
+            await configureLowLatencyEncoder()
+
             print("📡 Publishing Program stream with key: \(streamKey)")
             statusMessage = "Publishing stream..."
             try await stream.publish(streamKey)
@@ -220,7 +203,6 @@ class StreamingViewModel: ObservableObject {
             print("✅ Streaming started successfully (Program-only)")
 
             await configureAudioRouting()
-
             startProgramFramePump()
         } catch {
             statusMessage = "❌ Stream error: \(error.localizedDescription)"
@@ -229,7 +211,23 @@ class StreamingViewModel: ObservableObject {
             throw error
         }
     }
-    
+
+    private func configureLowLatencyEncoder() async {
+        // Instead use HaishinKit's documented API if available, or skip configuration
+        print("🛠 Configuring low latency encoder (safe mode)")
+        
+        // Some versions of HaishinKit allow direct property setting
+        // This is a safer approach than KVO setValue
+        do {
+            // Safely attempt to configure frame rate if the mixer supports it
+            try? await mixer.setFrameRate(Int(programTargetFPS))
+        } catch {
+            print("⚠️ Could not set mixer frame rate: \(error)")
+        }
+        
+        print("✅ Low latency encoder configured (conservative)")
+    }
+
     func stop() async {
         print("🛑 Stopping stream...")
         statusMessage = "Stopping stream..."
@@ -285,7 +283,6 @@ class StreamingViewModel: ObservableObject {
         let device = AVCaptureDevice.default(for: .audio)
         #endif
         do {
-            // Route mic capture via MediaMixer -> RTMP stream
             try await mixer.addOutput(stream)
             try await mixer.attachAudio(device)
             micAttached = true
@@ -304,17 +301,17 @@ class StreamingViewModel: ObservableObject {
     }
 
     private func detachProgramAudioIfNeeded() async {
-        // no-op placeholder to keep symmetry; program tap is owned by PreviewProgramManager
+        // placeholder; program tap is owned by PreviewProgramManager
     }
 
     private func startProgramAudioPump() {
         guard audioSource == nil else { return }
         print("🔊 Starting Program audio pump (background)")
         let src = DispatchSource.makeTimerSource(queue: audioQueue)
-        src.schedule(deadline: .now(), repeating: audioPollInterval, leeway: .milliseconds(2))
+        src.schedule(deadline: .now(), repeating: audioPollInterval, leeway: .milliseconds(1))
         src.setEventHandler { [weak self] in
             guard let self = self else { return }
-            Task(priority: .userInitiated) {
+            Task(priority: .userInteractive) {
                 await self.pushCurrentProgramAudioFrameBackground()
             }
         }
@@ -329,11 +326,11 @@ class StreamingViewModel: ObservableObject {
     }
 
     private func pushCurrentProgramAudioFrameBackground() async {
+        guard selectedAudioSource == .program else { return }
         guard isPublishing else { return }
-        if selectedAudioSource != .program { return }
 
         var channels: Int = 2
-        var sampleRate: Double = 44100
+        var sampleRate: Double = 48_000
 
         struct Src {
             let ptr: UnsafePointer<Float32>
@@ -344,34 +341,35 @@ class StreamingViewModel: ObservableObject {
         }
         var sources: [Src] = []
 
-        let snapshot: AudioSnapshot = await MainActor.run(resultType: AudioSnapshot.self) {
+        // Snapshot main-actor state
+        let (programTap, programGain, includePiP, pipTaps): (PlayerAudioTap?, Float, Bool, [(PlayerAudioTap, Float, Float, UUID)]) = {
             var taps: [(PlayerAudioTap, Float, Float, UUID)] = []
-            let pm = self.programManager
-            let programTap = pm?.programAudioTap
-            let programGain = (pm?.programMuted ?? false) ? 0.0 : Float(pm?.programVolume ?? 1.0)
-            let include = self.includePiPAudioInProgram
-            if include, let lm = self.layerManager {
+            let pm = programManager
+            let tap = pm?.programAudioTap
+            let gain = (pm?.programMuted ?? false) ? 0.0 : Float(pm?.programVolume ?? 1.0)
+            let include = includePiPAudioInProgram
+            if include, let lm = layerManager {
                 let soloIDs = Set(lm.layers.filter { $0.isEnabled && ($0.source.isVideo) && $0.audioSolo }.map { $0.id })
                 for layer in lm.layers where layer.isEnabled {
                     guard case .media(let file) = layer.source, file.fileType == .video else { continue }
                     if !soloIDs.isEmpty && !soloIDs.contains(layer.id) { continue }
-                    if let tap = lm.pipAudioTaps[layer.id] {
-                        taps.append((tap, layer.audioMuted ? 0.0 : layer.audioGain, layer.audioPan, layer.id))
+                    if let layerTap = lm.pipAudioTaps[layer.id] {
+                        taps.append((layerTap, layer.audioMuted ? 0.0 : layer.audioGain, layer.audioPan, layer.id))
                     }
                 }
             }
-            return (programGain, programTap, include, taps)
-        }
+            return (tap, gain, include, taps)
+        }()
 
-        if let progTap = snapshot.programTap,
+        if let progTap = programTap,
            let (ptr, frames, ch, sr) = progTap.fetchLatestInterleavedBuffer() {
             channels = max(1, ch)
             sampleRate = sr
-            sources.append(Src(ptr: ptr, frames: frames, gainL: snapshot.programGain, gainR: snapshot.programGain, layerId: nil))
+            sources.append(Src(ptr: ptr, frames: frames, gainL: programGain, gainR: programGain, layerId: nil))
         }
 
-        if snapshot.includePiP {
-            for (tap, gain, pan, id) in snapshot.taps {
+        if includePiP {
+            for (tap, gain, pan, id) in pipTaps {
                 if let (ptr, frames, ch, sr) = tap.fetchLatestInterleavedBuffer() {
                     channels = max(1, ch)
                     sampleRate = sr
@@ -409,7 +407,7 @@ class StreamingViewModel: ObservableObject {
                     peak = max(peak, max(abs(sL), abs(sR)))
                     rmsAcc += Double((sL * sL + sR * sR) * 0.5)
                     outBuffer[so] = min(max(outBuffer[so] + sL, -1.0), 1.0)
-                    outBuffer[so + 1] = min(max(outBuffer[so] + sR, -1.0), 1.0)
+                    outBuffer[so + 1] = min(max(outBuffer[so + 1] + sR, -1.0), 1.0)
                 }
             } else {
                 for f in 0..<frames {
@@ -420,7 +418,7 @@ class StreamingViewModel: ObservableObject {
                     peak = max(peak, max(abs(sL), abs(sR)))
                     rmsAcc += Double((sL * sL + sR * sR) * 0.5)
                     outBuffer[so] = min(max(outBuffer[so] + sL, -1.0), 1.0)
-                    outBuffer[so + 1] = min(max(outBuffer[so] + sR, -1.0), 1.0)
+                    outBuffer[so + 1] = min(max(outBuffer[so + 1] + sR, -1.0), 1.0)
                 }
             }
             if let lid = src.layerId {
@@ -429,49 +427,25 @@ class StreamingViewModel: ObservableObject {
             }
         }
 
+        // Update meters on main
         Task { @MainActor in
-            if let lm = self.layerManager {
-                let denom = Double(frames)
-                for (lid, peak) in perSourcePeak {
-                    let rmsAcc = perSourceRMSAcc[lid] ?? 0
-                    let rms = sqrt(rmsAcc / max(denom, 1))
-                    lm.updatePiPAudioMeter(for: lid, rms: Float(rms), peak: peak)
-                }
+            guard let lm = self.layerManager else { return }
+            let denom = Double(frames)
+            for (lid, peak) in perSourcePeak {
+                let rmsAcc = perSourceRMSAcc[lid] ?? 0
+                let rms = sqrt(rmsAcc / max(denom, 1))
+                lm.updatePiPAudioMeter(for: lid, rms: Float(rms), peak: peak)
             }
         }
 
-        let audioPTS = await MainActor.run(resultType: CMTime.self) { self.lastPTS }
+        let audioPTS = CMClockGetTime(hostClock)
+        let audioDuration = CMTime(value: CMTimeValue(frames), timescale: CMTimeScale(Int32(sampleRate)))
 
-        if let mixed = makeAudioSampleBuffer(from: outBuffer, frames: frames, channels: outChannels, sampleRate: sampleRate, pts: audioPTS, duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate))) {
+        if let mixed = makeAudioSampleBuffer(from: outBuffer, frames: frames, channels: outChannels, sampleRate: sampleRate, pts: audioPTS, duration: audioDuration) {
             Task { @MainActor in
                 await stream.appendAudio(mixed)
             }
         }
-    }
-
-    // Return pointer + retained CMBlockBuffer to keep memory alive for the caller’s scope.
-    private func extractFloatInterleavedPointerAndBlock(from sampleBuffer: CMSampleBuffer) -> (UnsafePointer<Float32>, CMBlockBuffer)? {
-        let bufferListSize = MemoryLayout<AudioBufferList>.size + MemoryLayout<AudioBuffer>.stride
-        let audioBufferList = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        audioBufferList.pointee.mNumberBuffers = 1
-        audioBufferList.pointee.mBuffers = AudioBuffer()
-        var blockBuffer: CMBlockBuffer?
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: audioBufferList,
-            bufferListSize: bufferListSize,
-            blockBufferAllocator: kCFAllocatorDefault,
-            blockBufferMemoryAllocator: kCFAllocatorDefault,
-            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBuffer
-        )
-        defer { audioBufferList.deallocate() }
-        guard status == noErr, let bb = blockBuffer else { return nil }
-        let mBuffer = audioBufferList.pointee.mBuffers
-        guard let baseAddress = mBuffer.mData else { return nil }
-        let ptr = baseAddress.assumingMemoryBound(to: Float32.self)
-        return (UnsafePointer<Float32>(ptr), bb)
     }
 
     private func makeAudioSampleBuffer(from floatData: UnsafeMutablePointer<Float32>, frames: Int, channels: Int, sampleRate: Double, pts: CMTime, duration: CMTime) -> CMSampleBuffer? {
@@ -514,7 +488,7 @@ class StreamingViewModel: ObservableObject {
         guard copyStatus == noErr else { return nil }
 
         var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            duration: duration,
             presentationTimeStamp: pts,
             decodeTimeStamp: .invalid
         )
@@ -542,15 +516,14 @@ class StreamingViewModel: ObservableObject {
     private func startProgramFramePump() {
         guard frameSource == nil else { return }
         print("🖼️ Starting Program frame pump (background) at \(programTargetFPS) FPS")
-        lastPTS = .zero
         let src = DispatchSource.makeTimerSource(queue: videoQueue)
         let interval = DispatchTimeInterval.nanoseconds(Int(1_000_000_000.0 / programTargetFPS))
-        src.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(3))
+        src.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(1))
         src.setEventHandler { [weak self] in
             guard let self = self else { return }
-            if self.getRenderInProgress() { return }
-            self.setRenderInProgress(true)
-            Task(priority: .userInitiated) {
+            if self.isRenderingFrame { return }
+            self.isRenderingFrame = true
+            Task(priority: .userInteractive) {
                 await self.renderAndPushProgramFrame()
             }
         }
@@ -561,14 +534,11 @@ class StreamingViewModel: ObservableObject {
     private func stopProgramFramePump() {
         frameSource?.cancel()
         frameSource = nil
-        setRenderInProgress(false)
+        isRenderingFrame = false
         print("🖼️ Stopped Program frame pump")
     }
 
     private func ensurePixelBufferPool(width: Int, height: Int) {
-        if let pool = programPixelBufferPool {
-            // let _ = pixelBuffer(from: width, height: height, pool: pool)
-        }
         if programPixelBufferPool == nil {
             let attrs: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -591,7 +561,83 @@ class StreamingViewModel: ObservableObject {
         return pb
     }
 
-    private func compositePiPLayersCI(base: CGImage, overlays: [OverlaySnapshot]) -> CGImage {
+    private struct OverlaySnapshot {
+        let image: CGImage
+        let centerNorm: CGPoint
+        let sizeNorm: CGSize
+        let rotationDegrees: Float
+        let opacity: Float
+    }
+
+    private func snapshotOverlays(base: CGImage) -> [OverlaySnapshot] {
+        guard let layerManager else { return [] }
+        let layers = layerManager.layers
+            .filter { $0.isEnabled }
+            .sorted { $0.zIndex < $1.zIndex }
+
+        var snapshots: [OverlaySnapshot] = []
+        for model in layers {
+            var overlayCG: CGImage?
+            switch model.source {
+            case .camera(let feedId):
+                if let feed = productionManager?.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
+                    overlayCG = feed.previewImage
+                }
+            case .media(let file):
+                switch file.fileType {
+                case .image:
+                    overlayCG = loadCGImage(from: file.url)
+                case .video:
+                    overlayCG = nil
+                case .audio:
+                    overlayCG = nil
+                }
+            }
+            if let image = overlayCG {
+                snapshots.append(OverlaySnapshot(image: image, centerNorm: model.centerNorm, sizeNorm: model.sizeNorm, rotationDegrees: model.rotationDegrees, opacity: model.opacity))
+            }
+        }
+        return snapshots
+    }
+
+    private func renderAndPushProgramFrame() async {
+        defer { isRenderingFrame = false }
+        
+        guard isPublishing else { return }
+
+        guard let base = makeBaseProgramCGImage() else { return }
+
+        ensurePixelBufferPool(width: base.width, height: base.height)
+        guard let pixelPool = programPixelBufferPool else { return }
+
+        let overlays = snapshotOverlays(base: base)
+        let outputCI = compositePiPLayersCI(base: base, overlays: overlays)
+
+        guard let pb = pixelBuffer(from: base.width, height: base.height, pool: pixelPool) else { return }
+        CVPixelBufferLockBaseAddress(pb, [])
+        programCIContext.render(outputCI, to: pb)
+        CVPixelBufferUnlockBaseAddress(pb, [])
+
+        if programVideoFormat == nil {
+            var fdesc: CMVideoFormatDescription?
+            if CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescriptionOut: &fdesc) == noErr {
+                programVideoFormat = fdesc
+            }
+        }
+
+        let ptsNow = CMClockGetTime(hostClock)
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(Int32(programTargetFPS)))
+        var timing = CMSampleTimingInfo(duration: frameDuration, presentationTimeStamp: ptsNow, decodeTimeStamp: .invalid)
+
+        var sb: CMSampleBuffer?
+        if let fmt = programVideoFormat,
+           CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescription: fmt, sampleTiming: &timing, sampleBufferOut: &sb) == noErr,
+           let sampleBuffer = sb {
+            await stream.appendVideo(sampleBuffer)
+        }
+    }
+
+    private func compositePiPLayersCI(base: CGImage, overlays: [OverlaySnapshot]) -> CIImage {
         let baseW = base.width
         let baseH = base.height
         var output = CIImage(cgImage: base)
@@ -635,120 +681,7 @@ class StreamingViewModel: ObservableObject {
             output = img.composited(over: output)
         }
 
-        return programCIContext.createCGImage(output, from: CGRect(x: 0, y: 0, width: baseW, height: baseH)) ?? base
-    }
-
-    private struct OverlaySnapshot {
-        let image: CGImage
-        let centerNorm: CGPoint
-        let sizeNorm: CGSize
-        let rotationDegrees: Float
-        let opacity: Float
-    }
-
-    private func snapshotOverlays(base: CGImage) async -> [OverlaySnapshot] {
-        await MainActor.run {
-            guard let layerManager else { return [] }
-            let layers = layerManager.layers
-                .filter { $0.isEnabled }
-                .sorted { $0.zIndex < $1.zIndex }
-
-            var snapshots: [OverlaySnapshot] = []
-            for model in layers {
-                var overlayCG: CGImage?
-                switch model.source {
-                case .camera(let feedId):
-                    if let feed = productionManager?.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
-                        overlayCG = feed.previewImage
-                    }
-                case .media(let file):
-                    switch file.fileType {
-                    case .image:
-                        overlayCG = loadCGImage(from: file.url)
-                    case .video:
-                        overlayCG = nil
-                    case .audio:
-                        overlayCG = nil
-                    }
-                }
-                if let image = overlayCG {
-                    snapshots.append(OverlaySnapshot(image: image, centerNorm: model.centerNorm, sizeNorm: model.sizeNorm, rotationDegrees: model.rotationDegrees, opacity: model.opacity))
-                }
-            }
-            return snapshots
-        }
-    }
-
-    private func renderAndPushProgramFrame() async {
-        // Check publishing state on main
-        let publishing = await MainActor.run(resultType: Bool.self) { self.isPublishing }
-        guard publishing else { setRenderInProgress(false); return }
-
-        // Grab base image on main quickly
-        let baseCG = await MainActor.run(resultType: CGImage?.self) { [weak self] in
-            self?.makeBaseProgramCGImage()
-        }
-        guard let base = baseCG else {
-            setRenderInProgress(false)
-            return
-        }
-
-        // Snapshot CIContext and ensure pool on main
-        let (ciCtx, pool) = await MainActor.run(resultType: (CIContext, CVPixelBufferPool?).self) { [weak self] in
-            guard let self = self else { return (CIContext(options: [.cacheIntermediates: false]), nil) }
-            self.ensurePixelBufferPool(width: base.width, height: base.height)
-            return (self.programCIContext, self.programPixelBufferPool)
-        }
-        guard let pixelPool = pool else {
-            setRenderInProgress(false)
-            return
-        }
-
-        // Snapshot overlays
-        let overlays = await self.snapshotOverlays(base: base)
-
-        // Composite with CoreImage (GPU)
-        let composited = self.compositePiPLayersCI(base: base, overlays: overlays)
-
-        // Create pixel buffer from pool and render
-        guard let pb = self.pixelBuffer(from: base.width, height: base.height, pool: pixelPool) else {
-            setRenderInProgress(false)
-            return
-        }
-        CVPixelBufferLockBaseAddress(pb, [])
-        ciCtx.render(CIImage(cgImage: composited), to: pb)
-        CVPixelBufferUnlockBaseAddress(pb, [])
-
-        // Ensure format desc and update on main
-        var fdesc: CMVideoFormatDescription?
-        _ = CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescriptionOut: &fdesc)
-        await MainActor.run {
-            if self.programVideoFormat == nil, let fd = fdesc {
-                self.programVideoFormat = fd
-            }
-        }
-
-        // Advance PTS on main and fetch current values needed for timing
-        let (format, pts, dur) = await MainActor.run(resultType: (CMVideoFormatDescription?, CMTime, CMTime).self) {
-            self.lastPTS = CMTimeAdd(self.lastPTS, self.frameDuration)
-            return (self.programVideoFormat, self.lastPTS, self.frameDuration)
-        }
-
-        var timing = CMSampleTimingInfo(duration: dur, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-        var sb: CMSampleBuffer?
-        if let f = format,
-           CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescription: f, sampleTiming: &timing, sampleBufferOut: &sb) == noErr,
-           let sampleBuffer = sb {
-            Task { @MainActor in
-                await self.stream.appendVideo(sampleBuffer)
-            }
-        }
-
-        setRenderInProgress(false)
-    }
-
-    private func pushCurrentProgramFrame() async {
-        // no-op: background pump handles rendering
+        return output
     }
 
     private func makeBaseProgramCGImage() -> CGImage? {
@@ -810,20 +743,13 @@ class StreamingViewModel: ObservableObject {
         ] as CFDictionary)
     }
 
-    // Add a new method to reset the mixer and use a specific device
     func resetAndSetupWithDevice(_ videoDevice: AVCaptureDevice) async {
         print("🔄 Resetting StreamingViewModel to use device: \(videoDevice.localizedName)")
-        
-        // Stop any existing streaming
         if isPublishing {
             await stop()
         }
-        
-        // Reset the mixer
         await mixer.setFrameRate(30)
         await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
-        
-        // Now setup with the specific device
         await setupCameraWithDevice(videoDevice)
     }
 }

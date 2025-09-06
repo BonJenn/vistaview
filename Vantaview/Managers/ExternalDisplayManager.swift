@@ -7,6 +7,7 @@ import MetalKit
 import CoreImage
 import AVFoundation
 import AVKit
+import QuartzCore
 
 @MainActor
 class ExternalDisplayManager: ObservableObject {
@@ -508,6 +509,9 @@ class ProfessionalVideoView: NSView {
     
     private var frameTimer: Timer?
     
+    private var metalLayer: CAMetalLayer?
+    private var programRenderer: ExternalProgramMetalRenderer?
+    
     init(productionManager: UnifiedProductionManager, displayInfo: ExternalDisplayManager.DisplayInfo, frame: CGRect) {
         self.productionManager = productionManager
         self.displayInfo = displayInfo
@@ -534,6 +538,18 @@ class ProfessionalVideoView: NSView {
         transformLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
         layer?.addSublayer(transformLayer)
+        
+        let mLayer = CAMetalLayer()
+        mLayer.device = metalDevice
+        mLayer.pixelFormat = .bgra8Unorm
+        mLayer.framebufferOnly = true
+        mLayer.isOpaque = true
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        mLayer.contentsScale = scale
+        mLayer.frame = bounds
+        mLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        transformLayer.addSublayer(mLayer)
+        metalLayer = mLayer
         
         videoLayer = CALayer()
         videoLayer.frame = bounds
@@ -600,6 +616,7 @@ class ProfessionalVideoView: NSView {
         
         switch programSource {
         case .camera(let feed):
+            stopProgramMetalRenderer()
             print("🚀 LIVE: Setting up camera feed for \(feed.device.displayName)")
             
             feed.$previewImage
@@ -622,15 +639,18 @@ class ProfessionalVideoView: NSView {
                 
         case .media(let mediaFile, _):
             if mediaFile.fileType == .image {
+                stopProgramMetalRenderer()
                 displayMediaPreview(mediaFile)
             } else {
-                startProgramFrameTimer()
+                startProgramMetalRenderer()
             }
             
         case .virtual(let camera):
+            stopProgramMetalRenderer()
             displayVirtualCameraPreview(camera)
             
         case .none:
+            stopProgramMetalRenderer()
             displayPlaceholder(text: "No Program Source", color: .systemGray)
         }
     }
@@ -666,7 +686,7 @@ class ProfessionalVideoView: NSView {
                 }
             }
         } else {
-            startProgramFrameTimer()
+            startProgramMetalRenderer()
         }
     }
     
@@ -851,20 +871,35 @@ class ProfessionalVideoView: NSView {
     }
 
     private func startProgramFrameTimer() {
-        stopFrameTimer()
-        frameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if let tex = self.productionManager.previewProgramManager.programCurrentTexture,
-               let cg = self.convertMetalTextureToCGImage(tex) {
-                self.displayLiveFrame(cg)
-            }
-        }
-        RunLoop.main.add(frameTimer!, forMode: .common)
     }
     
     private func stopFrameTimer() {
         frameTimer?.invalidate()
         frameTimer = nil
+    }
+    
+    private func startProgramMetalRenderer() {
+        guard programRenderer == nil, let mLayer = metalLayer else { return }
+        let provider: () -> MTLTexture? = { [weak self] in
+            self?.productionManager.previewProgramManager.programCurrentTexture
+        }
+        if let renderer = ExternalProgramMetalRenderer(device: metalDevice, metalLayer: mLayer, textureProvider: provider) {
+            programRenderer = renderer
+            renderer.start()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            videoLayer.isHidden = true
+            CATransaction.commit()
+        }
+    }
+    
+    private func stopProgramMetalRenderer() {
+        programRenderer?.stop()
+        programRenderer = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        videoLayer.isHidden = false
+        CATransaction.commit()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -877,6 +912,14 @@ class ProfessionalVideoView: NSView {
         videoLayer.frame = bounds
         layersContainer.frame = bounds
         overlayLayer.frame = bounds
+        
+        if let mLayer = metalLayer {
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            mLayer.frame = bounds
+            mLayer.contentsScale = scale
+            mLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        }
+        
         CATransaction.commit()
     }
 
@@ -1032,6 +1075,7 @@ class ProfessionalVideoView: NSView {
 
     deinit {
         cancellables.removeAll()
+        stopProgramMetalRenderer()
         print("🚀 Professional video view deinitialized")
     }
 }
