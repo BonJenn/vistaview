@@ -15,12 +15,12 @@ struct ChromaKeyUniforms {
     float blackClip, whiteClip;
     float spillStrength, spillDesat, despillBias;
     float viewMatte;
-    uint  width, height, padding;
+    float width, height, padding;
     float bgScale, bgOffsetX, bgOffsetY, bgRotationRad, bgEnabled;
     float interactive;
     float lightWrap;
-    uint  bgW, bgH;
-    float fillMode;    // 0 = Contain (letter/pillar), 1 = Cover (crop)
+    float bgW, bgH;
+    float fillMode; // 0=Contain, 1=Cover
 };
 
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -127,36 +127,31 @@ kernel void chromaKeyKernel(
         return;
     }
 
-    // Aspect-true mapping with Contain/Cover selection (no stretch)
+    // Aspect-true mapping with Contain/Cover; never stretch
     float3 bgRGB = float3(0.0);
-    if (u.bgEnabled > 0.5 && u.bgW > 0 && u.bgH > 0) {
+    if (u.bgEnabled > 0.5 && u.bgW > 0.5 && u.bgH > 0.5) {
         float2 scrSize = float2(u.width, u.height);
         float2 bgSize  = float2(u.bgW,   u.bgH);
 
-        // Screen pixel offsets centered
         float2 pScr = (uv - 0.5) * scrSize;
 
-        // Rotate into background space
         float c = cos(-u.bgRotationRad);
         float si = sin(-u.bgRotationRad);
         float2 pRot = float2(pScr.x * c - pScr.y * si, pScr.x * si + pScr.y * c);
 
-        // Base aspect scale from bg->screen
         float scaleX = scrSize.x / bgSize.x;
         float scaleY = scrSize.y / bgSize.y;
-        float aspectScale = (u.fillMode > 0.5) ? max(scaleX, scaleY) : min(scaleX, scaleY); // Cover or Contain
+        float aspectScale = (u.fillMode > 0.5) ? max(scaleX, scaleY) : min(scaleX, scaleY);
 
-        // Apply user scale (uniform zoom)
         float denom = max(1e-5, aspectScale * u.bgScale);
         float2 pBgPx = pRot / denom;
 
-        // Convert to normalized bg uv (0..1), apply user offsets
         float2 buv = (pBgPx / bgSize) + 0.5 + float2(u.bgOffsetX, u.bgOffsetY) * 0.5;
 
         if (all(buv >= 0.0) && all(buv <= 1.0)) {
             bgRGB = bgTex.sample(s, buv).rgb;
         } else {
-            bgRGB = float3(0.0); // black bars/pillars
+            bgRGB = float3(0.0);
         }
     }
 

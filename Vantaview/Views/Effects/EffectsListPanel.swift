@@ -301,15 +301,17 @@ struct EffectListItemView: View {
                             .padding(.bottom, 4)
                     }
                     
-                    ForEach(Array(effect.parameters.keys.sorted()), id: \.self) { key in
-                        if let parameter = effect.parameters[key] {
-                            EffectParameterSlider(
-                                parameter: Binding(
-                                    get: { effect.parameters[key] ?? parameter },
-                                    set: { effect.parameters[key] = $0 }
-                                ),
-                                color: effect.category.color
-                            )
+                    if !(effect is ChromaKeyEffect) {
+                        ForEach(Array(effect.parameters.keys.sorted()), id: \.self) { key in
+                            if let parameter = effect.parameters[key] {
+                                EffectParameterSlider(
+                                    parameter: Binding(
+                                        get: { effect.parameters[key] ?? parameter },
+                                        set: { effect.parameters[key] = $0 }
+                                    ),
+                                    color: effect.category.color
+                                )
+                            }
                         }
                     }
                     
@@ -325,6 +327,7 @@ struct EffectListItemView: View {
                         .background(Color.orange.opacity(0.2))
                         .foregroundColor(.orange)
                         .cornerRadius(4)
+                        Spacer()
                     }
                 }
                 .padding(.horizontal, 12)

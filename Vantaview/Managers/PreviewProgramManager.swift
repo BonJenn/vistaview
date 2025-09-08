@@ -266,37 +266,37 @@ final class PreviewProgramManager: ObservableObject {
     /// "Take" - Cut preview to program instantly
     func take() {
         print("✂️ TAKE: Moving preview to program")
-        print("✂️ TAKE DEBUG: Current preview source: \(previewSource)")
-        print("✂️ TAKE DEBUG: Current program source: \(programSource)")
-        
         stopProgram()
+
         let previewContent = previewSource
-        print("✂️ TAKE DEBUG: Moving \(previewContent) to program")
         loadToProgram(previewContent)
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
 
+        // COPY chroma key background by matching effect types, not just indices
         if let prevChain = effectManager.getPreviewEffectChain(),
            let progChain = effectManager.getProgramEffectChain() {
-            let count = min(prevChain.effects.count, progChain.effects.count)
-            for i in 0..<count {
-                if let srcCK = prevChain.effects[i] as? ChromaKeyEffect,
-                   let dstCK = progChain.effects[i] as? ChromaKeyEffect {
-                    if let url = srcCK.backgroundURL {
-                        dstCK.setBackground(from: url, device: effectManager.metalDevice)
-                        if srcCK.bgIsPlaying { dstCK.playBackgroundVideo() } else { dstCK.pauseBackgroundVideo() }
-                    }
+
+            let prevKeys = prevChain.effects.compactMap { $0 as? ChromaKeyEffect }
+            let progKeys = progChain.effects.compactMap { $0 as? ChromaKeyEffect }
+
+            for (idx, srcCK) in prevKeys.enumerated() {
+                guard idx < progKeys.count else { break }
+                let dstCK = progKeys[idx]
+                if let url = srcCK.backgroundURL {
+                    dstCK.setBackground(from: url, device: effectManager.metalDevice)
+                    if srcCK.bgIsPlaying { dstCK.playBackgroundVideo() } else { dstCK.pauseBackgroundVideo() }
+                    dstCK.parameters["bgScale"]?.value = srcCK.parameters["bgScale"]?.value ?? 1.0
+                    dstCK.parameters["bgOffsetX"]?.value = srcCK.parameters["bgOffsetX"]?.value ?? 0.0
+                    dstCK.parameters["bgOffsetY"]?.value = srcCK.parameters["bgOffsetY"]?.value ?? 0.0
+                    dstCK.parameters["bgRotation"]?.value = srcCK.parameters["bgRotation"]?.value ?? 0.0
+                    dstCK.parameters["bgFillMode"]?.value = srcCK.parameters["bgFillMode"]?.value ?? 0.0
                 }
             }
         }
 
-        // Ensure program effect runner points to the cloned chain
         self.programEffectRunner?.setChain(self.getProgramEffectChain())
-        print("✨ TAKE: Copied Preview effects to Program")
         crossfaderValue = 0.0
         objectWillChange.send()
-        print("✅ Take complete: Program now showing \(programSourceDisplayName)")
-        print("✅ TAKE DEBUG: Final program source: \(programSource)")
-        
         playProgram()
     }
     

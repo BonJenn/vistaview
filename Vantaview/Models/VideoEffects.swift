@@ -721,11 +721,11 @@ final class ChromaKeyEffect: BaseVideoEffect {
         var blackClip: Float, whiteClip: Float
         var spillStrength: Float, spillDesat: Float, despillBias: Float
         var viewMatte: Float
-        var width: UInt32, height: UInt32, padding: UInt32
+        var width: Float, height: Float, padding: Float
         var bgScale: Float, bgOffsetX: Float, bgOffsetY: Float, bgRotationRad: Float, bgEnabled: Float
         var interactive: Float
         var lightWrap: Float
-        var bgW: UInt32, bgH: UInt32
+        var bgW: Float, bgH: Float
         var fillMode: Float
     }
 
@@ -883,7 +883,6 @@ final class ChromaKeyEffect: BaseVideoEffect {
 
         var atTime = player.currentTime()
         if !output.hasNewPixelBuffer(forItemTime: atTime) {
-            // Try display timestamp path
             let host = CACurrentMediaTime()
             let itemTime = output.itemTime(forHostTime: host)
             if output.hasNewPixelBuffer(forItemTime: itemTime) { atTime = itemTime } else { return }
@@ -901,9 +900,13 @@ final class ChromaKeyEffect: BaseVideoEffect {
         }
         guard let tex = backgroundTexture, let ctx = ciContext else { return }
 
-        let ci = CIImage(cvPixelBuffer: pb)
+        // FIX: Video frames were upside down — flip vertically before rendering
+        let ciSrc = CIImage(cvPixelBuffer: pb)
+        let flipped = ciSrc
+            .transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -CGFloat(h)))
+
         let bounds = CGRect(x: 0, y: 0, width: w, height: h)
-        ctx.render(ci, to: tex, commandBuffer: commandBuffer, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        ctx.render(flipped, to: tex, commandBuffer: commandBuffer, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
     }
 
     func setBackground(from url: URL, device: MTLDevice) {
@@ -927,7 +930,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
         makeFallbackBGTexture(device: device)
         refreshBackgroundVideoFrame(commandBuffer: commandBuffer, device: device)
         guard let pipelineState else { return texture }
-        
+
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: texture.pixelFormat,
             width: texture.width,
@@ -936,7 +939,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
         )
         descriptor.usage = [.shaderRead, .shaderWrite]
         guard let outputTexture = device.makeTexture(descriptor: descriptor) else { return texture }
-        
+
         var u = ChromaKeyUniforms(
             keyR: parameters["keyR"]?.value ?? 0.0,
             keyG: parameters["keyG"]?.value ?? 1.0,
@@ -952,18 +955,18 @@ final class ChromaKeyEffect: BaseVideoEffect {
             spillDesat: parameters["spillDesat"]?.value ?? 0.4,
             despillBias: parameters["despillBias"]?.value ?? 0.2,
             viewMatte: parameters["viewMatte"]?.value ?? 0.0,
-            width: UInt32(texture.width),
-            height: UInt32(texture.height),
+            width: Float(texture.width),
+            height: Float(texture.height),
             padding: 0,
             bgScale: parameters["bgScale"]?.value ?? 1.0,
             bgOffsetX: parameters["bgOffsetX"]?.value ?? 0.0,
             bgOffsetY: parameters["bgOffsetY"]?.value ?? 0.0,
             bgRotationRad: (parameters["bgRotation"]?.value ?? 0.0) * .pi / 180.0,
-            bgEnabled: backgroundTexture != nil ? 1.0 : 0.0,
+            bgEnabled: (backgroundTexture != nil) ? 1.0 : 0.0,
             interactive: isInteractive ? 1.0 : 0.0,
             lightWrap: parameters["lightWrap"]?.value ?? 0.0,
-            bgW: UInt32(backgroundTexture?.width ?? 0),
-            bgH: UInt32(backgroundTexture?.height ?? 0),
+            bgW: Float(backgroundTexture?.width ?? 0),
+            bgH: Float(backgroundTexture?.height ?? 0),
             fillMode: parameters["bgFillMode"]?.value ?? 0.0
         )
 
@@ -980,7 +983,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
         encoder.dispatchThreads(MTLSize(width: texture.width, height: texture.height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
         encoder.endEncoding()
-        
+
         return outputTexture
     }
 }

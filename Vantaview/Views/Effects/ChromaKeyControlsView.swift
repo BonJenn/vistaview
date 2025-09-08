@@ -33,18 +33,14 @@ struct ChromaKeyControlsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // KEY SECTION
-            VStack(alignment: .leading, spacing: 6) {
+            // Centered, lightweight control row (instant open)
+            VStack(spacing: 8) {
                 HStack(spacing: 12) {
-                    HStack(spacing: 8) {
-                        Text("Key")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        ColorPicker("", selection: keyColorBinding, supportsOpacity: false)
-                            .labelsHidden()
-                            .frame(width: 44, height: 22)
-                    }
-                    
+                    ColorPicker("", selection: keyColorBinding, supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 44, height: 22)
+                        .controlSize(.small)
+
                     Button {
                         startEyedropper()
                     } label: {
@@ -53,32 +49,24 @@ struct ChromaKeyControlsView: View {
                     }
                     .controlSize(.small)
                     .buttonStyle(.bordered)
-                    
-                    Spacer()
-                    
-                    HStack(spacing: 6) {
-                        Toggle("", isOn: viewMatteBinding)
-                            .labelsHidden()
-                            .toggleStyle(SwitchToggleStyle(tint: .teal))
-                            .controlSize(.small)
-                        Text("View Matte")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-                
-                HStack(spacing: 8) {
+
                     Button("Green") { setKeyPreset(r: 0.0, g: 1.0, b: 0.0) }
                         .controlSize(.small)
                         .buttonStyle(.bordered)
+
                     Button("Blue") { setKeyPreset(r: 0.0, g: 0.5, b: 1.0) }
                         .controlSize(.small)
                         .buttonStyle(.bordered)
+
+                    Toggle("View Matte", isOn: viewMatteBinding)
+                        .toggleStyle(SwitchToggleStyle(tint: .teal))
+                        .controlSize(.small)
+                        .font(.caption)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
             }
-            
+
             GroupBox("Background") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .top, spacing: 12) {
@@ -94,9 +82,8 @@ struct ChromaKeyControlsView: View {
                             if let img = effect.backgroundPreview {
                                 Image(nsImage: img)
                                     .resizable()
-                                    .aspectRatio(16/9, contentMode: .fit)
+                                    .aspectRatio(contentMode: .fit)
                                     .frame(width: 128, height: 72)
-                                    .clipped()
                                     .cornerRadius(6)
                             } else {
                                 Text("No Background")
@@ -160,6 +147,35 @@ struct ChromaKeyControlsView: View {
                                 .pickerStyle(.segmented)
                                 .controlSize(.small)
                                 .frame(width: 180)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button {
+                                    quickFitContain()
+                                } label: {
+                                    Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                                        .font(.caption)
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    quickFillCover()
+                                } label: {
+                                    Label("Fill", systemImage: "arrow.down.right.and.arrow.up.left")
+                                        .font(.caption)
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    quickCenter()
+                                } label: {
+                                    Label("Center", systemImage: "circle")
+                                        .font(.caption)
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.bordered)
                             }
 
                             if let name = effect.backgroundName {
@@ -247,5 +263,31 @@ struct ChromaKeyControlsView: View {
             guard resp == .OK, let url = panel.url else { return }
             effect.setBackground(from: url, device: effectManager.metalDevice)
         }
+    }
+}
+
+private extension ChromaKeyControlsView {
+    func quickCenter() {
+        effect.parameters["bgOffsetX"]?.value = 0.0
+        effect.parameters["bgOffsetY"]?.value = 0.0
+        effect.objectWillChange.send()
+    }
+    
+    func quickFitContain() {
+        effect.parameters["bgFillMode"]?.value = 0.0 // Contain (letter/pillar)
+        effect.parameters["bgScale"]?.value = 1.0
+        effect.parameters["bgOffsetX"]?.value = 0.0
+        effect.parameters["bgOffsetY"]?.value = 0.0
+        effect.parameters["bgRotation"]?.value = 0.0
+        effect.objectWillChange.send()
+    }
+    
+    func quickFillCover() {
+        effect.parameters["bgFillMode"]?.value = 1.0 // Cover (crop)
+        effect.parameters["bgScale"]?.value = 1.0
+        effect.parameters["bgOffsetX"]?.value = 0.0
+        effect.parameters["bgOffsetY"]?.value = 0.0
+        effect.parameters["bgRotation"]?.value = 0.0
+        effect.objectWillChange.send()
     }
 }
