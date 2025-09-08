@@ -1526,6 +1526,7 @@ struct ComprehensiveMediaControls: View {
                         Text(String(format: "%.2g×", playbackRate.wrappedValue))
                             .font(.caption2)
                             .fontWeight(.medium)
+                            .foregroundColor(.secondary)
                     }
                     .foregroundColor(.secondary)
                 }
@@ -1741,6 +1742,8 @@ struct SimplePreviewMonitorView: View {
         productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
     }
 
+    @State private var isDropTargeted: Bool = false
+
     var body: some View {
         ZStack {
             Color.black
@@ -1780,6 +1783,32 @@ struct SimplePreviewMonitorView: View {
             case .none:
                 NoSourceView(isPreview: true)
             }
+
+            if isDropTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here (Preview)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+        }
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            guard let item = items.first else { return false }
+            productionManager.previewProgramManager.addEffectToPreview(item.effectType)
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
         }
     }
 }
@@ -1793,6 +1822,7 @@ struct SimpleProgramMonitorView: View {
     }
 
     @State private var lastDropCanvasSize: CGSize = .zero
+    @State private var isDropTargeted: Bool = false
 
     var body: some View {
         ZStack {
@@ -1840,6 +1870,22 @@ struct SimpleProgramMonitorView: View {
             LayersInteractiveOverlay()
                 .environmentObject(layerManager)
                 .allowsHitTesting(true)
+
+            if isDropTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here (Program)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
         }
         .background(
             GeometryReader { geo in
@@ -1848,6 +1894,16 @@ struct SimpleProgramMonitorView: View {
                     .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
             }
         )
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            guard let item = items.first else { return false }
+            productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
     }
 }
 

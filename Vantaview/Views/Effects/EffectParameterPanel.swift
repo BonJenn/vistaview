@@ -47,6 +47,11 @@ struct EffectParameterPanel: View {
             // Parameters
             if isExpanded {
                 VStack(spacing: 8) {
+                    if let ck = effect as? ChromaKeyEffect {
+                        ChromaKeyControlsView(effect: ck)
+                            .padding(.bottom, 4)
+                    }
+                    
                     ForEach(Array(effect.parameters.keys.sorted()), id: \.self) { key in
                         if let parameter = effect.parameters[key] {
                             EffectParameterSlider(
@@ -207,6 +212,7 @@ struct EffectChainPanel: View {
                 LazyVStack(spacing: 8) {
                     ForEach(Array(effectChain.effects.enumerated()), id: \.1.id) { index, effect in
                         EffectParameterPanel(effect: effect as! BaseVideoEffect)
+                            .environmentObject(effectManager)
                             .onDrag {
                                 draggedEffect = effect
                                 return NSItemProvider(object: "\(index)" as NSString)

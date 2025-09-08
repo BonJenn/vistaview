@@ -4,6 +4,10 @@ import MetalKit
 import MetalPerformanceShaders
 import SwiftUI
 import CoreImage
+import AVFoundation
+#if os(macOS)
+import AppKit
+#endif
 
 // MARK: - Effect Categories
 
@@ -14,6 +18,7 @@ enum EffectCategory: String, CaseIterable {
     case blur = "Blur & Sharpen"
     case stylize = "Stylize"
     case transition = "Transition"
+    case keying = "Keying"
     
     var icon: String {
         switch self {
@@ -23,6 +28,7 @@ enum EffectCategory: String, CaseIterable {
         case .blur: return "camera.filters"
         case .stylize: return "sparkles"
         case .transition: return "arrow.left.arrow.right"
+        case .keying: return "person.crop.rectangle"
         }
     }
     
@@ -34,6 +40,7 @@ enum EffectCategory: String, CaseIterable {
         case .blur: return .green
         case .stylize: return .pink
         case .transition: return .indigo
+        case .keying: return .teal
         }
     }
 }
@@ -648,6 +655,300 @@ class PixelateEffect: BaseVideoEffect {
     }
 }
 
+final class ChromaKeyEffect: BaseVideoEffect {
+    private var pipelineState: MTLComputePipelineState?
+    @Published var backgroundName: String?
+    #if os(macOS)
+    @Published var backgroundPreview: NSImage?
+    #endif
+    private var backgroundTexture: MTLTexture?
+    private var fallbackBGTexture: MTLTexture?
+
+    private var bgPlayer: AVPlayer?
+    private var bgOutput: AVPlayerItemVideoOutput?
+    private var bgEndObserver: NSObjectProtocol?
+    private var ciContext: CIContext?
+    private var textureCache: CVMetalTextureCache?
+    @Published var bgIsPlaying: Bool = false
+
+    override init(name: String = "Chroma Key", category: EffectCategory = .keying, icon: String = "person.crop.rectangle") {
+        super.init(name: name, category: category, icon: icon)
+        
+        // Key color (RGB 0...1)
+        parameters["keyR"] = EffectParameter(name: "Key Red", defaultValue: 0.0, range: 0.0...1.0, step: 0.01)
+        parameters["keyG"] = EffectParameter(name: "Key Green", defaultValue: 1.0, range: 0.0...1.0, step: 0.01)
+        parameters["keyB"] = EffectParameter(name: "Key Blue", defaultValue: 0.0, range: 0.0...1.0, step: 0.01)
+        
+        // Core keying controls
+        parameters["strength"] = EffectParameter(name: "Strength", defaultValue: 0.5, range: 0.0...1.0, step: 0.01)
+        parameters["softness"] = EffectParameter(name: "Softness", defaultValue: 0.2, range: 0.0...1.0, step: 0.01)
+        parameters["balance"] = EffectParameter(name: "Balance", defaultValue: 0.5, range: 0.0...1.0, step: 0.01)
+        
+        // Matte tools
+        parameters["matteShift"] = EffectParameter(name: "Matte Shrink/Grow (px)", defaultValue: 0.0, range: -8.0...8.0, step: 1.0)
+        parameters["edgeSoftness"] = EffectParameter(name: "Edge Softness", defaultValue: 0.3, range: 0.0...1.0, step: 0.01)
+        parameters["blackClip"] = EffectParameter(name: "Black Clip", defaultValue: 0.05, range: 0.0...0.5, step: 0.005)
+        parameters["whiteClip"] = EffectParameter(name: "White Clip", defaultValue: 0.95, range: 0.5...1.0, step: 0.005)
+        
+        // Spill suppression
+        parameters["spillStrength"] = EffectParameter(name: "Spill Strength", defaultValue: 0.7, range: 0.0...1.0, step: 0.01)
+        parameters["spillDesat"] = EffectParameter(name: "Spill Desaturation", defaultValue: 0.4, range: 0.0...1.0, step: 0.01)
+        parameters["despillBias"] = EffectParameter(name: "Despill Bias", defaultValue: 0.2, range: 0.0...1.0, step: 0.01)
+        
+        // View matte
+        parameters["viewMatte"] = EffectParameter(name: "View Matte", defaultValue: 0.0, range: 0.0...1.0, step: 1.0)
+        
+        parameters["bgScale"] = EffectParameter(name: "BG Scale", defaultValue: 1.0, range: 0.1...4.0, step: 0.01)
+        parameters["bgOffsetX"] = EffectParameter(name: "BG Offset X", defaultValue: 0.0, range: -1.0...1.0, step: 0.01)
+        parameters["bgOffsetY"] = EffectParameter(name: "BG Offset Y", defaultValue: 0.0, range: -1.0...1.0, step: 0.01)
+        parameters["bgRotation"] = EffectParameter(name: "BG Rotation", defaultValue: 0.0, range: -180.0...180.0, step: 1.0)
+        parameters["bgLoop"] = EffectParameter(name: "BG Loop", defaultValue: 1.0, range: 0.0...1.0, step: 1.0)
+    }
+    
+    private struct ChromaKeyUniforms {
+        var keyR: Float; var keyG: Float; var keyB: Float
+        var strength: Float; var softness: Float; var balance: Float
+        var matteShift: Float; var edgeSoftness: Float
+        var blackClip: Float; var whiteClip: Float
+        var spillStrength: Float; var spillDesat: Float; var despillBias: Float
+        var viewMatte: Float
+        var width: UInt32; var height: UInt32; var padding: UInt32
+        var bgScale: Float; var bgOffsetX: Float; var bgOffsetY: Float; var bgRotationRad: Float; var bgEnabled: Float
+    }
+    
+    private func makePipeline(device: MTLDevice) {
+        if pipelineState != nil { return }
+        guard let library = device.makeDefaultLibrary(), let function = library.makeFunction(name: "chromaKeyKernel") else { return }
+        pipelineState = try? device.makeComputePipelineState(function: function)
+    }
+
+    private func ensureCIContext(device: MTLDevice) {
+        if ciContext == nil {
+            ciContext = CIContext(mtlDevice: device, options: [
+                .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+                .outputColorSpace: CGColorSpaceCreateDeviceRGB()
+            ])
+        }
+        if textureCache == nil {
+            CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+        }
+    }
+
+    private func makeFallbackBGTexture(device: MTLDevice) {
+        guard fallbackBGTexture == nil else { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        if let tex = device.makeTexture(descriptor: desc) {
+            var px: UInt32 = 0x000000FF
+            tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
+            fallbackBGTexture = tex
+        }
+    }
+
+    func clearBackground() {
+        backgroundTexture = nil
+        backgroundName = nil
+        #if os(macOS)
+        backgroundPreview = nil
+        #endif
+        stopBackgroundVideo()
+        objectWillChange.send()
+    }
+
+    func setBackgroundImage(_ image: CGImage, device: MTLDevice) {
+        let loader = MTKTextureLoader(device: device)
+        do {
+            backgroundTexture = try loader.newTexture(cgImage: image, options: [
+                MTKTextureLoader.Option.SRGB : false,
+                MTKTextureLoader.Option.textureUsage : MTLTextureUsage.shaderRead.rawValue
+            ])
+            backgroundName = "Image"
+            #if os(macOS)
+            let rep = NSBitmapImageRep(cgImage: image)
+            let ns = NSImage(size: NSSize(width: image.width, height: image.height))
+            ns.addRepresentation(rep)
+            backgroundPreview = ns
+            #endif
+            stopBackgroundVideo()
+            objectWillChange.send()
+        } catch { print("ChromaKeyEffect: BG image texture failed:", error) }
+    }
+
+    func setBackgroundVideo(url: URL, device: MTLDevice) {
+        ensureCIContext(device: device)
+        stopBackgroundVideo()
+
+        let item = AVPlayerItem(url: url)
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+        output.suppressesPlayerRendering = true
+        item.add(output)
+
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = true
+        player.actionAtItemEnd = .none
+
+        bgEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if (self.parameters["bgLoop"]?.value ?? 1.0) >= 0.5 {
+                player.seek(to: .zero)
+                player.play()
+                self.bgIsPlaying = true
+            } else {
+                self.bgIsPlaying = false
+            }
+        }
+
+        bgPlayer = player
+        bgOutput = output
+        player.play()
+        bgIsPlaying = true
+        backgroundName = url.lastPathComponent
+
+        // Create a small preview thumbnail
+        let gen = AVAssetImageGenerator(asset: item.asset)
+        gen.appliesPreferredTrackTransform = true
+        if let cg = try? gen.copyCGImage(at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil) {
+            #if os(macOS)
+            let rep = NSBitmapImageRep(cgImage: cg)
+            let ns = NSImage(size: NSSize(width: cg.width, height: cg.height))
+            ns.addRepresentation(rep)
+            backgroundPreview = ns
+            #endif
+        }
+
+        objectWillChange.send()
+    }
+
+    func playBackgroundVideo() {
+        bgPlayer?.play()
+        bgIsPlaying = true
+        objectWillChange.send()
+    }
+
+    func pauseBackgroundVideo() {
+        bgPlayer?.pause()
+        bgIsPlaying = false
+        objectWillChange.send()
+    }
+
+    private func stopBackgroundVideo() {
+        if let obs = bgEndObserver {
+            NotificationCenter.default.removeObserver(obs)
+            bgEndObserver = nil
+        }
+        bgPlayer?.pause()
+        bgPlayer = nil
+        bgOutput = nil
+        bgIsPlaying = false
+    }
+
+    // Pull latest frame from video and upload to backgroundTexture
+    private func refreshBackgroundVideoFrame(commandBuffer: MTLCommandBuffer, device: MTLDevice) {
+        guard let output = bgOutput, let player = bgPlayer else { return }
+        ensureCIContext(device: device)
+
+        var atTime = player.currentTime()
+        if !output.hasNewPixelBuffer(forItemTime: atTime) {
+            // Try display timestamp path
+            let host = CACurrentMediaTime()
+            let itemTime = output.itemTime(forHostTime: host)
+            if output.hasNewPixelBuffer(forItemTime: itemTime) { atTime = itemTime } else { return }
+        }
+        var displayTime = CMTime.zero
+        guard let pb = output.copyPixelBuffer(forItemTime: atTime, itemTimeForDisplay: &displayTime) else { return }
+
+        let w = CVPixelBufferGetWidth(pb)
+        let h = CVPixelBufferGetHeight(pb)
+
+        if backgroundTexture == nil || backgroundTexture?.width != w || backgroundTexture?.height != h {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+            desc.usage = [.shaderRead, .shaderWrite]
+            backgroundTexture = device.makeTexture(descriptor: desc)
+        }
+        guard let tex = backgroundTexture, let ctx = ciContext else { return }
+
+        let ci = CIImage(cvPixelBuffer: pb)
+        let bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        ctx.render(ci, to: tex, commandBuffer: commandBuffer, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+    }
+
+    func setBackground(from url: URL, device: MTLDevice) {
+        let ext = url.pathExtension.lowercased()
+        if ["mp4","mov","m4v","avi","mkv","webm","hevc","heic"].contains(ext) {
+            setBackgroundVideo(url: url, device: device)
+            return
+        }
+        #if os(macOS)
+        if let img = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            setBackgroundImage(img, device: device)
+        }
+        #endif
+    }
+    
+    override func apply(to texture: MTLTexture, using commandBuffer: MTLCommandBuffer, device: MTLDevice) -> MTLTexture? {
+        guard isEnabled else { return texture }
+        makePipeline(device: device)
+        makeFallbackBGTexture(device: device)
+        refreshBackgroundVideoFrame(commandBuffer: commandBuffer, device: device)
+        guard let pipelineState else { return texture }
+        
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width,
+            height: texture.height,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        guard let outputTexture = device.makeTexture(descriptor: descriptor) else { return texture }
+        
+        var u = ChromaKeyUniforms(
+            keyR: parameters["keyR"]?.value ?? 0.0,
+            keyG: parameters["keyG"]?.value ?? 1.0,
+            keyB: parameters["keyB"]?.value ?? 0.0,
+            strength: parameters["strength"]?.value ?? 0.5,
+            softness: parameters["softness"]?.value ?? 0.2,
+            balance: parameters["balance"]?.value ?? 0.5,
+            matteShift: parameters["matteShift"]?.value ?? 0.0,
+            edgeSoftness: parameters["edgeSoftness"]?.value ?? 0.3,
+            blackClip: parameters["blackClip"]?.value ?? 0.05,
+            whiteClip: parameters["whiteClip"]?.value ?? 0.95,
+            spillStrength: parameters["spillStrength"]?.value ?? 0.7,
+            spillDesat: parameters["spillDesat"]?.value ?? 0.4,
+            despillBias: parameters["despillBias"]?.value ?? 0.2,
+            viewMatte: parameters["viewMatte"]?.value ?? 0.0,
+            width: UInt32(texture.width),
+            height: UInt32(texture.height),
+            padding: 0,
+            bgScale: parameters["bgScale"]?.value ?? 1.0,
+            bgOffsetX: parameters["bgOffsetX"]?.value ?? 0.0,
+            bgOffsetY: parameters["bgOffsetY"]?.value ?? 0.0,
+            bgRotationRad: (parameters["bgRotation"]?.value ?? 0.0) * .pi / 180.0,
+            bgEnabled: backgroundTexture != nil ? 1.0 : 0.0
+        )
+
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return texture }
+        encoder.setComputePipelineState(pipelineState)
+        encoder.setTexture(texture, index: 0)
+        encoder.setTexture(outputTexture, index: 1)
+        // Use fallback to avoid nil binding, but bgEnabled will be 0 if it's the fallback
+        encoder.setTexture(backgroundTexture ?? fallbackBGTexture, index: 2)
+        var uniforms = u
+        encoder.setBytes(&uniforms, length: MemoryLayout<ChromaKeyUniforms>.stride, index: 0)
+        let w = pipelineState.threadExecutionWidth
+        let h = pipelineState.maxTotalThreadsPerThreadgroup / w
+        encoder.dispatchThreads(MTLSize(width: texture.width, height: texture.height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+        encoder.endEncoding()
+        
+        return outputTexture
+    }
+}
+
 // MARK: - Effects Library
 
 class EffectsLibrary: ObservableObject {
@@ -676,7 +977,9 @@ class EffectsLibrary: ObservableObject {
             
             // Stylize
             GlitchEffect(),
-            EdgeDetectionEffect()
+            EdgeDetectionEffect(),
+            
+            ChromaKeyEffect()
         ]
     }
     
@@ -695,6 +998,7 @@ class EffectsLibrary: ObservableObject {
         case "Digital Glitch": return GlitchEffect()
         case "Edge Detection": return EdgeDetectionEffect()
         case "Pixelate": return PixelateEffect()
+        case "Chroma Key": return ChromaKeyEffect()
         default: return nil
         }
     }

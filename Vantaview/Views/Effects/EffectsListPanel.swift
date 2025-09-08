@@ -96,6 +96,7 @@ struct EffectsListPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environmentObject(effectManager)
     }
     
     private func clearCurrentEffects() {
@@ -290,6 +291,11 @@ struct EffectListItemView: View {
             // Effect Parameters (expandable)
             if isExpanded && !effect.parameters.isEmpty {
                 VStack(spacing: 6) {
+                    if let ck = effect as? ChromaKeyEffect {
+                        ChromaKeyControlsView(effect: ck)
+                            .padding(.bottom, 4)
+                    }
+                    
                     ForEach(Array(effect.parameters.keys.sorted()), id: \.self) { key in
                         if let parameter = effect.parameters[key] {
                             EffectParameterSlider(

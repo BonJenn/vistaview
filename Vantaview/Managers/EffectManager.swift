@@ -135,6 +135,10 @@ class EffectChain: ObservableObject, Identifiable {
             let newEffect = PixelateEffect()
             copyParameters(from: effect, to: newEffect)
             return newEffect
+        case "ChromaKeyEffect":
+            let newEffect = ChromaKeyEffect()
+            copyParameters(from: effect, to: newEffect)
+            return newEffect
         default:
             return nil
         }
