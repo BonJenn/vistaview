@@ -17,6 +17,10 @@ struct ChromaKeyUniforms {
     float viewMatte;
     uint  width, height, padding;
     float bgScale, bgOffsetX, bgOffsetY, bgRotationRad, bgEnabled;
+    float interactive;
+    float lightWrap;
+    uint  bgW, bgH;
+    float fillMode;    // 0 = Contain (letter/pillar), 1 = Cover (crop)
 };
 
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -29,22 +33,49 @@ inline float saturation(float3 c) {
     return d / (1.0 - fabs(2.0 * l - 1.0) + 1e-5);
 }
 
-// Returns keyness k in [0..1], where 1.0 means pixel == key color
 inline float computeKeyness(float3 rgb, float3 keyRgb, constant ChromaKeyUniforms& u) {
-    float3 yuv = rgb2yuv(rgb);
+    float3 yuv  = rgb2yuv(rgb);
     float3 kyuv = rgb2yuv(keyRgb);
-    float2 uv = yuv.yz;
-    float2 kuv = kyuv.yz;
-    float distUV = distance(uv, kuv);
-    float sat = saturation(rgb);
-    float satWeight = mix(0.6, 1.4, saturate(sat));
+    float2 uv   = yuv.yz;
+    float2 kuv  = kyuv.yz;
+
+    float2 uva = normalize(uv);
+    float2 kuva = normalize(kuv);
+    float ang = acos(clamp(dot(uva, kuva), -1.0, 1.0));
+    float angN = ang / (0.5 * 3.14159265);
+
+    float distUV = length(uv - kuv);
     float distRGB = distance(rgb, keyRgb);
-    float distMix = mix(distRGB, distUV, saturate(u.balance));
-    float dist = distMix * satWeight;
-    float thr = mix(0.05, 0.5, saturate(u.strength));
-    float halfWidth = max(0.001, u.softness * max(0.02, thr));
-    float k = 1.0 - smoothstep(thr - halfWidth, thr + halfWidth, dist);
-    return saturate(k);
+
+    float chromaMix = mix(distRGB, distUV + angN * 0.25, saturate(u.balance));
+    float satW = mix(0.6, 1.4, saturate(saturation(rgb)));
+    float d = chromaMix * satW;
+
+    float thr = mix(0.03, 0.35, saturate(u.strength));
+    float halfW = max(0.001, u.softness * max(0.02, thr));
+    float k = 1.0 - smoothstep(thr - halfW, thr + halfW, d);
+    return clamp(k, 0.0, 1.0);
+}
+
+inline float3 despill(float3 src, float3 keyRgb, float k, constant ChromaKeyUniforms& u) {
+    float spill = clamp(u.spillStrength, 0.0, 1.0);
+    float desat = clamp(u.spillDesat, 0.0, 1.0);
+    float bias  = clamp(u.despillBias, 0.0, 1.0);
+
+    float edge = k * (1.0 - k) * 4.0;
+    float wSpill = spill * max(edge, 0.15 * k);
+
+    float3 kDir = normalize(keyRgb + 1e-6);
+    float proj = dot(src, kDir);
+    float3 removed = src - kDir * proj * wSpill;
+
+    float lum = luminance(removed);
+    removed = mix(removed, float3(lum), desat * wSpill);
+
+    float3 compTint = normalize(float3(1.0, 1.0, 1.0) - kDir);
+    removed = mix(removed, normalize(removed + compTint * 0.25), bias * wSpill);
+
+    return clamp(removed, 0.0, 1.0);
 }
 
 kernel void chromaKeyKernel(
@@ -64,11 +95,9 @@ kernel void chromaKeyKernel(
     float4 src = inTex.read(gid);
     float3 keyRgb = float3(u.keyR, u.keyG, u.keyB);
 
-    // Compute keyness then invert to matte (foreground alpha)
-    float k = computeKeyness(src.rgb, keyRgb, u); // 1 = key color, 0 = not key
-    // Optional edge soften by local blur of keyness
+    float k = computeKeyness(src.rgb, keyRgb, u);
     if (u.edgeSoftness > 0.001) {
-        float r = clamp(u.edgeSoftness * 4.0, 1.0, 6.0);
+        float r = clamp(u.edgeSoftness * (u.interactive > 0.5 ? 2.0 : 4.0), 1.0, u.interactive > 0.5 ? 4.0 : 8.0);
         int radius = int(r);
         float sum = 0.0, wsum = 0.0;
         for (int y = -radius; y <= radius; ++y) {
@@ -83,29 +112,14 @@ kernel void chromaKeyKernel(
         }
         k = sum / max(1e-6, wsum);
     }
-    float matte = 1.0 - k; // 1 = keep (foreground), 0 = remove (keyed background)
 
-    // Clip matte
+    float matte = 1.0 - k;
     float black = clamp(u.blackClip, 0.0, 1.0);
     float white = clamp(u.whiteClip, 0.0, 1.0);
     if (white < black + 1e-3) white = black + 1e-3;
     matte = clamp((matte - black) / (white - black), 0.0, 1.0);
 
-    // Spill suppression focuses where keyness is high (near edges of key)
-    float edge = k * (1.0 - k) * 4.0; // bell around 0.5
-    float spill = clamp(u.spillStrength, 0.0, 1.0);
-    float desat = clamp(u.spillDesat, 0.0, 1.0);
-    float bias = clamp(u.despillBias, 0.0, 1.0);
-    float wSpill = spill * max(edge, 0.2 * k);
-
-    float3 kDir = normalize(keyRgb + 1e-6);
-    float proj = dot(src.rgb, kDir);
-    float3 spillRemoved = src.rgb - kDir * proj * wSpill;
-    float lum = luminance(spillRemoved);
-    spillRemoved = mix(spillRemoved, float3(lum), desat * wSpill);
-    float3 compTint = normalize(float3(1.0, 1.0, 1.0) - kDir);
-    spillRemoved = mix(spillRemoved, normalize(spillRemoved + compTint * 0.25), bias * wSpill);
-    spillRemoved = clamp(spillRemoved, 0.0, 1.0);
+    float3 fore = despill(src.rgb, keyRgb, k, u);
 
     if (u.viewMatte > 0.5) {
         float m = matte;
@@ -113,23 +127,45 @@ kernel void chromaKeyKernel(
         return;
     }
 
-    // Background sample (only used when bgEnabled > 0.5)
+    // Aspect-true mapping with Contain/Cover selection (no stretch)
     float3 bgRGB = float3(0.0);
-    if (u.bgEnabled > 0.5) {
-        float2 p = uv - 0.5;
+    if (u.bgEnabled > 0.5 && u.bgW > 0 && u.bgH > 0) {
+        float2 scrSize = float2(u.width, u.height);
+        float2 bgSize  = float2(u.bgW,   u.bgH);
+
+        // Screen pixel offsets centered
+        float2 pScr = (uv - 0.5) * scrSize;
+
+        // Rotate into background space
         float c = cos(-u.bgRotationRad);
         float si = sin(-u.bgRotationRad);
-        float2 pr = float2(p.x * c - p.y * si, p.x * si + p.y * c);
-        pr /= max(u.bgScale, 1e-5);
-        pr -= float2(u.bgOffsetX, u.bgOffsetY) * 0.5;
-        float2 buv = pr + 0.5;
-        bgRGB = bgTex.sample(s, buv).rgb;
+        float2 pRot = float2(pScr.x * c - pScr.y * si, pScr.x * si + pScr.y * c);
+
+        // Base aspect scale from bg->screen
+        float scaleX = scrSize.x / bgSize.x;
+        float scaleY = scrSize.y / bgSize.y;
+        float aspectScale = (u.fillMode > 0.5) ? max(scaleX, scaleY) : min(scaleX, scaleY); // Cover or Contain
+
+        // Apply user scale (uniform zoom)
+        float denom = max(1e-5, aspectScale * u.bgScale);
+        float2 pBgPx = pRot / denom;
+
+        // Convert to normalized bg uv (0..1), apply user offsets
+        float2 buv = (pBgPx / bgSize) + 0.5 + float2(u.bgOffsetX, u.bgOffsetY) * 0.5;
+
+        if (all(buv >= 0.0) && all(buv <= 1.0)) {
+            bgRGB = bgTex.sample(s, buv).rgb;
+        } else {
+            bgRGB = float3(0.0); // black bars/pillars
+        }
     }
 
-    // If no background set, keep fully opaque output
+    float wrap = u.lightWrap * smoothstep(0.0, 0.6, 1.0 - matte);
+    float3 wrapped = clamp(fore + bgRGB * wrap, 0.0, 1.0);
+
     float useBG = u.bgEnabled > 0.5 ? 1.0 : 0.0;
-    float3 outRGB = mix(spillRemoved, spillRemoved * matte + bgRGB * (1.0 - matte), useBG);
-    float outA   = mix(1.0, 1.0, useBG); // always opaque output for monitors
+    float3 outRGB = mix(wrapped, wrapped * matte + bgRGB * (1.0 - matte), useBG);
+    float outA   = 1.0;
 
     outTex.write(float4(outRGB, outA), gid);
 }

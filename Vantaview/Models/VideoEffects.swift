@@ -663,6 +663,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
     #endif
     private var backgroundTexture: MTLTexture?
     private var fallbackBGTexture: MTLTexture?
+    @Published var backgroundURL: URL?
 
     private var bgPlayer: AVPlayer?
     private var bgOutput: AVPlayerItemVideoOutput?
@@ -671,49 +672,76 @@ final class ChromaKeyEffect: BaseVideoEffect {
     private var textureCache: CVMetalTextureCache?
     @Published var bgIsPlaying: Bool = false
 
+    @Published private var isInteractive: Bool = false
+    private var interactiveDebounceWork: DispatchWorkItem?
+
     override init(name: String = "Chroma Key", category: EffectCategory = .keying, icon: String = "person.crop.rectangle") {
         super.init(name: name, category: category, icon: icon)
         
-        // Key color (RGB 0...1)
         parameters["keyR"] = EffectParameter(name: "Key Red", defaultValue: 0.0, range: 0.0...1.0, step: 0.01)
         parameters["keyG"] = EffectParameter(name: "Key Green", defaultValue: 1.0, range: 0.0...1.0, step: 0.01)
         parameters["keyB"] = EffectParameter(name: "Key Blue", defaultValue: 0.0, range: 0.0...1.0, step: 0.01)
-        
-        // Core keying controls
-        parameters["strength"] = EffectParameter(name: "Strength", defaultValue: 0.5, range: 0.0...1.0, step: 0.01)
-        parameters["softness"] = EffectParameter(name: "Softness", defaultValue: 0.2, range: 0.0...1.0, step: 0.01)
-        parameters["balance"] = EffectParameter(name: "Balance", defaultValue: 0.5, range: 0.0...1.0, step: 0.01)
-        
+
+        // Refined key controls
+        parameters["strength"] = EffectParameter(name: "Similarity", defaultValue: 0.45, range: 0.0...1.0, step: 0.005)
+        parameters["softness"] = EffectParameter(name: "Blend", defaultValue: 0.22, range: 0.0...1.0, step: 0.005)
+        parameters["balance"] = EffectParameter(name: "Chroma Balance", defaultValue: 0.55, range: 0.0...1.0, step: 0.01)
+
         // Matte tools
         parameters["matteShift"] = EffectParameter(name: "Matte Shrink/Grow (px)", defaultValue: 0.0, range: -8.0...8.0, step: 1.0)
-        parameters["edgeSoftness"] = EffectParameter(name: "Edge Softness", defaultValue: 0.3, range: 0.0...1.0, step: 0.01)
-        parameters["blackClip"] = EffectParameter(name: "Black Clip", defaultValue: 0.05, range: 0.0...0.5, step: 0.005)
-        parameters["whiteClip"] = EffectParameter(name: "White Clip", defaultValue: 0.95, range: 0.5...1.0, step: 0.005)
-        
+        parameters["edgeSoftness"] = EffectParameter(name: "Edge Feather", defaultValue: 0.28, range: 0.0...1.0, step: 0.01)
+        parameters["blackClip"] = EffectParameter(name: "Black Clip", defaultValue: 0.04, range: 0.0...0.5, step: 0.005)
+        parameters["whiteClip"] = EffectParameter(name: "White Clip", defaultValue: 0.97, range: 0.5...1.0, step: 0.005)
+
         // Spill suppression
         parameters["spillStrength"] = EffectParameter(name: "Spill Strength", defaultValue: 0.7, range: 0.0...1.0, step: 0.01)
-        parameters["spillDesat"] = EffectParameter(name: "Spill Desaturation", defaultValue: 0.4, range: 0.0...1.0, step: 0.01)
+        parameters["spillDesat"] = EffectParameter(name: "Spill Desaturation", defaultValue: 0.35, range: 0.0...1.0, step: 0.01)
         parameters["despillBias"] = EffectParameter(name: "Despill Bias", defaultValue: 0.2, range: 0.0...1.0, step: 0.01)
-        
+
         // View matte
         parameters["viewMatte"] = EffectParameter(name: "View Matte", defaultValue: 0.0, range: 0.0...1.0, step: 1.0)
-        
+
+        // Background transform and playback
         parameters["bgScale"] = EffectParameter(name: "BG Scale", defaultValue: 1.0, range: 0.1...4.0, step: 0.01)
         parameters["bgOffsetX"] = EffectParameter(name: "BG Offset X", defaultValue: 0.0, range: -1.0...1.0, step: 0.01)
         parameters["bgOffsetY"] = EffectParameter(name: "BG Offset Y", defaultValue: 0.0, range: -1.0...1.0, step: 0.01)
         parameters["bgRotation"] = EffectParameter(name: "BG Rotation", defaultValue: 0.0, range: -180.0...180.0, step: 1.0)
         parameters["bgLoop"] = EffectParameter(name: "BG Loop", defaultValue: 1.0, range: 0.0...1.0, step: 1.0)
+
+        // Light wrap
+        parameters["lightWrap"] = EffectParameter(name: "Light Wrap", defaultValue: 0.15, range: 0.0...1.0, step: 0.01)
+
+        parameters["bgFillMode"] = EffectParameter(name: "BG Fill Mode", defaultValue: 0.0, range: 0.0...1.0, step: 1.0)
     }
     
     private struct ChromaKeyUniforms {
-        var keyR: Float; var keyG: Float; var keyB: Float
-        var strength: Float; var softness: Float; var balance: Float
-        var matteShift: Float; var edgeSoftness: Float
-        var blackClip: Float; var whiteClip: Float
-        var spillStrength: Float; var spillDesat: Float; var despillBias: Float
+        var keyR: Float, keyG: Float, keyB: Float
+        var strength: Float, softness: Float, balance: Float
+        var matteShift: Float, edgeSoftness: Float
+        var blackClip: Float, whiteClip: Float
+        var spillStrength: Float, spillDesat: Float, despillBias: Float
         var viewMatte: Float
-        var width: UInt32; var height: UInt32; var padding: UInt32
-        var bgScale: Float; var bgOffsetX: Float; var bgOffsetY: Float; var bgRotationRad: Float; var bgEnabled: Float
+        var width: UInt32, height: UInt32, padding: UInt32
+        var bgScale: Float, bgOffsetX: Float, bgOffsetY: Float, bgRotationRad: Float, bgEnabled: Float
+        var interactive: Float
+        var lightWrap: Float
+        var bgW: UInt32, bgH: UInt32
+        var fillMode: Float
+    }
+
+    // Interactive tuning for smooth UI/scroll while editing
+    func beginInteractive() {
+        isInteractive = true
+        objectWillChange.send()
+    }
+    func endInteractive(after delay: TimeInterval = 0.2) {
+        interactiveDebounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.isInteractive = false
+            self?.objectWillChange.send()
+        }
+        interactiveDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
     
     private func makePipeline(device: MTLDevice) {
@@ -748,6 +776,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
     func clearBackground() {
         backgroundTexture = nil
         backgroundName = nil
+        backgroundURL = nil
         #if os(macOS)
         backgroundPreview = nil
         #endif
@@ -878,6 +907,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
     }
 
     func setBackground(from url: URL, device: MTLDevice) {
+        backgroundURL = url
         let ext = url.pathExtension.lowercased()
         if ["mp4","mov","m4v","avi","mkv","webm","hevc","heic"].contains(ext) {
             setBackgroundVideo(url: url, device: device)
@@ -886,6 +916,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
         #if os(macOS)
         if let img = NSImage(contentsOf: url)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             setBackgroundImage(img, device: device)
+            backgroundURL = url
         }
         #endif
     }
@@ -928,17 +959,22 @@ final class ChromaKeyEffect: BaseVideoEffect {
             bgOffsetX: parameters["bgOffsetX"]?.value ?? 0.0,
             bgOffsetY: parameters["bgOffsetY"]?.value ?? 0.0,
             bgRotationRad: (parameters["bgRotation"]?.value ?? 0.0) * .pi / 180.0,
-            bgEnabled: backgroundTexture != nil ? 1.0 : 0.0
+            bgEnabled: backgroundTexture != nil ? 1.0 : 0.0,
+            interactive: isInteractive ? 1.0 : 0.0,
+            lightWrap: parameters["lightWrap"]?.value ?? 0.0,
+            bgW: UInt32(backgroundTexture?.width ?? 0),
+            bgH: UInt32(backgroundTexture?.height ?? 0),
+            fillMode: parameters["bgFillMode"]?.value ?? 0.0
         )
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return texture }
         encoder.setComputePipelineState(pipelineState)
         encoder.setTexture(texture, index: 0)
         encoder.setTexture(outputTexture, index: 1)
-        // Use fallback to avoid nil binding, but bgEnabled will be 0 if it's the fallback
         encoder.setTexture(backgroundTexture ?? fallbackBGTexture, index: 2)
         var uniforms = u
         encoder.setBytes(&uniforms, length: MemoryLayout<ChromaKeyUniforms>.stride, index: 0)
+
         let w = pipelineState.threadExecutionWidth
         let h = pipelineState.maxTotalThreadsPerThreadgroup / w
         encoder.dispatchThreads(MTLSize(width: texture.width, height: texture.height, depth: 1),

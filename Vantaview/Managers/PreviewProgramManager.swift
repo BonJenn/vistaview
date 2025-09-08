@@ -274,6 +274,23 @@ final class PreviewProgramManager: ObservableObject {
         print("✂️ TAKE DEBUG: Moving \(previewContent) to program")
         loadToProgram(previewContent)
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
+
+        if let prevChain = effectManager.getPreviewEffectChain(),
+           let progChain = effectManager.getProgramEffectChain() {
+            let count = min(prevChain.effects.count, progChain.effects.count)
+            for i in 0..<count {
+                if let srcCK = prevChain.effects[i] as? ChromaKeyEffect,
+                   let dstCK = progChain.effects[i] as? ChromaKeyEffect {
+                    if let url = srcCK.backgroundURL {
+                        dstCK.setBackground(from: url, device: effectManager.metalDevice)
+                        if srcCK.bgIsPlaying { dstCK.playBackgroundVideo() } else { dstCK.pauseBackgroundVideo() }
+                    }
+                }
+            }
+        }
+
+        // Ensure program effect runner points to the cloned chain
+        self.programEffectRunner?.setChain(self.getProgramEffectChain())
         print("✨ TAKE: Copied Preview effects to Program")
         crossfaderValue = 0.0
         objectWillChange.send()

@@ -253,8 +253,13 @@ struct EffectListItemView: View {
                     
                     // Expand/collapse
                     Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        if effect is ChromaKeyEffect {
+                            // OPEN IMMEDIATELY for Chroma Key (no animation)
                             isExpanded.toggle()
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isExpanded.toggle()
+                            }
                         }
                     }) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -324,7 +329,8 @@ struct EffectListItemView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-                .transition(.slide.combined(with: .opacity))
+                // Open instantly for Chroma Key, otherwise animate
+                .transition((effect is ChromaKeyEffect) ? .identity : .slide.combined(with: .opacity))
             }
         }
         .contextMenu {

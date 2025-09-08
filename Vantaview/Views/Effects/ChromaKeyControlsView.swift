@@ -35,7 +35,6 @@ struct ChromaKeyControlsView: View {
         VStack(alignment: .leading, spacing: 12) {
             // KEY SECTION
             VStack(alignment: .leading, spacing: 6) {
-                // Row 1: Key color + eyedropper + View Matte
                 HStack(spacing: 12) {
                     HStack(spacing: 8) {
                         Text("Key")
@@ -70,7 +69,6 @@ struct ChromaKeyControlsView: View {
                     }
                 }
                 
-                // Row 2: Presets
                 HStack(spacing: 8) {
                     Button("Green") { setKeyPreset(r: 0.0, g: 1.0, b: 0.0) }
                         .controlSize(.small)
@@ -81,10 +79,8 @@ struct ChromaKeyControlsView: View {
                 }
             }
             
-            // BACKGROUND SECTION
             GroupBox("Background") {
                 VStack(alignment: .leading, spacing: 10) {
-                    // Row A: Thumbnail + Upload/Clear
                     HStack(alignment: .top, spacing: 12) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 6)
@@ -131,7 +127,6 @@ struct ChromaKeyControlsView: View {
                                 .disabled(effect.backgroundName == nil)
                             }
                             
-                            // Row B: Play/Pause + Loop
                             HStack(spacing: 12) {
                                 Button {
                                     effect.bgIsPlaying ? effect.pauseBackgroundVideo() : effect.playBackgroundVideo()
@@ -150,7 +145,23 @@ struct ChromaKeyControlsView: View {
                                 .controlSize(.small)
                                 .font(.caption)
                             }
-                            
+
+                            HStack(spacing: 8) {
+                                Text("Fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Picker("", selection: Binding<Int>(
+                                    get: { Int(effect.parameters["bgFillMode"]?.value ?? 0.0) },
+                                    set: { effect.parameters["bgFillMode"]?.value = Float($0); effect.objectWillChange.send() }
+                                )) {
+                                    Text("Contain").tag(0)
+                                    Text("Cover").tag(1)
+                                }
+                                .pickerStyle(.segmented)
+                                .controlSize(.small)
+                                .frame(width: 180)
+                            }
+
                             if let name = effect.backgroundName {
                                 Text(name)
                                     .font(.caption2)
@@ -163,14 +174,15 @@ struct ChromaKeyControlsView: View {
                         Spacer(minLength: 0)
                     }
                     
-                    // Row C: Transform sliders
+                    // Interactive-friendly sliders: tell effect when dragging
                     VStack(spacing: 8) {
-                        slider("Scale", key: "bgScale", range: 0.1...4.0, step: 0.01)
+                        interactiveSlider("Scale", key: "bgScale", range: 0.1...4.0, step: 0.01)
                         HStack(spacing: 12) {
-                            slider("Pos X", key: "bgOffsetX", range: -1.0...1.0, step: 0.01)
-                            slider("Pos Y", key: "bgOffsetY", range: -1.0...1.0, step: 0.01)
+                            interactiveSlider("Pos X", key: "bgOffsetX", range: -1.0...1.0, step: 0.01)
+                            interactiveSlider("Pos Y", key: "bgOffsetY", range: -1.0...1.0, step: 0.01)
                         }
-                        slider("Rotation", key: "bgRotation", range: -180.0...180.0, step: 1.0)
+                        interactiveSlider("Rotation", key: "bgRotation", range: -180.0...180.0, step: 1.0)
+                        interactiveSlider("Light Wrap", key: "lightWrap", range: 0.0...1.0, step: 0.01)
                     }
                 }
                 .padding(10)
@@ -179,26 +191,33 @@ struct ChromaKeyControlsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
     
-    private func slider(_ label: String, key: String, range: ClosedRange<Float>, step: Float) -> some View {
+    private func interactiveSlider(_ label: String, key: String, range: ClosedRange<Float>, step: Float) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.caption2)
                 .foregroundColor(.secondary)
-                .frame(width: 56, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
             Slider(
                 value: Binding(
                     get: { effect.parameters[key]?.value ?? 0 },
                     set: { effect.parameters[key]?.value = $0; effect.objectWillChange.send() }
                 ),
                 in: range,
-                step: step
+                step: step,
+                onEditingChanged: { editing in
+                    if editing {
+                        effect.beginInteractive()
+                    } else {
+                        effect.endInteractive(after: 0.2)
+                    }
+                }
             )
+            .controlSize(.small)
             Text(String(format: "%.2f", effect.parameters[key]?.value ?? 0))
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
-        .controlSize(.small)
     }
     
     private func setKeyPreset(r: Double, g: Double, b: Double) {

@@ -9,8 +9,13 @@ struct EffectParameterPanel: View {
             // Header
             HStack {
                 Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    if effect is ChromaKeyEffect {
+                        // Open immediately for Chroma Key
                         isExpanded.toggle()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded.toggle()
+                        }
                     }
                 }) {
                     HStack(spacing: 8) {
@@ -80,7 +85,8 @@ struct EffectParameterPanel: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-                .transition(.opacity.combined(with: .slide))
+                // Instant show for Chroma Key panel, animated for others
+                .transition((effect is ChromaKeyEffect) ? .identity : .opacity.combined(with: .slide))
             }
         }
         .background(
