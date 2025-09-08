@@ -35,6 +35,7 @@ struct ContentView: View {
     private let uiUpdateThreshold: TimeInterval = 1.0/20.0 // 20fps UI updates
     
     @StateObject private var layerManager = LayerStackManager()
+    @State private var suppressInitialAnimations = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,6 +94,10 @@ struct ContentView: View {
                 productionManager.streamingViewModel.bindToLayerManager(layerManager)
                 productionManager.streamingViewModel.bindToProductionManager(productionManager)
             }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                suppressInitialAnimations = false
+            }
         }
         .fileImporter(
             isPresented: $showingFilePicker,
@@ -100,6 +105,11 @@ struct ContentView: View {
             allowsMultipleSelection: true
         ) { result in
             handleFileImport(result)
+        }
+        .transaction { tx in
+            if suppressInitialAnimations {
+                tx.animation = nil
+            }
         }
     }
 
@@ -335,6 +345,11 @@ struct FinalCutProStyleView: View {
     @EnvironmentObject var layerManager: LayerStackManager
     @EnvironmentObject var licenseManager: LicenseManager
     
+    @State private var showLayersSection = true
+    @State private var showEffectsSection = true
+    @State private var showOutputMappingSection = true
+    @State private var showOutputControlsSection = true
+    
     var body: some View {
         HSplitView {
             // Left Panel - Sources
@@ -354,45 +369,99 @@ struct FinalCutProStyleView: View {
             )
             
             // Right Panel - Output & Streaming Controls
-            VStack(spacing: 0) {
-                // Layers Panel (new)
-                LayerStackPanel(layerManager: layerManager, productionManager: productionManager)
-                    .frame(height: 200)
-                    .padding(.horizontal, 8)
+            ScrollView {
+                VStack(spacing: 0) {
+                    CollapsibleSection(title: "Layers", isExpanded: $showLayersSection) {
+                        LayerStackPanel(layerManager: layerManager, productionManager: productionManager)
+                            .padding(.horizontal, 8)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
 
-                // Effects List Panel (top section)
-                EffectsListPanel(
-                    effectManager: productionManager.effectManager,
-                    previewProgramManager: productionManager.previewProgramManager
-                )
-                .frame(height: 180)
-                .gated(.effectsBasic, licenseManager: licenseManager)
-                
-                Divider()
-                
-                // Output Mapping Controls (middle section - flexible height with max limit)
-                OutputMappingControlsView(
-                    outputMappingManager: productionManager.outputMappingManager,
-                    externalDisplayManager: productionManager.externalDisplayManager,
-                    productionManager: productionManager
-                )
-                .frame(maxHeight: 300)
-                .gated(.multiScreen, licenseManager: licenseManager)
-                
-                Divider()
-                
-                // Output Controls (bottom section - takes remaining space)
-                OutputControlsPanel(
-                    productionManager: productionManager,
-                    rtmpURL: $rtmpURL,
-                    streamKey: $streamKey,
-                    selectedPlatform: $selectedPlatform
-                )
-                .frame(minHeight: 200)
+                    CollapsibleSection(title: "Effects", isExpanded: $showEffectsSection) {
+                        EffectsListPanel(
+                            effectManager: productionManager.effectManager,
+                            previewProgramManager: productionManager.previewProgramManager
+                        )
+                        .gated(.effectsBasic, licenseManager: licenseManager)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    
+                    CollapsibleSection(title: "Output Mapping", isExpanded: $showOutputMappingSection) {
+                        OutputMappingControlsView(
+                            outputMappingManager: productionManager.outputMappingManager,
+                            externalDisplayManager: productionManager.externalDisplayManager,
+                            productionManager: productionManager
+                        )
+                        .gated(.multiScreen, licenseManager: licenseManager)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    
+                    CollapsibleSection(title: "Output Controls", isExpanded: $showOutputControlsSection) {
+                        OutputControlsPanel(
+                            productionManager: productionManager,
+                            rtmpURL: $rtmpURL,
+                            streamKey: $streamKey,
+                            selectedPlatform: $selectedPlatform
+                        )
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                }
             }
             .frame(minWidth: 280, maxWidth: 350)
+            .frame(maxHeight: .infinity)
             .liquidGlassPanel(material: .regularMaterial, cornerRadius: 0, shadowIntensity: .light)
         }
+    }
+}
+
+// MARK: - CollapsibleSection
+
+struct CollapsibleSection<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    let content: () -> Content
+    
+    private let spring = Animation.spring(response: 0.35, dampingFraction: 0.86, blendDuration: 0.0)
+    @State private var didAppear = false
+    
+    init(title: String, isExpanded: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self._isExpanded = isExpanded
+        self.content = content
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(spring) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundColor(.secondary)
+                        .animation(didAppear ? spring : nil, value: isExpanded)
+                    Text(title)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.gray.opacity(0.1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Group {
+                content()
+            }
+            .frame(height: isExpanded ? nil : 0, alignment: .top)
+            .clipped()
+            .animation(didAppear ? spring : nil, value: isExpanded)
+            
+            Divider()
+        }
+        .onAppear { didAppear = true }
     }
 }
 
@@ -406,7 +475,7 @@ struct PreviewProgramCenterView: View {
     
     var body: some View {
         GeometryReader { geo in
-            let shouldStackVertically = geo.size.width < 900
+            let shouldStackVertically = (geo.size.width > 0) ? (geo.size.width < 900) : false
             VStack(spacing: TahoeDesign.Spacing.md) {
                 Group {
                     if shouldStackVertically {
@@ -421,8 +490,6 @@ struct PreviewProgramCenterView: View {
                         }
                     }
                 }
-                .animation(.easeInOut(duration: 0.18), value: shouldStackVertically)
-
                 HStack(spacing: TahoeDesign.Spacing.xl) {
                     Spacer()
                     Button("TAKE") {
@@ -481,6 +548,13 @@ struct PreviewProgramCenterView: View {
             ? productionManager.previewProgramManager.previewSource
             : productionManager.previewProgramManager.programSource
 
+        let safeAspect: CGFloat = {
+            let v = isPreview
+                ? productionManager.previewProgramManager.previewAspect
+                : productionManager.previewProgramManager.programAspect
+            return (v.isFinite && v > 0) ? v : 16.0/9.0
+        }()
+
         VStack(spacing: TahoeDesign.Spacing.xs) {
             HStack {
                 Text(monitorLabel)
@@ -499,7 +573,7 @@ struct PreviewProgramCenterView: View {
             
             if isPreview {
                 SimplePreviewMonitorView(productionManager: productionManager)
-                    .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
+                    .aspectRatio(safeAspect, contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.preview,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -508,7 +582,7 @@ struct PreviewProgramCenterView: View {
                     )
             } else {
                 SimpleProgramMonitorView(productionManager: productionManager)
-                    .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
+                    .aspectRatio(safeAspect, contentMode: .fit)
                     .liquidGlassMonitor(
                         borderColor: TahoeDesign.Colors.program,
                         cornerRadius: TahoeDesign.CornerRadius.lg,
@@ -538,244 +612,6 @@ struct PreviewProgramCenterView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .animation(.easeInOut(duration: 0.18), value: isPreview)
-    }
-}
-
-// MARK: - Simplified Monitor Views 
-
-struct SimplePreviewMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    
-    private var effectCount: Int {
-        productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
-    }
-    
-    var body: some View {
-        ZStack {
-            Color.black
-            
-            switch productionManager.previewProgramManager.previewSource {
-            case .camera(let cameraFeed):
-                OptimizedPreviewCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-                .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
-                
-            case .media(let mediaFile, _):
-                if mediaFile.fileType == .image {
-                    if let previewImageCG = productionManager.previewProgramManager.previewImage {
-                        let processedImage = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
-                        Image(decorative: processedImage, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black)
-                            .id("preview-image-processed-\(mediaFile.id)-fx-\(effectCount)")
-                    } else {
-                        MediaLoadingView(mediaFile: mediaFile, isPreview: true)
-                    }
-                } else if mediaFile.fileType == .video {
-                    MetalVideoView(textureSupplier: {
-                        productionManager.previewProgramManager.previewCurrentTexture
-                    })
-                    .aspectRatio(productionManager.previewProgramManager.previewAspect, contentMode: .fit)
-                    .background(Color.black)
-                    .id("preview-avmetal-\(mediaFile.id)-fx-\(effectCount)")
-                } else {
-                    MediaLoadingView(mediaFile: mediaFile, isPreview: true)
-                }
-                
-            case .virtual(let virtualCamera):
-                VirtualCameraView(camera: virtualCamera, isPreview: true)
-                
-            case .none:
-                NoSourceView(isPreview: true)
-            }
-            
-            if effectCount > 0 {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Text("FX: \(effectCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.blue)
-                            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-                            .padding(4)
-                    }
-                }
-            }
-            
-            // HUD: FPS
-            VStack {
-                HStack {
-                    Text(String(format: "FPS: %.1f", productionManager.previewProgramManager.previewFPS))
-                        .font(.caption2)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.4))
-                        .cornerRadius(4)
-                        .padding(6)
-                    Spacer()
-                }
-                Spacer()
-            }
-        }
-        .dropDestination(for: EffectDragItem.self) { items, _ in
-            guard let item = items.first else { return false }
-            Task { @MainActor in
-                productionManager.previewProgramManager.addEffectToPreview(item.effectType)
-                productionManager.objectWillChange.send()
-                productionManager.previewProgramManager.objectWillChange.send()
-            }
-            return true
-        } isTargeted: { _ in }
-    }
-}
-
-struct SimpleProgramMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    @EnvironmentObject var layerManager: LayerStackManager
-    
-    private var effectCount: Int {
-        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
-    }
-    @State private var lastDropCanvasSize: CGSize = .zero
-    
-    var body: some View {
-        ZStack {
-            Color.black
-            
-            switch productionManager.previewProgramManager.programSource {
-            case .camera(let cameraFeed):
-                OptimizedProgramCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-                .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
-                
-            case .media(let mediaFile, _):
-                if mediaFile.fileType == .image {
-                    if let programImageCG = productionManager.previewProgramManager.programImage {
-                        let processedImage = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
-                        Image(decorative: programImageCG, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black)
-                            .id("program-image-processed-\(mediaFile.id)-fx-\(effectCount)")
-                    } else {
-                        MediaLoadingView(mediaFile: mediaFile, isPreview: false)
-                    }
-                } else if mediaFile.fileType == .video {
-                    MetalVideoView(textureSupplier: {
-                        productionManager.previewProgramManager.programCurrentTexture
-                    })
-                    .aspectRatio(productionManager.previewProgramManager.programAspect, contentMode: .fit)
-                    .background(Color.black)
-                    .id("program-avmetal-\(mediaFile.id)-fx-\(effectCount)")
-                } else {
-                    MediaLoadingView(mediaFile: mediaFile, isPreview: false)
-                }
-                
-            case .virtual(let virtualCamera):
-                VirtualCameraView(camera: virtualCamera, isPreview: false)
-                
-            case .none:
-                NoSourceView(isPreview: false)
-            }
-            
-            // Render actual composited PIP layers on top (what-you-see-is-what-you-send)
-            CompositedLayersContent(productionManager: productionManager)
-                .environmentObject(layerManager)
-
-            if effectCount > 0 {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        Text("FX: \(effectCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red)
-                            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-                            .padding(4)
-                    }
-                }
-            }
-            
-            // HUD: FPS
-            VStack {
-                HStack {
-                    Text(String(format: "FPS: %.1f", productionManager.previewProgramManager.programFPS))
-                        .font(.caption2)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.4))
-                        .cornerRadius(4)
-                        .padding(6)
-                    Spacer()
-                }
-                Spacer()
-            }
-            
-            // Interactive PIP editor overlay (on top of program)
-            LayersInteractiveOverlay()
-                .environmentObject(layerManager)
-                .allowsHitTesting(true)
-        }
-        // Track canvas size for drop normalization
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { lastDropCanvasSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
-            }
-        )
-        .dropDestination(for: EffectDragItem.self) { items, _ in
-            guard let item = items.first else { return false }
-            Task { @MainActor in
-                productionManager.previewProgramManager.addEffectToProgram(item.effectType)
-                productionManager.objectWillChange.send()
-                productionManager.previewProgramManager.objectWillChange.send()
-            }
-            return true
-        } isTargeted: { _ in }
-        // Accept media files to create PIP layers
-        .dropDestination(for: MediaFile.self) { items, location in
-            guard let file = items.first else { return false }
-            let norm = normalizeDropPoint(location, in: lastDropCanvasSize)
-            let defaultSize = CGSize(width: 0.35, height: 0.35)
-            layerManager.addMediaLayer(file: file, centerNorm: norm, sizeNorm: defaultSize)
-            return true
-        } isTargeted: { _ in }
-        // Accept camera drags to create PIP layers
-        .dropDestination(for: CameraFeedDragItem.self) { items, location in
-            guard let item = items.first else { return false }
-            let norm = normalizeDropPoint(location, in: lastDropCanvasSize)
-            layerManager.addCameraLayer(feedId: item.feedId, name: item.name, centerNorm: norm, sizeNorm: CGSize(width: 0.3, height: 0.3))
-            return true
-        } isTargeted: { _ in }
-    }
-
-    private func normalizeDropPoint(_ p: CGPoint, in size: CGSize) -> CGPoint {
-        guard size.width > 0 && size.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
-        let x = max(0, min(1, p.x / size.width))
-        let y = max(0, min(1, p.y / size.height))
-        return CGPoint(x: x, y: y)
     }
 }
 
@@ -831,6 +667,8 @@ struct SourcesPanel: View {
         }
     }
 }
+
+// MARK: - Media Source View
 
 struct MediaSourceView: View {
     @Binding var mediaFiles: [MediaFile]
@@ -902,6 +740,8 @@ struct MediaSourceView: View {
     }
 }
 
+// MARK: - Cameras Source View
+
 struct CamerasSourceView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     
@@ -972,177 +812,7 @@ struct CamerasSourceView: View {
     }
 }
 
-struct CameraDeviceButton: View {
-    let device: CameraDevice
-    @ObservedObject var productionManager: UnifiedProductionManager
-    
-    private var hasActiveFeed: Bool {
-        productionManager.cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
-    }
-    
-    var body: some View {
-        Button(action: {
-            if hasActiveFeed {
-                if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
-                    productionManager.cameraFeedManager.stopFeed(feed)
-                }
-            } else {
-                Task {
-                    if let newFeed = await productionManager.cameraFeedManager.startFeed(for: device) {
-                        print("Started camera feed: \(newFeed.device.displayName)")
-                        await MainActor.run {
-                            newFeed.objectWillChange.send()
-                            productionManager.cameraFeedManager.objectWillChange.send()
-                            productionManager.objectWillChange.send()
-                        }
-                    }
-                }
-            }
-        }) {
-            VStack {
-                Rectangle()
-                    .fill(hasActiveFeed ? Color.green.opacity(0.3) : (device.isAvailable ? Color.blue.opacity(0.2) : Color.gray.opacity(0.2)))
-                    .frame(height: 60)
-                    .overlay(
-                        VStack(spacing: 2) {
-                            Image(systemName: device.icon)
-                                .font(.title2)
-                            Text(hasActiveFeed ? "STOP" : (device.isAvailable ? "START" : "BUSY"))
-                                .font(.caption2)
-                                .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
-                        }
-                        .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
-                    )
-                    .cornerRadius(6)
-                Text(device.displayName)
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.primary)
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
-        .disabled(!device.isAvailable && !hasActiveFeed)
-    }
-}
-
-struct LiveCameraFeedButton: View {
-    @ObservedObject var feed: CameraFeed
-    @ObservedObject var productionManager: UnifiedProductionManager
-    
-    private var isInPreview: Bool {
-        if case .camera(let previewFeed) = productionManager.previewProgramManager.previewSource {
-            return previewFeed.id == feed.id
-        }
-        return false
-    }
-    
-    private var isInProgram: Bool {
-        if case .camera(let programFeed) = productionManager.previewProgramManager.programSource {
-            return programFeed.id == feed.id
-        }
-        return false
-    }
-    
-    var body: some View {
-        Button(action: {
-            let cameraSource = feed.asContentSource()
-            productionManager.previewProgramManager.loadToPreview(cameraSource)
-            DispatchQueue.main.async {
-                feed.objectWillChange.send()
-                productionManager.previewProgramManager.objectWillChange.send()
-                productionManager.objectWillChange.send()
-            }
-        }) {
-            VStack {
-                if let nsImage = feed.previewNSImage {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: 45)
-                        .background(Color.black)
-                        .cornerRadius(4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(
-                                    isInProgram ? Color.red : (isInPreview ? Color.yellow : Color.gray.opacity(0.3)), 
-                                    lineWidth: (isInProgram || isInPreview) ? 2 : 1
-                                )
-                        )
-                        .padding(4)
-                    Spacer()
-                } else {
-                    Rectangle()
-                        .fill(Color.black)
-                        .frame(maxWidth: .infinity, maxHeight: 45)
-                        .overlay(
-                            VStack(spacing: 2) {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.5)
-                                Text("Loading...")
-                                    .font(.caption2)
-                                    .foregroundColor(.white)
-                                if feed.frameCount > 0 {
-                                    Text("Frame: \(feed.frameCount)")
-                                        .font(.caption2)
-                                        .foregroundColor(.gray)
-                                }
-                                Text(feed.connectionStatus.displayText)
-                                    .font(.caption2)
-                                    .foregroundColor(feed.connectionStatus.color)
-                            }
-                        )
-                        .cornerRadius(4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(
-                                    isInProgram ? Color.red : (isInPreview ? Color.yellow : Color.gray.opacity(0.3)), 
-                                    lineWidth: (isInProgram || isInPreview) ? 2 : 1
-                                )
-                        )
-                    Spacer()
-                }
-                
-                VStack(spacing: 1) {
-                    Text(feed.device.displayName)
-                        .font(.caption2)
-                        .lineLimit(1)
-                        .foregroundColor(.primary)
-                    Text(isInProgram ? "ON AIR" : (isInPreview ? "IN PREVIEW" : "Tap for Preview"))
-                        .font(.caption2)
-                        .fontWeight((isInProgram || isInPreview) ? .bold : .regular)
-                        .foregroundColor(isInProgram ? .red : (isInPreview ? .yellow : .secondary))
-                    
-                    HStack(spacing: 4) {
-                        Text("●")
-                            .font(.caption2)
-                            .foregroundColor(feed.connectionStatus.color)
-                        Text("\(feed.frameCount)")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                    }
-                }
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
-        // Make camera tiles draggable to Program monitor
-        .draggable(CameraFeedDragItem(feedId: feed.id, name: feed.device.displayName)) {
-            VStack(spacing: 2) {
-                Image(systemName: "video.fill")
-                    .font(.title2)
-                Text(feed.device.displayName)
-                    .font(.caption2)
-                    .fontWeight(.bold)
-            }
-            .padding(8)
-            .background(Color.blue.opacity(0.8))
-            .foregroundColor(.white)
-            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-            .shadow(radius: 4)
-        }
-    }
-}
+// MARK: - Virtual Camera Source View
 
 struct VirtualSourceView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1189,6 +859,8 @@ struct VirtualSourceView: View {
     }
 }
 
+// MARK: - Virtual Camera Button
+
 struct VirtualCameraButton: View {
     let camera: VirtualCamera
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1219,6 +891,8 @@ struct VirtualCameraButton: View {
     }
 }
 
+// MARK: - Effects Source View
+
 struct EffectsSourceView: View {
     @ObservedObject var effectManager: EffectManager
     
@@ -1242,6 +916,8 @@ struct EffectsSourceView: View {
         .padding()
     }
 }
+
+// MARK: - Effect Drag Button
 
 struct EffectDragButton: View {
     let effect: any VideoEffect
@@ -1286,6 +962,8 @@ struct EffectDragButton: View {
     }
 }
 
+// MARK: - Timeline Controls View
+
 struct TimelineControlsView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     
@@ -1320,6 +998,8 @@ struct TimelineControlsView: View {
         .padding(.vertical, 8)
     }
 }
+
+// MARK: - Output Controls Panel
 
 struct OutputControlsPanel: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -1439,6 +1119,8 @@ struct OutputControlsPanel: View {
     }
 }
 
+// MARK: - Studio Selector Sheet
+
 struct StudioSelectorSheet: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Environment(\.dismiss) private var dismiss
@@ -1487,6 +1169,8 @@ struct StudioSelectorSheet: View {
         .frame(width: 600, height: 400)
     }
 }
+
+// MARK: - Comprehensive Media Controls
 
 struct ComprehensiveMediaControls: View {
     @ObservedObject var previewProgramManager: PreviewProgramManager
@@ -1979,7 +1663,7 @@ struct ComprehensiveMediaControls: View {
     }
 }
 
-// MARK: - Helper Views for Cleaner Code
+// MARK: - Media Loading View
 
 struct MediaLoadingView: View {
     let mediaFile: MediaFile
@@ -2006,6 +1690,8 @@ struct MediaLoadingView: View {
     }
 }
 
+// MARK: - Virtual Camera View
+
 struct VirtualCameraView: View {
     let camera: VirtualCamera
     let isPreview: Bool
@@ -2024,6 +1710,8 @@ struct VirtualCameraView: View {
         }
     }
 }
+
+// MARK: - No Source View
 
 struct NoSourceView: View {
     let isPreview: Bool
@@ -2044,7 +1732,299 @@ struct NoSourceView: View {
     }
 }
 
-// PERFORMANCE: Optimized camera view with reduced update frequency
+// MARK: - Simple Monitor Views 
+
+struct SimplePreviewMonitorView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            switch productionManager.previewProgramManager.previewSource {
+            case .camera(let cameraFeed):
+                OptimizedPreviewCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+            
+            case .media(let mediaFile, _):
+                if mediaFile.fileType == .image {
+                    if let previewImageCG = productionManager.previewProgramManager.previewImage {
+                        let processed = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
+                        Image(decorative: processed, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: true)
+                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.previewCurrentTexture
+                    })
+                    .background(Color.black)
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: true)
+                }
+
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: true)
+
+            case .none:
+                NoSourceView(isPreview: true)
+            }
+        }
+    }
+}
+
+struct SimpleProgramMonitorView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @EnvironmentObject var layerManager: LayerStackManager
+
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
+    }
+
+    @State private var lastDropCanvasSize: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            switch productionManager.previewProgramManager.programSource {
+            case .camera(let cameraFeed):
+                OptimizedProgramCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+
+            case .media(let mediaFile, _):
+                if mediaFile.fileType == .image {
+                    if let programImageCG = productionManager.previewProgramManager.programImage {
+                        let processed = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
+                        Image(decorative: processed, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.programCurrentTexture
+                    })
+                    .background(Color.black)
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                }
+
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: false)
+
+            case .none:
+                NoSourceView(isPreview: false)
+            }
+
+            CompositedLayersContent(productionManager: productionManager)
+                .environmentObject(layerManager)
+
+            LayersInteractiveOverlay()
+                .environmentObject(layerManager)
+                .allowsHitTesting(true)
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { lastDropCanvasSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
+            }
+        )
+    }
+}
+
+// MARK: - Camera Buttons 
+
+struct CameraDeviceButton: View {
+    let device: CameraDevice
+    @ObservedObject var productionManager: UnifiedProductionManager
+
+    private var hasActiveFeed: Bool {
+        productionManager.cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
+    }
+
+    var body: some View {
+        Button(action: {
+            if hasActiveFeed {
+                if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
+                    productionManager.cameraFeedManager.stopFeed(feed)
+                }
+            } else {
+                Task {
+                    if let newFeed = await productionManager.cameraFeedManager.startFeed(for: device) {
+                        await MainActor.run {
+                            newFeed.objectWillChange.send()
+                            productionManager.cameraFeedManager.objectWillChange.send()
+                            productionManager.objectWillChange.send()
+                        }
+                    }
+                }
+            }
+        }) {
+            VStack {
+                Rectangle()
+                    .fill(hasActiveFeed ? Color.green.opacity(0.3) : (device.isAvailable ? Color.blue.opacity(0.2) : Color.gray.opacity(0.2)))
+                    .frame(height: 60)
+                    .overlay(
+                        VStack(spacing: 2) {
+                            Image(systemName: device.icon)
+                                .font(.title2)
+                            Text(hasActiveFeed ? "STOP" : (device.isAvailable ? "START" : "BUSY"))
+                                .font(.caption2)
+                                .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
+                        }
+                        .foregroundColor(hasActiveFeed ? .green : (device.isAvailable ? .blue : .gray))
+                    )
+                    .cornerRadius(6)
+                Text(device.displayName)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.primary)
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(!device.isAvailable && !hasActiveFeed)
+    }
+}
+
+struct LiveCameraFeedButton: View {
+    @ObservedObject var feed: CameraFeed
+    @ObservedObject var productionManager: UnifiedProductionManager
+
+    private var isInPreview: Bool {
+        if case .camera(let previewFeed) = productionManager.previewProgramManager.previewSource {
+            return previewFeed.id == feed.id
+        }
+        return false
+    }
+
+    private var isInProgram: Bool {
+        if case .camera(let programFeed) = productionManager.previewProgramManager.programSource {
+            return programFeed.id == feed.id
+        }
+        return false
+    }
+
+    var body: some View {
+        Button(action: {
+            let cameraSource = feed.asContentSource()
+            productionManager.previewProgramManager.loadToPreview(cameraSource)
+            DispatchQueue.main.async {
+                feed.objectWillChange.send()
+                productionManager.previewProgramManager.objectWillChange.send()
+                productionManager.objectWillChange.send()
+            }
+        }) {
+            VStack {
+                if let nsImage = feed.previewNSImage {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: 45)
+                        .background(Color.black)
+                        .cornerRadius(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(
+                                    isInProgram ? Color.red : (isInPreview ? Color.yellow : Color.gray.opacity(0.3)),
+                                    lineWidth: (isInProgram || isInPreview) ? 2 : 1
+                                )
+                        )
+                        .padding(4)
+                    Spacer()
+                } else {
+                    Rectangle()
+                        .fill(Color.black)
+                        .frame(maxWidth: .infinity, maxHeight: 45)
+                        .overlay(
+                            VStack(spacing: 2) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.5)
+                                Text("Loading...")
+                                    .font(.caption2)
+                                    .foregroundColor(.white)
+                                if feed.frameCount > 0 {
+                                    Text("Frame: \(feed.frameCount)")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
+                                Text(feed.connectionStatus.displayText)
+                                    .font(.caption2)
+                                    .foregroundColor(feed.connectionStatus.color)
+                            }
+                        )
+                        .cornerRadius(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(
+                                    isInProgram ? Color.red : (isInPreview ? Color.yellow : Color.gray.opacity(0.3)),
+                                    lineWidth: (isInProgram || isInPreview) ? 2 : 1
+                                )
+                        )
+                    Spacer()
+                }
+
+                VStack(spacing: 1) {
+                    Text(feed.device.displayName)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundColor(.primary)
+                    Text(isInProgram ? "ON AIR" : (isInPreview ? "IN PREVIEW" : "Tap for Preview"))
+                        .font(.caption2)
+                        .fontWeight((isInProgram || isInPreview) ? .bold : .regular)
+                        .foregroundColor(isInProgram ? .red : (isInPreview ? .yellow : .secondary))
+
+                    HStack(spacing: 4) {
+                        Text("●")
+                            .font(.caption2)
+                            .foregroundColor(feed.connectionStatus.color)
+                        Text("\(feed.frameCount)")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+        .draggable(CameraFeedDragItem(feedId: feed.id, name: feed.device.displayName)) {
+            VStack(spacing: 2) {
+                Image(systemName: "video.fill")
+                    .font(.title2)
+                Text(feed.device.displayName)
+                    .font(.caption2)
+                    .fontWeight(.bold)
+            }
+            .padding(8)
+            .background(Color.blue.opacity(0.8))
+            .foregroundColor(.white)
+            .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
+            .shadow(radius: 4)
+        }
+    }
+}
+
+// MARK: - Optimized Preview Camera View
+
 struct OptimizedPreviewCameraView: View {
     @ObservedObject var cameraFeed: CameraFeed
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -2061,7 +2041,6 @@ struct OptimizedPreviewCameraView: View {
                     .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
-                    .id("preview-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
             } else {
                 VStack {
                     ProgressView()
@@ -2108,6 +2087,8 @@ struct OptimizedPreviewCameraView: View {
     }
 }
 
+// MARK: - Optimized Program Camera View
+
 struct OptimizedProgramCameraView: View {
     @ObservedObject var cameraFeed: CameraFeed
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -2124,7 +2105,6 @@ struct OptimizedProgramCameraView: View {
                     .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
-                    .id("program-camera-\(cameraFeed.id)-\(lastProcessedFrameCount)-fx-\(effectCount)")
             } else {
                 VStack {
                     ProgressView()
@@ -2172,8 +2152,7 @@ struct OptimizedProgramCameraView: View {
 }
 
 // MARK: - Preview
+
 #Preview {
     ContentView()
 }
-
-//test

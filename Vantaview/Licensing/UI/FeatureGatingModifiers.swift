@@ -16,36 +16,43 @@ struct FeatureGatingModifier: ViewModifier {
     @State private var isFeatureEnabled = false
     
     func body(content: Content) -> some View {
-        ZStack {
-            content
-                .opacity(isFeatureEnabled ? 1.0 : 0.3)
-                .disabled(!isFeatureEnabled)
-            
-            if !isFeatureEnabled {
-                FeatureLockedOverlay(
-                    feature: feature,
-                    requiredTier: FeatureMatrix.minimumTier(for: feature),
-                    currentTier: licenseManager.currentTier
-                ) {
-                    showPaywall = true
+        content
+            .opacity(isFeatureEnabled ? 1.0 : 0.3)
+            .disabled(!isFeatureEnabled)
+            .overlay(alignment: .center) {
+                if !isFeatureEnabled {
+                    FeatureLockedOverlay(
+                        feature: feature,
+                        requiredTier: FeatureMatrix.minimumTier(for: feature),
+                        currentTier: licenseManager.currentTier
+                    ) {
+                        showPaywall = true
+                    }
+                    .padding()
+                    .background(EmptyView()) // keep overlay non-expanding
+                    .transition(.opacity)
                 }
             }
-        }
-        .sheet(isPresented: $showPaywall) {
-            PaywallView(
-                highlightedFeature: feature,
-                licenseManager: licenseManager
-            )
-        }
-        .onAppear {
-            updateFeatureState()
-        }
-        .onChange(of: licenseManager.currentTier) { _, _ in
-            updateFeatureState()
-        }
-        .onChange(of: licenseManager.status) { _, _ in
-            updateFeatureState()
-        }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView(
+                    highlightedFeature: feature,
+                    licenseManager: licenseManager
+                )
+            }
+            .onAppear {
+                updateFeatureState()
+            }
+            .onChange(of: licenseManager.currentTier) { _, _ in
+                updateFeatureState()
+            }
+            .onChange(of: licenseManager.status) { _, _ in
+                updateFeatureState()
+            }
+            #if DEBUG
+            .onChange(of: licenseManager.debugImpersonatedTier) { _, _ in
+                updateFeatureState()
+            }
+            #endif
     }
     
     private func updateFeatureState() {
@@ -85,10 +92,10 @@ struct FeatureLockedOverlay: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .padding()
-        .background(Color.black.opacity(0.8))
+        .padding(12)
+        .background(.ultraThinMaterial)
         .cornerRadius(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
