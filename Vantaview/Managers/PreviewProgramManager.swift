@@ -55,6 +55,8 @@ final class PreviewProgramManager: ObservableObject {
 
     @Published var programAudioTap: PlayerAudioTap?
 
+    @Published var previewAudioTap: PlayerAudioTap?
+
     // Playback state
     @Published var isPreviewPlaying = false
     @Published var isProgramPlaying = false
@@ -574,7 +576,13 @@ final class PreviewProgramManager: ObservableObject {
             previewAudioPlayer = player
             previewPlayer = player
             previewSource = .media(file, player: player)
-            
+
+            if let item = player.currentItem {
+                self.previewAudioTap = PlayerAudioTap(playerItem: item)
+            } else {
+                self.previewAudioTap = nil
+            }
+
             // Add playback end notification for looping
             setupPlayerNotifications(for: player, isPreview: true)
             
@@ -602,6 +610,8 @@ final class PreviewProgramManager: ObservableObject {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         output.suppressesPlayerRendering = true
         playerItem.add(output)
+
+        self.previewAudioTap = PlayerAudioTap(playerItem: playerItem)
 
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
@@ -956,7 +966,7 @@ final class PreviewProgramManager: ObservableObject {
         if case .media(let file, _) = previewSource {
             file.url.stopAccessingSecurityScopedResource()
         }
-        
+
         previewSource = .none
         previewPlayer = nil
         previewImage = nil
@@ -965,6 +975,8 @@ final class PreviewProgramManager: ObservableObject {
         previewDuration = 0
         previewVTReady = false
         previewPrimedForPoster = false
+
+        previewAudioTap = nil
     }
     
     private func clearProgram() {

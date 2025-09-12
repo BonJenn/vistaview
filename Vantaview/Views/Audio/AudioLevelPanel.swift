@@ -1,10 +1,19 @@
 import SwiftUI
+import Foundation
 
 // MARK: - Audio Level Panel
 struct AudioLevelPanel: View {
-    @StateObject private var audioGenerator = MockAudioDataGenerator()
-    @State private var isMonitoring = false
-    
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @State private var isMonitoring = true
+
+    @State private var audioLevels: AudioLevelData = AudioLevelData(
+        left: AudioChannelLevel.silent,
+        right: AudioChannelLevel.silent,
+        program: AudioChannelLevel.silent
+    )
+
+    @State private var timer: Timer?
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -35,16 +44,16 @@ struct AudioLevelPanel: View {
                 HStack(spacing: 20) {
                     AudioLevelMeter(
                         label: "LEFT",
-                        level: isMonitoring ? audioGenerator.audioLevels.left.rms : 0.0,
-                        peak: isMonitoring ? audioGenerator.audioLevels.left.peak : 0.0,
-                        isClipping: isMonitoring ? audioGenerator.audioLevels.left.isClipping : false
+                        level: audioLevels.left.rms,
+                        peak: audioLevels.left.peak,
+                        isClipping: audioLevels.left.isClipping
                     )
                     
                     AudioLevelMeter(
                         label: "RIGHT",
-                        level: isMonitoring ? audioGenerator.audioLevels.right.rms : 0.0,
-                        peak: isMonitoring ? audioGenerator.audioLevels.right.peak : 0.0,
-                        isClipping: isMonitoring ? audioGenerator.audioLevels.right.isClipping : false
+                        level: audioLevels.right.rms,
+                        peak: audioLevels.right.peak,
+                        isClipping: audioLevels.right.isClipping
                     )
                 }
                 
@@ -54,9 +63,9 @@ struct AudioLevelPanel: View {
                 // Program output meter
                 AudioLevelMeter(
                     label: "PROGRAM",
-                    level: isMonitoring ? audioGenerator.audioLevels.program.rms : 0.0,
-                    peak: isMonitoring ? audioGenerator.audioLevels.program.peak : 0.0,
-                    isClipping: isMonitoring ? audioGenerator.audioLevels.program.isClipping : false
+                    level: audioLevels.program.rms,
+                    peak: audioLevels.program.peak,
+                    isClipping: audioLevels.program.isClipping
                 )
                 
                 Spacer()
@@ -73,7 +82,7 @@ struct AudioLevelPanel: View {
                 )
         )
         .onAppear {
-            // Don't auto-start monitoring
+            startMonitoring()
         }
         .onDisappear {
             stopMonitoring()
@@ -90,67 +99,111 @@ struct AudioLevelPanel: View {
     
     private func startMonitoring() {
         isMonitoring = true
-        audioGenerator.startGenerating()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { _ in
+            pollAudio()
+        }
     }
     
     private func stopMonitoring() {
         isMonitoring = false
-        audioGenerator.stopGenerating()
+        timer?.invalidate()
+        timer = nil
+        audioLevels = AudioLevelData(
+            left: AudioChannelLevel.silent,
+            right: AudioChannelLevel.silent,
+            program: AudioChannelLevel.silent
+        )
     }
-}
 
-// MARK: - Compact Audio Level Panel (Alternative version)
-struct CompactAudioLevelPanel: View {
-    @StateObject private var audioGenerator = MockAudioDataGenerator()
-    @State private var isActive = false
-    
-    var body: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text("AUDIO")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button(action: { isActive.toggle() }) {
-                    Circle()
-                        .fill(isActive ? .green : .gray)
-                        .frame(width: 8, height: 8)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            
-            HStack(spacing: 16) {
-                AudioLevelMeter(
-                    label: "L",
-                    level: isActive ? audioGenerator.audioLevels.left.rms : 0.0,
-                    peak: isActive ? audioGenerator.audioLevels.left.peak : 0.0,
-                    isClipping: isActive ? audioGenerator.audioLevels.left.isClipping : false
-                )
-                
-                AudioLevelMeter(
-                    label: "R",
-                    level: isActive ? audioGenerator.audioLevels.right.rms : 0.0,
-                    peak: isActive ? audioGenerator.audioLevels.right.peak : 0.0,
-                    isClipping: isActive ? audioGenerator.audioLevels.right.isClipping : false
-                )
-                
-                AudioLevelMeter(
-                    label: "PGM",
-                    level: isActive ? audioGenerator.audioLevels.program.rms : 0.0,
-                    peak: isActive ? audioGenerator.audioLevels.program.peak : 0.0,
-                    isClipping: isActive ? audioGenerator.audioLevels.program.isClipping : false
-                )
-            }
+    private func pollAudio() {
+        guard isMonitoring else { return }
+        let ppm = productionManager.previewProgramManager
+
+        // Prefer Program if playing, else Preview, else any available tap
+        let activeTap: PlayerAudioTap? = {
+            if ppm.isProgramPlaying, let t = ppm.programAudioTap { return t }
+            if ppm.isPreviewPlaying, let t = ppm.previewAudioTap { return t }
+            return ppm.programAudioTap ?? ppm.previewAudioTap
+        }()
+
+        guard let tap = activeTap,
+              let (ptr, frames, channels, _) = tap.fetchLatestInterleavedBuffer(),
+              frames > 0
+        else {
+            audioLevels = AudioLevelData(
+                left: AudioChannelLevel.silent,
+                right: AudioChannelLevel.silent,
+                program: AudioChannelLevel.silent
+            )
+            return
         }
-        .padding(10)
-        .background(Color.black.opacity(0.15))
-        .cornerRadius(8)
-        .onChange(of: isActive) { _, newValue in
-            if newValue {
-                audioGenerator.startGenerating()
+
+        let (lRMS, rRMS, pRMS, lPeak, rPeak, pPeak) = computeLevels(ptr: ptr, frames: frames, channels: channels)
+
+        // Peak hold decay
+        let decay: Float = 0.95
+        let newLeftPeak = max(lPeak, audioLevels.left.peak * decay)
+        let newRightPeak = max(rPeak, audioLevels.right.peak * decay)
+        let newProgramPeak = max(pPeak, audioLevels.program.peak * decay)
+
+        audioLevels = AudioLevelData(
+            left: AudioChannelLevel(
+                rms: clamp01(lRMS),
+                peak: clamp01(newLeftPeak),
+                isClipping: newLeftPeak > 0.98
+            ),
+            right: AudioChannelLevel(
+                rms: clamp01(rRMS),
+                peak: clamp01(newRightPeak),
+                isClipping: newRightPeak > 0.98
+            ),
+            program: AudioChannelLevel(
+                rms: clamp01(pRMS),
+                peak: clamp01(newProgramPeak),
+                isClipping: newProgramPeak > 0.98
+            )
+        )
+    }
+
+    private func computeLevels(ptr: UnsafePointer<Float32>, frames: Int, channels: Int) -> (Float, Float, Float, Float, Float, Float) {
+        let ch = max(1, channels)
+        var lAcc: Double = 0
+        var rAcc: Double = 0
+        var pAcc: Double = 0
+        var lPeak: Float = 0
+        var rPeak: Float = 0
+
+        for f in 0..<frames {
+            let base = f * ch
+            let l: Float
+            let r: Float
+            if ch >= 2 {
+                l = ptr[base]
+                r = ptr[base + 1]
             } else {
-                audioGenerator.stopGenerating()
+                let v = ptr[base]
+                l = v
+                r = v
             }
+            let la = abs(l)
+            let ra = abs(r)
+            if la > lPeak { lPeak = la }
+            if ra > rPeak { rPeak = ra }
+            lAcc += Double(l * l)
+            rAcc += Double(r * r)
+            pAcc += Double((l * l + r * r) * 0.5)
         }
+
+        let denom = Double(max(frames, 1))
+        let lRMS = Float(sqrt(lAcc / denom))
+        let rRMS = Float(sqrt(rAcc / denom))
+        let pRMS = Float(sqrt(pAcc / denom))
+        let progPeak = max(lPeak, rPeak)
+        return (lRMS, rRMS, pRMS, lPeak, rPeak, progPeak)
+    }
+
+    private func clamp01(_ x: Float) -> Float {
+        return max(0, min(1, x))
     }
 }

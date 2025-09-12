@@ -570,7 +570,7 @@ struct PreviewProgramCenterView: View {
                     )
             }
             if case .media(let mediaFile, _) = sourceCase {
-                if mediaFile.fileType == .video {
+                if mediaFile.fileType == .video || mediaFile.fileType == .audio {
                     ComprehensiveMediaControls(
                         previewProgramManager: productionManager.previewProgramManager,
                         isPreview: isPreview,
@@ -928,43 +928,6 @@ struct EffectDragButton: View {
     }
 }
 
-// MARK: - Timeline Controls View
-
-struct TimelineControlsView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("Timeline & Layers")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal)
-            HStack(spacing: 8) {
-                ForEach(0..<4) { index in
-                    VStack {
-                        Rectangle()
-                            .fill(index == 0 ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2))
-                            .frame(height: 40)
-                            .overlay(
-                                Text("Layer \(index + 1)")
-                                    .font(.caption2)
-                                    .foregroundColor(index == 0 ? .blue : .secondary)
-                            )
-                            .cornerRadius(4)
-                        Slider(value: .constant(index == 0 ? 1.0 : 0.0), in: 0...1)
-                            .frame(width: 60)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.horizontal)
-        }
-        .padding(.vertical, 8)
-    }
-}
-
 // MARK: - Output Controls Panel
 
 struct OutputControlsPanel: View {
@@ -977,7 +940,7 @@ struct OutputControlsPanel: View {
         ScrollView {
             VStack(spacing: 32) {
                 // Audio Levels Section
-                AudioLevelPanel()
+                AudioLevelPanel(productionManager: productionManager)
                     .frame(height: 200)
                     .padding(.bottom, 28) // extra gap so meters don’t overlap Live Streaming
                 
@@ -1164,6 +1127,8 @@ struct SimplePreviewMonitorView: View {
                         productionManager.previewProgramManager.previewCurrentTexture
                     })
                     .background(Color.black)
+                } else if mediaFile.fileType == .audio {
+                    AudioNowPlayingView(isPreview: true)
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: true)
                 }
@@ -1243,6 +1208,8 @@ struct SimpleProgramMonitorView: View {
                         productionManager.previewProgramManager.programCurrentTexture
                     })
                     .background(Color.black)
+                } else if mediaFile.fileType == .audio {
+                    AudioNowPlayingView(isPreview: false)
                 } else {
                     MediaLoadingView(mediaFile: mediaFile, isPreview: false)
                 }
@@ -1608,92 +1575,107 @@ struct ComprehensiveMediaControls: View {
                 .frame(height: 20)
             }
             
-            HStack(spacing: 12) {
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: 0)
-                    } else {
-                        previewProgramManager.seekProgram(to: 0)
+            HStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Button(action: {
+                        guard isPlayerReady else { return }
+                        if isPreview {
+                            previewProgramManager.seekPreview(to: 0)
+                        } else {
+                            previewProgramManager.seekProgram(to: 0)
+                        }
+                    }) {
+                        Image(systemName: "backward.end")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(isPlayerReady ? .primary : .gray)
                     }
-                }) {
-                    Image(systemName: "backward.end")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .primary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Go to start")
-                .keyboardShortcut(.home, modifiers: [])
-                .disabled(!isPlayerReady)
-                
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    let newTime = max(0, currentTime - 10)
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: newTime)
-                    } else {
-                        previewProgramManager.seekProgram(to: newTime)
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Go to start")
+                    .disabled(!isPlayerReady)
+                    
+                    Button(action: {
+                        guard isPlayerReady else { return }
+                        let newTime = max(0, currentTime - 10)
+                        if isPreview {
+                            previewProgramManager.seekPreview(to: newTime)
+                        } else {
+                            previewProgramManager.seekProgram(to: newTime)
+                        }
+                    }) {
+                        Image(systemName: "gobackward.10")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(isPlayerReady ? .primary : .gray)
                     }
-                }) {
-                    Image(systemName: "gobackward.10")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .primary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Skip backward 10 seconds")
-                .keyboardShortcut("j", modifiers: [])
-                .disabled(!isPlayerReady)
-                
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    let frameTime = 1.0/30.0
-                    let newTime = max(0, currentTime - frameTime)
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: newTime)
-                    } else {
-                        previewProgramManager.seekProgram(to: newTime)
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Skip backward 10 seconds")
+                    .disabled(!isPlayerReady)
+                    
+                    Button(action: {
+                        guard isPlayerReady else { return }
+                        let frameTime = 1.0/30.0
+                        let newTime = max(0, currentTime - frameTime)
+                        if isPreview {
+                            previewProgramManager.seekPreview(to: newTime)
+                        } else {
+                            previewProgramManager.seekProgram(to: newTime)
+                        }
+                    }) {
+                        Image(systemName: "backward.frame")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(isPlayerReady ? .secondary : .gray)
                     }
-                }) {
-                    Image(systemName: "backward.frame")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .secondary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Previous frame")
-                .keyboardShortcut(",", modifiers: [])
-                .disabled(!isPlayerReady)
-                
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    togglePlayPause()
-                }) {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundColor(isPlayerReady ? (isPreview ? .yellow : .red) : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help(isPlaying ? "Pause (Space)" : "Play (Space)")
-                .keyboardShortcut(.space, modifiers: [])
-                .disabled(!isPlayerReady)
-                
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    let frameTime = 1.0/30.0
-                    let newTime = min(duration, currentTime + frameTime)
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: newTime)
-                    } else {
-                        previewProgramManager.seekProgram(to: newTime)
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Previous frame")
+                    .disabled(!isPlayerReady)
+                    
+                    Button(action: {
+                        guard isPlayerReady else { return }
+                        togglePlayPause()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 28, weight: .medium))
+                            .foregroundColor(isPlayerReady ? (isPreview ? .yellow : .red) : .gray)
                     }
-                }) {
-                    Image(systemName: "forward.frame")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .secondary : .gray)
+                    .buttonStyle(PlainButtonStyle())
+                    .help(isPlaying ? "Pause" : "Play")
+                    .disabled(!isPlayerReady)
+                    
+                    Button(action: {
+                        guard isPlayerReady else { return }
+                        let frameTime = 1.0/30.0
+                        let newTime = min(duration, currentTime + frameTime)
+                        if isPreview {
+                            previewProgramManager.seekPreview(to: newTime)
+                        } else {
+                            previewProgramManager.seekProgram(to: newTime)
+                        }
+                    }) {
+                        Image(systemName: "forward.frame")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(isPlayerReady ? .secondary : .gray)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Next frame")
+                    .disabled(!isPlayerReady)
+                    
+                    Button(action: { loopEnabled.wrappedValue.toggle() }) {
+                        Image(systemName: loopEnabled.wrappedValue ? "repeat.circle.fill" : "repeat.circle")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(loopEnabled.wrappedValue ? .green : .secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Toggle loop")
+                    
+                    Button(action: { isMuted.wrappedValue.toggle() }) {
+                        Image(systemName: isMuted.wrappedValue ? "speaker.slash.circle.fill" : "speaker.wave.2.circle")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(isMuted.wrappedValue ? .orange : .secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Toggle mute")
                 }
-                .buttonStyle(PlainButtonStyle())
-                .help("Next frame")
-                .keyboardShortcut(".", modifiers: [])
-                .disabled(!isPlayerReady)
+                Spacer()
             }
             
             HStack {
@@ -1969,6 +1951,25 @@ struct MediaLoadingView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
                 .scaleEffect(0.8)
+        }
+    }
+}
+
+struct AudioNowPlayingView: View {
+    let isPreview: Bool
+    
+    var body: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 8) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundColor(isPreview ? .yellow : .red)
+                Text("Audio Only")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .padding(8)
         }
     }
 }
