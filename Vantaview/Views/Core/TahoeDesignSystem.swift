@@ -87,7 +87,8 @@ struct LiquidGlassPanel: ViewModifier {
     let borderOpacity: Double
     let shadowIntensity: ShadowIntensity
     let padding: EdgeInsets?
-    
+    let backgroundInsets: EdgeInsets?
+
     enum ShadowIntensity {
         case none, light, medium, heavy, dramatic
         
@@ -107,29 +108,35 @@ struct LiquidGlassPanel: ViewModifier {
         cornerRadius: CGFloat = TahoeDesign.CornerRadius.lg,
         borderOpacity: Double = 0.15,
         shadowIntensity: ShadowIntensity = .medium,
-        padding: EdgeInsets? = nil
+        padding: EdgeInsets? = nil,
+        backgroundInsets: EdgeInsets? = nil
     ) {
         self.material = material
         self.cornerRadius = cornerRadius
         self.borderOpacity = borderOpacity
         self.shadowIntensity = shadowIntensity
         self.padding = padding
+        self.backgroundInsets = backgroundInsets
     }
     
     func body(content: Content) -> some View {
         let paddedContent = padding != nil ? AnyView(content.padding(padding!)) : AnyView(content)
         let shadow = shadowIntensity.shadow
+
+        let baseShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(material)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.white.opacity(borderOpacity), lineWidth: 0.5)
+            )
+            .shadow(color: shadow.color, radius: shadow.radius, x: shadow.x, y: shadow.y)
+
+        let insetBackground = backgroundInsets != nil
+            ? AnyView(baseShape.padding(backgroundInsets!))
+            : AnyView(baseShape)
         
         return paddedContent
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(material)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .stroke(.white.opacity(borderOpacity), lineWidth: 0.5)
-                    )
-                    .shadow(color: shadow.color, radius: shadow.radius, x: shadow.x, y: shadow.y)
-            )
+            .background(insetBackground)
     }
 }
 
@@ -207,14 +214,16 @@ extension View {
         cornerRadius: CGFloat = TahoeDesign.CornerRadius.lg,
         borderOpacity: Double = 0.15,
         shadowIntensity: LiquidGlassPanel.ShadowIntensity = .medium,
-        padding: EdgeInsets? = nil
+        padding: EdgeInsets? = nil,
+        backgroundInsets: EdgeInsets? = nil
     ) -> some View {
         modifier(LiquidGlassPanel(
             material: material,
             cornerRadius: cornerRadius,
             borderOpacity: borderOpacity,
             shadowIntensity: shadowIntensity,
-            padding: padding
+            padding: padding,
+            backgroundInsets: backgroundInsets
         ))
     }
     

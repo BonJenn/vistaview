@@ -22,14 +22,31 @@ class StreamingViewModel: ObservableObject {
     @Published var statusMessage = "Initializing..."
     @Published var mirrorProgramOutput: Bool = true
 
+    @Published var programAudioRMS: Float = 0
+    @Published var programAudioPeak: Float = 0
+    @Published var avSyncOffsetMs: Double = 0
+
+    private let targetSampleRate: Double = 48_000
+
+    private var lastAudioPTS: CMTime = .zero
+    private var lastVideoPTS: CMTime = .zero
+
+    private var micEngine: AVAudioEngine?
+    private let micLock = NSLock()
+    private var micLatestData = Data()
+    private var micLatestFrames: Int = 0
+    private var micSampleRate: Double = 48_000
+
     enum AudioSource: String, CaseIterable, Identifiable {
         case microphone, program, none
+        case micAndProgram
         var id: String { rawValue }
         var displayName: String {
             switch self {
             case .microphone: return "Microphone"
             case .program: return "Program Audio"
             case .none: return "None"
+            case .micAndProgram: return "Mic + Program"
             }
         }
     }
@@ -234,6 +251,7 @@ class StreamingViewModel: ObservableObject {
 
         stopProgramFramePump()
         stopProgramAudioPump()
+        stopMicCapture()
         await detachMicrophoneIfNeeded()
         
         do {
@@ -263,13 +281,22 @@ class StreamingViewModel: ObservableObject {
         case .microphone:
             stopProgramAudioPump()
             await detachProgramAudioIfNeeded()
+            stopMicCapture()
             await attachDefaultMicrophone()
         case .program:
             await detachMicrophoneIfNeeded()
+            stopMicCapture()
+            startProgramAudioPump()
+        case .micAndProgram:
+            stopProgramAudioPump()
+            await detachMicrophoneIfNeeded()
+            await detachProgramAudioIfNeeded()
+            startMicCapture()
             startProgramAudioPump()
         case .none:
             stopProgramAudioPump()
             await detachMicrophoneIfNeeded()
+            stopMicCapture()
             await detachProgramAudioIfNeeded()
         }
         print("🎚️ Audio routing set to: \(selectedAudioSource.displayName) (PiP=\(includePiPAudioInProgram))")
@@ -319,6 +346,78 @@ class StreamingViewModel: ObservableObject {
         src.resume()
     }
 
+    private func startMicCapture() {
+        guard micEngine == nil else { return }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self = self else { return }
+            let channels = Int(format.channelCount)
+            let frames = Int(buffer.frameLength)
+            guard frames > 0 else { return }
+
+            // Convert to interleaved stereo float32 in Data
+            var interleaved = [Float32](repeating: 0, count: frames * 2)
+            if channels >= 2, let ch0 = buffer.floatChannelData?[0], let ch1 = buffer.floatChannelData?[1] {
+                for f in 0..<frames {
+                    let so = f * 2
+                    interleaved[so] = ch0[f]
+                    interleaved[so + 1] = ch1[f]
+                }
+            } else if channels >= 1, let ch0 = buffer.floatChannelData?[0] {
+                for f in 0..<frames {
+                    let v = ch0[f]
+                    let so = f * 2
+                    interleaved[so] = v
+                    interleaved[so + 1] = v
+                }
+            } else {
+                return
+            }
+
+            self.micLock.lock()
+            self.micLatestData.removeAll(keepingCapacity: true)
+            self.micLatestData = interleaved.withUnsafeBufferPointer { Data(buffer: $0) }
+            self.micLatestFrames = frames
+            self.micSampleRate = format.sampleRate
+            self.micLock.unlock()
+        }
+
+        do {
+            try engine.start()
+            micEngine = engine
+            print("🎤 Mic engine started for Mic+Program mix")
+        } catch {
+            print("❌ Mic engine start error: \(error)")
+            micEngine = nil
+        }
+    }
+
+    private func stopMicCapture() {
+        if let engine = micEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            micEngine = nil
+            print("🔇 Mic engine stopped")
+        }
+        micLock.lock()
+        micLatestData.removeAll()
+        micLatestFrames = 0
+        micLock.unlock()
+    }
+
+    private func fetchLatestMicInterleavedStereo() -> (UnsafePointer<Float32>, Int, Double)? {
+        micLock.lock()
+        defer { micLock.unlock() }
+        guard micLatestFrames > 0, micLatestData.count >= micLatestFrames * 2 * MemoryLayout<Float32>.size else {
+            return nil
+        }
+        let ptr = micLatestData.withUnsafeBytes { $0.bindMemory(to: Float32.self).baseAddress! }
+        return (ptr, micLatestFrames, micSampleRate)
+    }
+
     private func stopProgramAudioPump() {
         audioSource?.cancel()
         audioSource = nil
@@ -326,23 +425,26 @@ class StreamingViewModel: ObservableObject {
     }
 
     private func pushCurrentProgramAudioFrameBackground() async {
-        guard selectedAudioSource == .program else { return }
+        guard selectedAudioSource == .program || selectedAudioSource == .micAndProgram else { return }
         guard isPublishing else { return }
 
-        var channels: Int = 2
-        var sampleRate: Double = 48_000
+        // Target frames per pump at 48 kHz
+        let outChannels = 2
+        let framesOut = max(64, Int(targetSampleRate * audioPollInterval)) // ~200 at 240 Hz
+        let samplesOut = framesOut * outChannels
+        let outBuffer = UnsafeMutablePointer<Float32>.allocate(capacity: samplesOut)
+        for i in 0..<samplesOut { outBuffer[i] = 0 }
+        defer { outBuffer.deallocate() }
 
         struct Src {
-            let ptr: UnsafePointer<Float32>
+            let data: [Float32]
             let frames: Int
-            let gainL: Float
-            let gainR: Float
             let layerId: UUID?
         }
         var sources: [Src] = []
 
         // Snapshot main-actor state
-        let (programTap, programGain, includePiP, pipTaps): (PlayerAudioTap?, Float, Bool, [(PlayerAudioTap, Float, Float, UUID)]) = {
+        let (programTap, programGain, includePiP, pipTaps, includeMic): (PlayerAudioTap?, Float, Bool, [(PlayerAudioTap, Float, Float, UUID)], Bool) = {
             var taps: [(PlayerAudioTap, Float, Float, UUID)] = []
             let pm = programManager
             let tap = pm?.programAudioTap
@@ -358,90 +460,111 @@ class StreamingViewModel: ObservableObject {
                     }
                 }
             }
-            return (tap, gain, include, taps)
+            let micIncluded = (selectedAudioSource == .micAndProgram)
+            return (tap, gain, include, taps, micIncluded)
         }()
 
-        if let progTap = programTap,
-           let (ptr, frames, ch, sr) = progTap.fetchLatestInterleavedBuffer() {
-            channels = max(1, ch)
-            sampleRate = sr
-            sources.append(Src(ptr: ptr, frames: frames, gainL: programGain, gainR: programGain, layerId: nil))
+        // Program main audio (resample to framesOut @ 48 kHz)
+        if let progTap = programTap, let (ptr, frames, ch, sr) = progTap.fetchLatestInterleavedBuffer() {
+            let resampled = resampleInterleaved(ptr: ptr, frames: frames, srcChannels: ch, srcRate: sr, dstFrames: framesOut, dstRate: targetSampleRate)
+            let g = programGain
+            let scaled = resampled.map { $0 * g }
+            sources.append(Src(data: scaled, frames: framesOut, layerId: nil))
         }
 
+        // Include PiP taps
         if includePiP {
             for (tap, gain, pan, id) in pipTaps {
                 if let (ptr, frames, ch, sr) = tap.fetchLatestInterleavedBuffer() {
-                    channels = max(1, ch)
-                    sampleRate = sr
-                    let panClamped = max(-1.0, min(1.0, pan))
-                    let angle = (Double(panClamped) + 1.0) * (Double.pi / 4.0)
-                    let panL = Float(cos(angle))
-                    let panR = Float(sin(angle))
-                    sources.append(Src(ptr: ptr, frames: frames, gainL: gain * panL, gainR: gain * panR, layerId: id))
+                    var resampled = resampleInterleaved(ptr: ptr, frames: frames, srcChannels: ch, srcRate: sr, dstFrames: framesOut, dstRate: targetSampleRate)
+                    applyPan(inoutStereo: &resampled, pan: pan)
+                    let scaled = resampled.map { $0 * gain }
+                    sources.append(Src(data: scaled, frames: framesOut, layerId: id))
                 }
             }
+        }
+
+        // Include microphone if selected
+        if includeMic, let (micPtr, micFrames, micSR) = fetchLatestMicInterleavedStereo() {
+            let resampled = resampleInterleaved(ptr: micPtr, frames: micFrames, srcChannels: 2, srcRate: micSR, dstFrames: framesOut, dstRate: targetSampleRate)
+            sources.append(Src(data: resampled, frames: framesOut, layerId: nil))
         }
 
         guard !sources.isEmpty else { return }
-        let frames = sources.map { $0.frames }.min() ?? 0
-        guard frames > 0 else { return }
 
-        let outChannels = 2
-        let samples = frames * outChannels
-        let outBuffer = UnsafeMutablePointer<Float32>.allocate(capacity: samples)
-        defer { outBuffer.deallocate() }
-        for i in 0..<samples { outBuffer[i] = 0 }
-
+        // Mix down
         var perSourcePeak: [UUID: Float] = [:]
         var perSourceRMSAcc: [UUID: Double] = [:]
+        var totalPeak: Float = 0
+        var totalRMSAcc: Double = 0
 
         for src in sources {
-            var peak: Float = 0
-            var rmsAcc: Double = 0
-            if channels >= 2 {
-                for f in 0..<frames {
-                    let si = f * channels
-                    let so = f * outChannels
-                    let sL = src.ptr[si] * src.gainL
-                    let sR = src.ptr[si + 1] * src.gainR
-                    peak = max(peak, max(abs(sL), abs(sR)))
-                    rmsAcc += Double((sL * sL + sR * sR) * 0.5)
-                    outBuffer[so] = min(max(outBuffer[so] + sL, -1.0), 1.0)
-                    outBuffer[so + 1] = min(max(outBuffer[so + 1] + sR, -1.0), 1.0)
-                }
-            } else {
-                for f in 0..<frames {
-                    let so = f * outChannels
-                    let s = src.ptr[f]
-                    let sL = s * src.gainL
-                    let sR = s * src.gainR
-                    peak = max(peak, max(abs(sL), abs(sR)))
-                    rmsAcc += Double((sL * sL + sR * sR) * 0.5)
-                    outBuffer[so] = min(max(outBuffer[so] + sL, -1.0), 1.0)
-                    outBuffer[so + 1] = min(max(outBuffer[so + 1] + sR, -1.0), 1.0)
-                }
+            // Sum and meter per-source
+            var srcPeak: Float = 0
+            var srcRMSAcc: Double = 0
+            for f in 0..<framesOut {
+                let so = f * outChannels
+                let sL = src.data[so]
+                let sR = src.data[so + 1]
+                srcPeak = max(srcPeak, max(abs(sL), abs(sR)))
+                srcRMSAcc += Double((sL * sL + sR * sR) * 0.5)
+
+                outBuffer[so] = outBuffer[so] + sL
+                outBuffer[so + 1] = outBuffer[so + 1] + sR
             }
             if let lid = src.layerId {
-                perSourcePeak[lid] = peak
-                perSourceRMSAcc[lid] = rmsAcc
+                perSourcePeak[lid] = srcPeak
+                perSourceRMSAcc[lid] = srcRMSAcc
             }
         }
 
-        // Update meters on main
+        // Soft-clip limiter to avoid hard clipping
+        for i in 0..<samplesOut {
+            outBuffer[i] = softClipSample(outBuffer[i])
+            totalPeak = max(totalPeak, abs(outBuffer[i]))
+        }
+        for f in 0..<framesOut {
+            let so = f * outChannels
+            let l = outBuffer[so]
+            let r = outBuffer[so + 1]
+            totalRMSAcc += Double((l * l + r * r) * 0.5)
+        }
+
+        // Update layer meters on main
         Task { @MainActor in
-            guard let lm = self.layerManager else { return }
-            let denom = Double(frames)
-            for (lid, peak) in perSourcePeak {
-                let rmsAcc = perSourceRMSAcc[lid] ?? 0
-                let rms = sqrt(rmsAcc / max(denom, 1))
-                lm.updatePiPAudioMeter(for: lid, rms: Float(rms), peak: peak)
+            if let lm = self.layerManager {
+                let denom = Double(framesOut)
+                for (lid, peak) in perSourcePeak {
+                    let rmsAcc = perSourceRMSAcc[lid] ?? 0
+                    let rms = sqrt(rmsAcc / max(denom, 1))
+                    lm.updatePiPAudioMeter(for: lid, rms: Float(rms), peak: peak)
+                }
             }
+            // Program meters
+            let totalRMS = sqrt(totalRMSAcc / max(Double(framesOut), 1))
+            self.programAudioRMS = Float(totalRMS)
+            self.programAudioPeak = totalPeak
         }
 
+        // PTS and A/V sync offset using host clock
         let audioPTS = CMClockGetTime(hostClock)
-        let audioDuration = CMTime(value: CMTimeValue(frames), timescale: CMTimeScale(Int32(sampleRate)))
+        let audioDuration = CMTime(value: CMTimeValue(framesOut), timescale: CMTimeScale(Int32(targetSampleRate)))
+        lastAudioPTS = audioPTS
 
-        if let mixed = makeAudioSampleBuffer(from: outBuffer, frames: frames, channels: outChannels, sampleRate: sampleRate, pts: audioPTS, duration: audioDuration) {
+        // Update AV sync readout
+        Task { @MainActor in
+            let diff = CMTimeSubtract(self.lastVideoPTS, self.lastAudioPTS)
+            self.avSyncOffsetMs = CMTimeGetSeconds(diff) * 1000.0
+        }
+
+        if let mixed = makeAudioSampleBuffer(
+            from: outBuffer,
+            frames: framesOut,
+            channels: outChannels,
+            sampleRate: targetSampleRate,
+            pts: audioPTS,
+            duration: audioDuration
+        ) {
             Task { @MainActor in
                 await stream.appendAudio(mixed)
             }
@@ -626,8 +749,15 @@ class StreamingViewModel: ObservableObject {
         }
 
         let ptsNow = CMClockGetTime(hostClock)
+        lastVideoPTS = ptsNow
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(Int32(programTargetFPS)))
         var timing = CMSampleTimingInfo(duration: frameDuration, presentationTimeStamp: ptsNow, decodeTimeStamp: .invalid)
+
+        // Update AV sync readout (video vs audio)
+        Task { @MainActor in
+            let diff = CMTimeSubtract(self.lastVideoPTS, self.lastAudioPTS)
+            self.avSyncOffsetMs = CMTimeGetSeconds(diff) * 1000.0
+        }
 
         var sb: CMSampleBuffer?
         if let fmt = programVideoFormat,
@@ -751,6 +881,67 @@ class StreamingViewModel: ObservableObject {
         await mixer.setFrameRate(30)
         await mixer.setSessionPreset(AVCaptureSession.Preset.medium)
         await setupCameraWithDevice(videoDevice)
+    }
+
+
+    private func softClipSample(_ x: Float) -> Float {
+        let k: Float = 2.5
+        return tanhf(k * x) / tanhf(k)
+    }
+
+    private func applyPan(inoutStereo data: inout [Float32], pan: Float) {
+        let panClamped = max(-1.0, min(1.0, pan))
+        let angle = (Double(panClamped) + 1.0) * (Double.pi / 4.0)
+        let panL = Float(cos(angle))
+        let panR = Float(sin(angle))
+        let frames = data.count / 2
+        for f in 0..<frames {
+            let i = f * 2
+            data[i] *= panL
+            data[i + 1] *= panR
+        }
+    }
+
+    private func resampleInterleaved(ptr: UnsafePointer<Float32>, frames: Int, srcChannels: Int, srcRate: Double, dstFrames: Int, dstRate: Double) -> [Float32] {
+        // Output stereo interleaved
+        var out = [Float32](repeating: 0, count: dstFrames * 2)
+        if frames <= 1 {
+            return out
+        }
+        let step = srcRate / dstRate
+        var pos: Double = 0
+        for i in 0..<dstFrames {
+            let s0 = Int(pos)
+            let s1 = min(s0 + 1, frames - 1)
+            let frac = Float(pos - Double(s0))
+            if srcChannels >= 2 {
+                let i0L = s0 * srcChannels
+                let i0R = i0L + 1
+                let i1L = s1 * srcChannels
+                let i1R = i1L + 1
+                let l0 = ptr[i0L]
+                let r0 = ptr[i0R]
+                let l1 = ptr[i1L]
+                let r1 = ptr[i1R]
+                let l = l0 + (l1 - l0) * frac
+                let r = r0 + (r1 - r0) * frac
+                let o = i * 2
+                out[o] = l
+                out[o + 1] = r
+            } else {
+                let i0 = s0
+                let i1 = s1
+                let v0 = ptr[i0]
+                let v1 = ptr[i1]
+                let v = v0 + (v1 - v0) * frac
+                let o = i * 2
+                out[o] = v
+                out[o + 1] = v
+            }
+            pos += step
+            if pos > Double(frames - 1) { pos = Double(frames - 1) }
+        }
+        return out
     }
 }
 

@@ -32,14 +32,13 @@ struct ContentView: View {
     
     // PERFORMANCE: Add UI update throttling
     @State private var lastUIUpdate = Date()
-    private let uiUpdateThreshold: TimeInterval = 1.0/20.0 // 20fps UI updates
+    private let uiUpdateThreshold: TimeInterval = 1.0/20.0
     
     @StateObject private var layerManager = LayerStackManager()
     @State private var suppressInitialAnimations = true
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top Toolbar
             TopToolbarView(
                 productionManager: productionManager,
                 productionMode: $productionMode,
@@ -49,7 +48,6 @@ struct ContentView: View {
             
             Divider()
             
-            // Main Content Area
             Group {
                 switch productionMode {
                 case .virtual:
@@ -82,7 +80,6 @@ struct ContentView: View {
         .task {
             await requestPermissions()
             await productionManager.initialize()
-            print("ContentView: Validating production manager initialization...")
             validateProductionManagerInitialization()
 
             await MainActor.run {
@@ -90,7 +87,6 @@ struct ContentView: View {
                 productionManager.externalDisplayManager.setLayerStackManager(layerManager)
 
                 productionManager.streamingViewModel.bindToProgramManager(productionManager.previewProgramManager)
-
                 productionManager.streamingViewModel.bindToLayerManager(layerManager)
                 productionManager.streamingViewModel.bindToProductionManager(productionManager)
             }
@@ -114,30 +110,13 @@ struct ContentView: View {
     }
 
     private func requestPermissions() async {
-        let videoPermission = await AVCaptureDevice.requestAccess(for: .video)
-        let audioPermission = await AVCaptureDevice.requestAccess(for: .audio)
-        print("Video permission: \(videoPermission), Audio permission: \(audioPermission)")
+        _ = await AVCaptureDevice.requestAccess(for: .video)
+        _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
     
     private func validateProductionManagerInitialization() {
-        print("Validating production manager components...")
-        
-        // Re-set production manager to ensure proper initialization
-        print("Re-setting production manager to ensure proper initialization...")
         productionManager.externalDisplayManager.setProductionManager(productionManager)
-        
-        // Validate key components
-        print("CameraFeedManager: \(productionManager.cameraFeedManager != nil ? "OK" : "MISSING")")
-        print("EffectManager: \(productionManager.effectManager != nil ? "OK" : "MISSING")")
-        print("OutputMappingManager: \(productionManager.outputMappingManager != nil ? "OK" : "MISSING")")
-        print("ExternalDisplayManager: \(productionManager.externalDisplayManager != nil ? "OK" : "MISSING")")
-        print("PreviewProgramManager: \(productionManager.previewProgramManager != nil ? "OK" : "MISSING")")
-        
-        // Validate Metal device - metalDevice is not optional, so we can access it directly
-        let metalDevice = productionManager.effectManager.metalDevice
-        print("Metal Device: \(metalDevice.name)")
-        
-        print("Production manager validation complete")
+        _ = productionManager.effectManager.metalDevice.name
     }
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
@@ -146,7 +125,6 @@ struct ContentView: View {
             for url in urls {
                 let fileType: MediaFile.MediaFileType
                 let fileExtension = url.pathExtension.lowercased()
-                
                 switch fileExtension {
                 case "mp4", "mov", "avi", "mkv", "webm":
                     fileType = .video
@@ -155,9 +133,8 @@ struct ContentView: View {
                 case "jpg", "jpeg", "png", "gif", "tiff":
                     fileType = .image
                 default:
-                    fileType = .video // Default to video
+                    fileType = .video
                 }
-                
                 let mediaFile = MediaFile(
                     name: url.lastPathComponent,
                     url: url,
@@ -165,8 +142,8 @@ struct ContentView: View {
                 )
                 mediaFiles.append(mediaFile)
             }
-        case .failure(let error):
-            print("File import error: \(error)")
+        case .failure:
+            break
         }
     }
 }
@@ -182,7 +159,6 @@ struct TopToolbarView: View {
     
     var body: some View {
         HStack {
-            // Studio Selector
             HStack {
                 Image(systemName: "building.2.crop.circle")
                     .foregroundColor(.blue)
@@ -206,7 +182,6 @@ struct TopToolbarView: View {
             
             Spacer()
             
-            // Mode Switcher
             HStack(spacing: 0) {
                 Button(action: {
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
@@ -255,7 +230,6 @@ struct TopToolbarView: View {
             
             Spacer()
             
-            // Status Indicators
             HStack(spacing: 16) {
                 if productionManager.isVirtualStudioActive {
                     HStack {
@@ -373,7 +347,6 @@ struct FinalCutProStyleView: View {
                 VStack(spacing: 0) {
                     CollapsibleSection(title: "Layers", isExpanded: $showLayersSection) {
                         LayerStackPanel(layerManager: layerManager, productionManager: productionManager)
-                            .padding(.horizontal, 8)
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
 
@@ -403,13 +376,22 @@ struct FinalCutProStyleView: View {
                             streamKey: $streamKey,
                             selectedPlatform: $selectedPlatform
                         )
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
             }
-            .frame(minWidth: 280, maxWidth: 350)
+            .frame(minWidth: 320, maxWidth: 400)
             .frame(maxHeight: .infinity)
-            .liquidGlassPanel(material: .regularMaterial, cornerRadius: 0, shadowIntensity: .light)
+            .background(
+                RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.lg, style: .continuous)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.lg, style: .continuous)
+                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                    )
+            )
+            .padding(.horizontal, 4)
         }
     }
 }
@@ -445,19 +427,18 @@ struct CollapsibleSection<Content: View>: View {
                         .foregroundColor(.primary)
                     Spacer()
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 8)
                 .background(Color.gray.opacity(0.1))
                 .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
             
-            Group {
+            if isExpanded {
                 content()
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
             }
-            .frame(height: isExpanded ? nil : 0, alignment: .top)
-            .clipped()
-            .animation(didAppear ? spring : nil, value: isExpanded)
             
             Divider()
         }
@@ -465,12 +446,11 @@ struct CollapsibleSection<Content: View>: View {
     }
 }
 
-// MARK: - Preview/Program Center View - Side by Side Layout with Optimized Controls
+// MARK: - Preview/Program Center View
 
 struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Binding var mediaFiles: [MediaFile]
-    
     @EnvironmentObject var layerManager: LayerStackManager
     
     var body: some View {
@@ -494,7 +474,6 @@ struct PreviewProgramCenterView: View {
                     Spacer()
                     Button("TAKE") {
                         if productionManager.previewProgramManager.previewSource == .none {
-                            print("TAKE ERROR: No preview source to take!")
                         } else {
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
@@ -629,7 +608,6 @@ struct SourcesPanel: View {
                 ForEach(Array(["Cameras", "Media", "Virtual", "Effects"].enumerated()), id: \.offset) { index, tab in
                     Button(action: {
                         selectedTab = index
-                        print("Selected tab: \(index) - \(tab)")
                     }) {
                         Text(tab)
                             .font(.caption)
@@ -712,22 +690,14 @@ struct MediaSourceView: View {
                                 mediaFile: file,
                                 thumbnailManager: productionManager.mediaThumbnailManager,
                                 onMediaSelected: { selectedFile in
-                                    print("Media file selected: \(selectedFile.name)")
-                                    print("Loading to preview...")
-                                    
                                     let mediaSource = selectedFile.asContentSource()
                                     productionManager.previewProgramManager.loadToPreview(mediaSource)
-                                    
-                                    print("Media loaded to preview successfully")
-                                    
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         productionManager.previewProgramManager.objectWillChange.send()
                                         productionManager.objectWillChange.send()
                                     }
                                 },
-                                onMediaDropped: { _, _ in
-                                    // Handle drop - could be dropped on preview or program pane
-                                }
+                                onMediaDropped: { _, _ in }
                             )
                         }
                     }
@@ -859,8 +829,6 @@ struct VirtualSourceView: View {
     }
 }
 
-// MARK: - Virtual Camera Button
-
 struct VirtualCameraButton: View {
     let camera: VirtualCamera
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -917,8 +885,6 @@ struct EffectsSourceView: View {
     }
 }
 
-// MARK: - Effect Drag Button
-
 struct EffectDragButton: View {
     let effect: any VideoEffect
     @State private var dragOffset = CGSize.zero
@@ -947,7 +913,7 @@ struct EffectDragButton: View {
         }
         .draggable(EffectDragItem(effectType: effect.name)) {
             VStack(spacing: 2) {
-                Image(systemName: effect.icon)
+                Image(systemName: "video.bubble.left.fill")
                     .font(.title2)
                 Text(effect.name)
                     .font(.caption2)
@@ -1008,90 +974,131 @@ struct OutputControlsPanel: View {
     @Binding var selectedPlatform: String
     
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Output Controls")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding()
-            .background(Color.gray.opacity(0.1))
-            ScrollView {
-                VStack(spacing: 16) {
-                    GroupBox("Live Streaming") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Platform:")
-                                    .frame(width: 70, alignment: .leading)
-                                Picker("Platform", selection: $selectedPlatform) {
-                                    Text("YouTube").tag("YouTube")
-                                    Text("Twitch").tag("Twitch")
-                                    Text("Facebook").tag("Facebook")
-                                    Text("Custom").tag("Custom")
-                                }
-                                .pickerStyle(MenuPickerStyle())
+        ScrollView {
+            VStack(spacing: 32) {
+                // Audio Levels Section
+                AudioLevelPanel()
+                    .frame(height: 200)
+                    .padding(.bottom, 28) // extra gap so meters don’t overlap Live Streaming
+                
+                // Live Streaming Section
+                GroupBox("Live Streaming") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Platform Selection
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Platform")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Picker("Platform", selection: $selectedPlatform) {
+                                Text("YouTube").tag("YouTube")
+                                Text("Twitch").tag("Twitch")
+                                Text("Facebook").tag("Facebook")
+                                Text("Custom").tag("Custom")
                             }
-                            HStack {
-                                Text("Server:")
-                                    .frame(width: 70, alignment: .leading)
-                                TextField("rtmp://server", text: $rtmpURL)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                            }
-                            HStack {
-                                Text("Key:")
-                                    .frame(width: 70, alignment: .leading)
-                                SecureField("Stream key", text: $streamKey)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                            }
-                            HStack {
-                                Text("Audio:")
-                                    .frame(width: 70, alignment: .leading)
-                                Picker("Audio Source", selection:
+                            .pickerStyle(MenuPickerStyle())
+                        }
+                        
+                        // RTMP Server URL
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Server")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("rtmp://server", text: $rtmpURL)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .font(.caption2)
+                        }
+                        
+                        // Stream Key
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Stream Key")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            SecureField("Stream key", text: $streamKey)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .font(.caption2)
+                        }
+                        
+                        Divider()
+                        
+                        // Audio Source (compact, no label)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Picker(
+                                selection:
                                     Binding(
                                         get: { productionManager.streamingViewModel.selectedAudioSource },
                                         set: {
                                             productionManager.streamingViewModel.selectedAudioSource = $0
                                             productionManager.streamingViewModel.applyAudioSourceChange()
                                         }
+                                    ),
+                                label: EmptyView()
+                            ) {
+                                ForEach(StreamingViewModel.AudioSource.allCases) { src in
+                                    Text(src.displayName).tag(src)
+                                }
+                            }
+                            .pickerStyle(SegmentedPickerStyle())
+                            .controlSize(.small)
+                            .labelsHidden()
+                            .padding(.vertical, 0)
+                            
+                            if productionManager.streamingViewModel.selectedAudioSource == .program
+                                || productionManager.streamingViewModel.selectedAudioSource == .micAndProgram {
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Toggle("Include PiP Audio", isOn:
+                                        Binding(
+                                            get: { productionManager.streamingViewModel.includePiPAudioInProgram },
+                                            set: { productionManager.streamingViewModel.includePiPAudioInProgram = $0 }
+                                        )
                                     )
-                                ) {
-                                    ForEach(StreamingViewModel.AudioSource.allCases) { src in
-                                        Text(src.displayName).tag(src)
+                                    .toggleStyle(CheckboxToggleStyle())
+                                    .font(.caption2)
+                                    
+                                    HStack(spacing: 6) {
+                                        Text("A/V Sync:")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text(String(format: "%+.1f ms", productionManager.streamingViewModel.avSyncOffsetMs))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .help("Positive = video leading audio")
+                                        Spacer()
                                     }
                                 }
-                                .pickerStyle(SegmentedPickerStyle())
-                            }
-                            if productionManager.streamingViewModel.selectedAudioSource == .program {
-                                Toggle("Include PiP Audio", isOn:
-                                    Binding(
-                                        get: { productionManager.streamingViewModel.includePiPAudioInProgram },
-                                        set: { productionManager.streamingViewModel.includePiPAudioInProgram = $0 }
-                                    )
-                                )
-                                .toggleStyle(CheckboxToggleStyle())
-                                .padding(.leading, 70)
-                            }
-                            Button(action: {
-                                Task {
-                                    await toggleStreaming()
-                                }
-                            }) {
-                                HStack {
-                                    Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
-                                    Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
-                                .foregroundColor(.white)
-                                .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
+                                .padding(.top, 2)
                             }
                         }
+                        .padding(.vertical, 2)
+                        
+                        // Start/Stop Streaming Button
+                        Button(action: {
+                            Task {
+                                await toggleStreaming()
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: productionManager.streamingViewModel.isPublishing ? "stop.circle.fill" : "play.circle.fill")
+                                    .font(.system(size: 14))
+                                Text(productionManager.streamingViewModel.isPublishing ? "Stop Streaming" : "Start Streaming")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(productionManager.streamingViewModel.isPublishing ? Color.red : Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.top, 6)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding()
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: selectedPlatform) { _, newValue in
             switch newValue {
             case "Twitch":
@@ -1113,60 +1120,306 @@ struct OutputControlsPanel: View {
             do {
                 try await productionManager.streamingViewModel.start(rtmpURL: rtmpURL, streamKey: streamKey)
             } catch {
-                print("Setup error:", error)
             }
         }
     }
 }
 
-// MARK: - Studio Selector Sheet
+// MARK: - Simple Preview Monitor View
 
-struct StudioSelectorSheet: View {
+struct SimplePreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
-    @Environment(\.dismiss) private var dismiss
+
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
+    }
+
+    @State private var isDropTargeted: Bool = false
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            switch productionManager.previewProgramManager.previewSource {
+            case .camera(let cameraFeed):
+                OptimizedPreviewCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+            case .media(let mediaFile, _):
+                if mediaFile.fileType == .image {
+                    if let previewImageCG = productionManager.previewProgramManager.previewImage {
+                        let processed = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
+                        Image(decorative: processed, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: true)
+                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.previewCurrentTexture
+                    })
+                    .background(Color.black)
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: true)
+                }
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: true)
+            case .none:
+                NoSourceView(isPreview: true)
+            }
+
+            if isDropTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here (Preview)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+        }
+        .dropDestination(for: EffectDragItem.self) { items, _ in
+            guard let item = items.first else { return false }
+            productionManager.previewProgramManager.addEffectToPreview(item.effectType)
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+    }
+}
+
+// MARK: - Simple Program Monitor View
+
+struct SimpleProgramMonitorView: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @EnvironmentObject var layerManager: LayerStackManager
+
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
+    }
+
+    @State private var lastDropCanvasSize: CGSize = .zero
+    @State private var isDropTargeted: Bool = false
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            switch productionManager.previewProgramManager.programSource {
+            case .camera(let cameraFeed):
+                OptimizedProgramCameraView(
+                    cameraFeed: cameraFeed,
+                    productionManager: productionManager,
+                    effectCount: effectCount
+                )
+            case .media(let mediaFile, _):
+                if mediaFile.fileType == .image {
+                    if let programImageCG = productionManager.previewProgramManager.programImage {
+                        let processed = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
+                        Image(decorative: processed, scale: 1.0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                    } else {
+                        MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                    }
+                } else if mediaFile.fileType == .video {
+                    MetalVideoView(textureSupplier: {
+                        productionManager.previewProgramManager.programCurrentTexture
+                    })
+                    .background(Color.black)
+                } else {
+                    MediaLoadingView(mediaFile: mediaFile, isPreview: false)
+                }
+            case .virtual(let virtualCamera):
+                VirtualCameraView(camera: virtualCamera, isPreview: false)
+            case .none:
+                NoSourceView(isPreview: false)
+            }
+
+            CompositedLayersContent(productionManager: productionManager)
+                .environmentObject(layerManager)
+
+            LayersInteractiveOverlay()
+                .environmentObject(layerManager)
+                .allowsHitTesting(true)
+
+            if isDropTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here (Program)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { lastDropCanvasSize = geo.size }
+                    .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
+            }
+        )
+        .dropDestination(for: EffectDragItem.self) { items, _ in
+            guard let item = items.first else { return false }
+            productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+    }
+}
+
+// MARK: - Optimized Preview Camera View
+
+struct OptimizedPreviewCameraView: View {
+    @ObservedObject var cameraFeed: CameraFeed
+    @ObservedObject var productionManager: UnifiedProductionManager
+    let effectCount: Int
+    
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Select Studio")
-                .font(.title2)
-                .fontWeight(.semibold)
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 16) {
-                ForEach(productionManager.availableStudios, id: \.id) { studio in
-                    Button(action: {
-                        productionManager.loadStudio(studio)
-                        dismiss()
-                    }) {
-                        VStack {
-                            Rectangle()
-                                .fill(Color.blue.opacity(0.1))
-                                .frame(height: 80)
-                                .overlay(
-                                    Image(systemName: studio.icon)
-                                        .font(.largeTitle)
-                                        .foregroundColor(.blue)
-                                )
-                                .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
-                            Text(studio.name)
-                                .font(.headline)
-                            Text(studio.description)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
+        Group {
+            if let processedImage = getCachedOrProcessedImage() {
+                Image(nsImage: processedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+            } else {
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading Camera...")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                    Text(cameraFeed.device.displayName)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
+                        .font(.caption2)
+                        .foregroundColor(cameraFeed.connectionStatus.color)
+                    Text("Frame: \(cameraFeed.frameCount)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
                 }
             }
-            Button("Cancel") {
-                dismiss()
-            }
-            .buttonStyle(.bordered)
         }
-        .padding()
-        .frame(width: 600, height: 400)
+    }
+    
+    private func getCachedOrProcessedImage() -> NSImage? {
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
+        }
+        
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
+    }
+}
+
+// MARK: - Optimized Program Camera View
+
+struct OptimizedProgramCameraView: View {
+    @ObservedObject var cameraFeed: CameraFeed
+    @ObservedObject var productionManager: UnifiedProductionManager
+    let effectCount: Int
+    
+    @State private var cachedProcessedImage: NSImage?
+    @State private var lastProcessedFrameCount: Int = 0
+    
+    var body: some View {
+        Group {
+            if let processedImage = getCachedOrProcessedImage() {
+                Image(nsImage: processedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+            } else {
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading Camera...")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                    Text(cameraFeed.device.displayName)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
+                        .font(.caption2)
+                        .foregroundColor(cameraFeed.connectionStatus.color)
+                    Text("Frame: \(cameraFeed.frameCount)")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+    
+    private func getCachedOrProcessedImage() -> NSImage? {
+        if cameraFeed.frameCount != lastProcessedFrameCount {
+            lastProcessedFrameCount = cameraFeed.frameCount
+            
+            guard let cgImage = cameraFeed.previewImage else { 
+                cachedProcessedImage = nil
+                return nil 
+            }
+            
+            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
+                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
+                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
+                nsImage.addRepresentation(bitmapRep)
+                cachedProcessedImage = nsImage
+                return nsImage
+            }
+            
+            cachedProcessedImage = cameraFeed.previewNSImage
+            return cameraFeed.previewNSImage
+        }
+        
+        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
@@ -1223,7 +1476,6 @@ struct ComprehensiveMediaControls: View {
         }
     }
     
-    // Loop state binding
     private var loopEnabled: Binding<Bool> {
         Binding(
             get: { isPreview ? previewProgramManager.previewLoopEnabled : previewProgramManager.programLoopEnabled },
@@ -1231,7 +1483,6 @@ struct ComprehensiveMediaControls: View {
         )
     }
     
-    // Mute state binding  
     private var isMuted: Binding<Bool> {
         Binding(
             get: { isPreview ? previewProgramManager.previewMuted : previewProgramManager.programMuted },
@@ -1239,14 +1490,12 @@ struct ComprehensiveMediaControls: View {
         )
     }
     
-    // Playback rate binding
     private var playbackRate: Binding<Float> {
         Binding(
             get: { isPreview ? previewProgramManager.previewRate : previewProgramManager.programRate },
             set: { 
                 isPreview ? (previewProgramManager.previewRate = $0) : (previewProgramManager.programRate = $0)
                 if isPlaying {
-                    // Restart playback at new rate
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         if isPreview {
                             previewProgramManager.playPreview()
@@ -1261,7 +1510,6 @@ struct ComprehensiveMediaControls: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Timeline and time display
             VStack(spacing: 4) {
                 HStack {
                     Button(action: { showRemainingTime.toggle() }) {
@@ -1287,13 +1535,11 @@ struct ComprehensiveMediaControls: View {
                         .monospacedDigit()
                 }
                 
-                // Progress bar with dragging
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Rectangle()
                             .fill(Color.gray.opacity(0.3))
                             .frame(height: 4)
-                            .cornerRadius(2)
                         
                         Rectangle()
                             .fill(isPreview ? Color.yellow : Color.red)
@@ -1362,9 +1608,7 @@ struct ComprehensiveMediaControls: View {
                 .frame(height: 20)
             }
             
-            // Transport controls
             HStack(spacing: 12) {
-                // Go to start
                 Button(action: {
                     guard isPlayerReady else { return }
                     if isPreview {
@@ -1382,7 +1626,6 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut(.home, modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Skip backward 10s
                 Button(action: {
                     guard isPlayerReady else { return }
                     let newTime = max(0, currentTime - 10)
@@ -1401,7 +1644,6 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut("j", modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Frame backward
                 Button(action: {
                     guard isPlayerReady else { return }
                     let frameTime = 1.0/30.0
@@ -1421,12 +1663,8 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut(",", modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Play/Pause (larger)
                 Button(action: {
-                    guard isPlayerReady else { 
-                        print("Play/Pause disabled - player not ready")
-                        return 
-                    }
+                    guard isPlayerReady else { return }
                     togglePlayPause()
                 }) {
                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
@@ -1438,7 +1676,6 @@ struct ComprehensiveMediaControls: View {
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(!isPlayerReady)
                 
-                // Frame forward
                 Button(action: {
                     guard isPlayerReady else { return }
                     let frameTime = 1.0/30.0
@@ -1457,133 +1694,8 @@ struct ComprehensiveMediaControls: View {
                 .help("Next frame")
                 .keyboardShortcut(".", modifiers: [])
                 .disabled(!isPlayerReady)
-                
-                // Skip forward 10s
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    let newTime = min(duration, currentTime + 10)
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: newTime)
-                    } else {
-                        previewProgramManager.seekProgram(to: newTime)
-                    }
-                }) {
-                    Image(systemName: "goforward.10")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .primary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Skip forward 10 seconds")
-                .keyboardShortcut("l", modifiers: [])
-                .disabled(!isPlayerReady)
-                
-                // Go to end
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    if isPreview {
-                        previewProgramManager.seekPreview(to: duration)
-                    } else {
-                        previewProgramManager.seekProgram(to: duration)
-                    }
-                }) {
-                    Image(systemName: "forward.end")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .primary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Go to end")
-                .keyboardShortcut(.end, modifiers: [])
-                .disabled(!isPlayerReady)
             }
             
-            // Secondary controls row
-            HStack(spacing: 16) {
-                // Loop toggle
-                Button(action: {
-                    loopEnabled.wrappedValue.toggle()
-                }) {
-                    Image(systemName: loopEnabled.wrappedValue ? "repeat.1" : "repeat")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(loopEnabled.wrappedValue ? (isPreview ? .yellow : .red) : .secondary)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Toggle loop")
-                .keyboardShortcut("r", modifiers: [.command])
-                
-                // Speed control menu
-                Menu {
-                    Button("0.25×") { playbackRate.wrappedValue = 0.25 }
-                    Button("0.5×") { playbackRate.wrappedValue = 0.5 }
-                    Button("0.75×") { playbackRate.wrappedValue = 0.75 }
-                    Button("1×") { playbackRate.wrappedValue = 1.0 }
-                    Button("1.25×") { playbackRate.wrappedValue = 1.25 }
-                    Button("1.5×") { playbackRate.wrappedValue = 1.5 }
-                    Button("2×") { playbackRate.wrappedValue = 2.0 }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "speedometer")
-                            .font(.system(size: 12))
-                        Text(String(format: "%.2g×", playbackRate.wrappedValue))
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundColor(.secondary)
-                    }
-                    .foregroundColor(.secondary)
-                }
-                .help("Playback speed")
-                .keyboardShortcut("s", modifiers: [.command])
-                
-                Spacer()
-                
-                // Audio controls
-                HStack(spacing: 8) {
-                    Button(action: {
-                        isMuted.wrappedValue.toggle()
-                    }) {
-                        Image(systemName: isMuted.wrappedValue ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(isMuted.wrappedValue ? .secondary : .primary)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .help("Toggle mute")
-                    .keyboardShortcut("m", modifiers: [.command])
-                    
-                    if !isMuted.wrappedValue {
-                        Slider(value: $volume, in: 0...1)
-                            .frame(width: 60)
-                            .accentColor(isPreview ? .yellow : .red)
-                            .onChange(of: volume) { _, newValue in
-                                if isPreview {
-                                    previewProgramManager.previewVolume = newValue
-                                } else {
-                                    previewProgramManager.programVolume = newValue
-                                }
-                            }
-                    }
-                }
-                
-                Spacer()
-                
-                // Stop button
-                Button(action: {
-                    guard isPlayerReady else { return }
-                    if isPreview {
-                        previewProgramManager.stopPreview()
-                    } else {
-                        previewProgramManager.stopProgram()
-                    }
-                }) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isPlayerReady ? .primary : .gray)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help("Stop and rewind to beginning")
-                .keyboardShortcut("k", modifiers: [])
-                .disabled(!isPlayerReady)
-            }
-            
-            // Status bar
             HStack {
                 Text(mediaFile.name)
                     .font(.caption2)
@@ -1612,7 +1724,6 @@ struct ComprehensiveMediaControls: View {
                 .stroke(isPreview ? Color.yellow.opacity(0.3) : Color.red.opacity(0.3), lineWidth: 1)
         )
         .onAppear {
-            // Initialize volume from player
             volume = isPreview ? previewProgramManager.previewVolume : previewProgramManager.programVolume
         }
     }
@@ -1658,252 +1769,8 @@ struct ComprehensiveMediaControls: View {
                 return formatter.string(fromByteCount: Int64(fileSize))
             }
         } catch {
-            print("Error formatting file size: \(error)")
         }
         return ""
-    }
-}
-
-// MARK: - Media Loading View
-
-struct MediaLoadingView: View {
-    let mediaFile: MediaFile
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: mediaFile.fileType.icon)
-                .font(.largeTitle)
-                .foregroundColor(isPreview ? .yellow : .red)
-            Text(mediaFile.name)
-                .font(.title2)
-                .foregroundColor(.white)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-            Text("Loading Media...")
-                .font(.caption)
-                .foregroundColor(.gray)
-            
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
-                .scaleEffect(0.8)
-        }
-    }
-}
-
-// MARK: - Virtual Camera View
-
-struct VirtualCameraView: View {
-    let camera: VirtualCamera
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack {
-            Image(systemName: "video.3d")
-                .font(.largeTitle)
-                .foregroundColor(isPreview ? .yellow : .red)
-            Text(camera.name)
-                .font(.title2)
-                .foregroundColor(.white)
-            Text("Virtual Camera")
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-    }
-}
-
-// MARK: - No Source View
-
-struct NoSourceView: View {
-    let isPreview: Bool
-    
-    var body: some View {
-        VStack {
-            Image(systemName: isPreview ? "eye.slash" : "tv.slash")
-                .font(.largeTitle)
-                .foregroundColor(.gray)
-            Text(isPreview ? "No Preview Source" : "No Program Source")
-                .font(.title2)
-                .foregroundColor(.gray)
-            Text(isPreview ? "Click a camera or media to load preview" : "Use TAKE button to send preview to program")
-                .font(.caption)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-        }
-    }
-}
-
-// MARK: - Simple Monitor Views 
-
-struct SimplePreviewMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-
-    private var effectCount: Int {
-        productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
-    }
-
-    @State private var isDropTargeted: Bool = false
-
-    var body: some View {
-        ZStack {
-            Color.black
-
-            switch productionManager.previewProgramManager.previewSource {
-            case .camera(let cameraFeed):
-                OptimizedPreviewCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-            
-            case .media(let mediaFile, _):
-                if mediaFile.fileType == .image {
-                    if let previewImageCG = productionManager.previewProgramManager.previewImage {
-                        let processed = productionManager.previewProgramManager.processImageWithEffects(previewImageCG, for: .preview) ?? previewImageCG
-                        Image(decorative: processed, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black)
-                    } else {
-                        MediaLoadingView(mediaFile: mediaFile, isPreview: true)
-                    }
-                } else if mediaFile.fileType == .video {
-                    MetalVideoView(textureSupplier: {
-                        productionManager.previewProgramManager.previewCurrentTexture
-                    })
-                    .background(Color.black)
-                } else {
-                    MediaLoadingView(mediaFile: mediaFile, isPreview: true)
-                }
-
-            case .virtual(let virtualCamera):
-                VirtualCameraView(camera: virtualCamera, isPreview: true)
-
-            case .none:
-                NoSourceView(isPreview: true)
-            }
-
-            if isDropTargeted {
-                Rectangle()
-                    .fill(Color.blue.opacity(0.3))
-                    .overlay(
-                        VStack {
-                            Image(systemName: "wand.and.stars")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Drop Effect Here (Preview)")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
-                    )
-            }
-        }
-        .dropDestination(for: EffectDragItem.self) { items, location in
-            guard let item = items.first else { return false }
-            productionManager.previewProgramManager.addEffectToPreview(item.effectType)
-            #if os(macOS)
-            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-            #endif
-            return true
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
-        }
-    }
-}
-
-struct SimpleProgramMonitorView: View {
-    @ObservedObject var productionManager: UnifiedProductionManager
-    @EnvironmentObject var layerManager: LayerStackManager
-
-    private var effectCount: Int {
-        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
-    }
-
-    @State private var lastDropCanvasSize: CGSize = .zero
-    @State private var isDropTargeted: Bool = false
-
-    var body: some View {
-        ZStack {
-            Color.black
-
-            switch productionManager.previewProgramManager.programSource {
-            case .camera(let cameraFeed):
-                OptimizedProgramCameraView(
-                    cameraFeed: cameraFeed,
-                    productionManager: productionManager,
-                    effectCount: effectCount
-                )
-
-            case .media(let mediaFile, _):
-                if mediaFile.fileType == .image {
-                    if let programImageCG = productionManager.previewProgramManager.programImage {
-                        let processed = productionManager.previewProgramManager.processImageWithEffects(programImageCG, for: .program) ?? programImageCG
-                        Image(decorative: processed, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black)
-                    } else {
-                        MediaLoadingView(mediaFile: mediaFile, isPreview: false)
-                    }
-                } else if mediaFile.fileType == .video {
-                    MetalVideoView(textureSupplier: {
-                        productionManager.previewProgramManager.programCurrentTexture
-                    })
-                    .background(Color.black)
-                } else {
-                    MediaLoadingView(mediaFile: mediaFile, isPreview: false)
-                }
-
-            case .virtual(let virtualCamera):
-                VirtualCameraView(camera: virtualCamera, isPreview: false)
-
-            case .none:
-                NoSourceView(isPreview: false)
-            }
-
-            CompositedLayersContent(productionManager: productionManager)
-                .environmentObject(layerManager)
-
-            LayersInteractiveOverlay()
-                .environmentObject(layerManager)
-                .allowsHitTesting(true)
-
-            if isDropTargeted {
-                Rectangle()
-                    .fill(Color.blue.opacity(0.3))
-                    .overlay(
-                        VStack {
-                            Image(systemName: "wand.and.stars")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Drop Effect Here (Program)")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
-                    )
-            }
-        }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { lastDropCanvasSize = geo.size }
-                    .onChange(of: geo.size) { _, newSize in lastDropCanvasSize = newSize }
-            }
-        )
-        .dropDestination(for: EffectDragItem.self) { items, location in
-            guard let item = items.first else { return false }
-            productionManager.previewProgramManager.addEffectToProgram(item.effectType)
-            #if os(macOS)
-            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-            #endif
-            return true
-        } isTargeted: { targeted in
-            isDropTargeted = targeted
-        }
     }
 }
 
@@ -2079,136 +1946,123 @@ struct LiveCameraFeedButton: View {
     }
 }
 
-// MARK: - Optimized Preview Camera View
+// MARK: - Media Loading / Virtual Camera / No Source Views
 
-struct OptimizedPreviewCameraView: View {
-    @ObservedObject var cameraFeed: CameraFeed
-    @ObservedObject var productionManager: UnifiedProductionManager
-    let effectCount: Int
-    
-    @State private var cachedProcessedImage: NSImage?
-    @State private var lastProcessedFrameCount: Int = 0
+struct MediaLoadingView: View {
+    let mediaFile: MediaFile
+    let isPreview: Bool
     
     var body: some View {
-        Group {
-            if let processedImage = getCachedOrProcessedImage() {
-                Image(nsImage: processedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-            } else {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("Loading Camera...")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text(cameraFeed.device.displayName)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
-                        .font(.caption2)
-                        .foregroundColor(cameraFeed.connectionStatus.color)
-                    Text("Frame: \(cameraFeed.frameCount)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-            }
+        VStack(spacing: 8) {
+            Image(systemName: mediaFile.fileType.icon)
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(mediaFile.name)
+                .font(.title2)
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+            Text("Loading Media...")
+                .font(.caption)
+                .foregroundColor(.gray)
+            
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: isPreview ? .yellow : .red))
+                .scaleEffect(0.8)
         }
-    }
-    
-    private func getCachedOrProcessedImage() -> NSImage? {
-        if cameraFeed.frameCount != lastProcessedFrameCount {
-            lastProcessedFrameCount = cameraFeed.frameCount
-            
-            guard let cgImage = cameraFeed.previewImage else { 
-                cachedProcessedImage = nil
-                return nil 
-            }
-            
-            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .preview) {
-                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-                nsImage.addRepresentation(bitmapRep)
-                cachedProcessedImage = nsImage
-                return nsImage
-            }
-            
-            cachedProcessedImage = cameraFeed.previewNSImage
-            return cameraFeed.previewNSImage
-        }
-        
-        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
-// MARK: - Optimized Program Camera View
-
-struct OptimizedProgramCameraView: View {
-    @ObservedObject var cameraFeed: CameraFeed
-    @ObservedObject var productionManager: UnifiedProductionManager
-    let effectCount: Int
-    
-    @State private var cachedProcessedImage: NSImage?
-    @State private var lastProcessedFrameCount: Int = 0
+struct VirtualCameraView: View {
+    let camera: VirtualCamera
+    let isPreview: Bool
     
     var body: some View {
-        Group {
-            if let processedImage = getCachedOrProcessedImage() {
-                Image(nsImage: processedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-            } else {
-                VStack {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text("Loading Camera...")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                    Text(cameraFeed.device.displayName)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text("Status: \(cameraFeed.connectionStatus.displayText)")
-                        .font(.caption2)
-                        .foregroundColor(cameraFeed.connectionStatus.color)
-                    Text("Frame: \(cameraFeed.frameCount)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-            }
+        VStack {
+            Image(systemName: "video.3d")
+                .font(.largeTitle)
+                .foregroundColor(isPreview ? .yellow : .red)
+            Text(camera.name)
+                .font(.title2)
+                .foregroundColor(.white)
+            Text("Virtual Camera")
+                .font(.caption)
+                .foregroundColor(.gray)
         }
-    }
-    
-    private func getCachedOrProcessedImage() -> NSImage? {
-        if cameraFeed.frameCount != lastProcessedFrameCount {
-            lastProcessedFrameCount = cameraFeed.frameCount
-            
-            guard let cgImage = cameraFeed.previewImage else { 
-                cachedProcessedImage = nil
-                return nil 
-            }
-            
-            if let processedCGImage = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
-                let nsImage = NSImage(size: NSSize(width: processedCGImage.width, height: processedCGImage.height))
-                let bitmapRep = NSBitmapImageRep(cgImage: processedCGImage)
-                nsImage.addRepresentation(bitmapRep)
-                cachedProcessedImage = nsImage
-                return nsImage
-            }
-            
-            cachedProcessedImage = cameraFeed.previewNSImage
-            return cameraFeed.previewNSImage
-        }
-        
-        return cachedProcessedImage ?? cameraFeed.previewNSImage
     }
 }
 
-// MARK: - Preview
+struct NoSourceView: View {
+    let isPreview: Bool
+    
+    var body: some View {
+        VStack {
+            Image(systemName: isPreview ? "eye.slash" : "tv.slash")
+                .font(.largeTitle)
+                .foregroundColor(.gray)
+            Text(isPreview ? "No Preview Source" : "No Program Source")
+                .font(.title2)
+                .foregroundColor(.gray)
+            Text(isPreview ? "Click a camera or media to load preview" : "Use TAKE button to send preview to program")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+        }
+    }
+}
 
+// MARK: - Studio Selector Sheet
+
+struct StudioSelectorSheet: View {
+    @ObservedObject var productionManager: UnifiedProductionManager
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Select Studio")
+                .font(.title2)
+                .fontWeight(.semibold)
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 16) {
+                ForEach(productionManager.availableStudios, id: \.id) { studio in
+                    Button(action: {
+                        productionManager.loadStudio(studio)
+                        dismiss()
+                    }) {
+                        VStack {
+                            Rectangle()
+                                .fill(Color.blue.opacity(0.1))
+                                .frame(height: 80)
+                                .overlay(
+                                    Image(systemName: studio.icon)
+                                        .font(.largeTitle)
+                                        .foregroundColor(.blue)
+                                )
+                                .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
+                            Text(studio.name)
+                                .font(.headline)
+                            Text(studio.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            Button("Cancel") {
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding()
+        .frame(width: 600, height: 400)
+    }
+}
+
+// MARK: - Preview 
 #Preview {
     ContentView()
 }
