@@ -8,7 +8,7 @@ struct AudioLevelMeter: View {
     let isClipping: Bool
     
     private let meterWidth: CGFloat = 12
-    private let meterHeight: CGFloat = 120
+    private let meterHeight: CGFloat = 140
     
     var body: some View {
         VStack(spacing: 4) {
@@ -32,15 +32,16 @@ struct AudioLevelMeter: View {
                     )
                     .animation(.easeOut(duration: 0.08), value: level)
                 
-                // Peak hold indicator
-                if peak > 0.01 {
+                if level > 0.01 {
+                    let capThickness: CGFloat = 2.0
+                    let capPosition = max(0, min(meterHeight - capThickness, meterHeight * CGFloat(level)))
                     Rectangle()
-                        .fill(peakColor)
-                        .frame(width: meterWidth - 2, height: 1.5)
-                        .offset(y: -(meterHeight * CGFloat(peak) - meterHeight/2))
-                        .animation(.easeOut(duration: 0.05), value: peak)
+                        .fill(Color.white)
+                        .frame(width: meterWidth - 2, height: capThickness)
+                        .offset(y: -capPosition)
+                        .animation(.easeOut(duration: 0.05), value: level)
                 }
-                
+
                 // Clipping indicator
                 if isClipping {
                     RoundedRectangle(cornerRadius: 2)
@@ -52,6 +53,7 @@ struct AudioLevelMeter: View {
                 // Scale markers
                 meterScaleMarkers
             }
+            .clipped() // ensure all overlays (peak/markers) stay within the meter track
             
             // Label
             Text(label)
