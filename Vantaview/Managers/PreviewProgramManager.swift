@@ -105,6 +105,32 @@ final class PreviewProgramManager: ObservableObject {
     private var previewAVPlayback: AVPlayerMetalPlayback?
     private var programAVPlayback: AVPlayerMetalPlayback?
     
+    // MARK: - Public accessors for Metal textures
+    
+    /// Access to preview Metal texture for video display
+    var previewMetalTexture: MTLTexture? {
+        let texture = previewAVPlayback?.latestTexture ?? previewVideoTexture
+        
+        // Debug logging for first few texture accesses
+        if texture == nil && previewAVPlayback != nil {
+            print("🔍 previewMetalTexture: AVPlayback exists but no texture yet")
+        }
+        
+        return texture
+    }
+    
+    /// Access to program Metal texture for video display  
+    var programMetalTexture: MTLTexture? {
+        let texture = programAVPlayback?.latestTexture ?? programVideoTexture
+        
+        // Debug logging for first few texture accesses  
+        if texture == nil && programAVPlayback != nil {
+            print("🔍 programMetalTexture: AVPlayback exists but no texture yet")
+        }
+        
+        return texture
+    }
+
     @Published var previewVideoTexture: MTLTexture?
     @Published var programVideoTexture: MTLTexture?
     private var previewAudioPlayer: AVPlayer?
@@ -268,12 +294,52 @@ final class PreviewProgramManager: ObservableObject {
     /// "Take" - Cut preview to program instantly
     func take() {
         print("✂️ TAKE: Moving preview to program")
-        stopProgram()
-
-        let previewContent = previewSource
-        loadToProgram(previewContent)
+        
+        guard previewSource != .none else {
+            print("❌ TAKE: No preview source to take")
+            return
+        }
+        
+        // EFFICIENT TAKE: Transfer existing resources instead of recreating them
+        let oldProgramSource = programSource
+        let oldProgramPlayer = programPlayer
+        let oldProgramAVPlayback = programAVPlayback
+        let oldProgramAudioTap = programAudioTap
+        let oldProgramTimeObserver = programTimeObserver
+        
+        // Clean up old program resources first
+        if let observer = oldProgramTimeObserver {
+            oldProgramPlayer?.removeTimeObserver(observer)
+        }
+        oldProgramAVPlayback?.stop()
+        if case .media(let file, _) = oldProgramSource {
+            file.url.stopAccessingSecurityScopedResource()
+        }
+        
+        // TRANSFER: Move preview to program (direct transfer, no recreation)
+        programSource = previewSource
+        programPlayer = previewPlayer
+        programAVPlayback = previewAVPlayback
+        programAudioTap = previewAudioTap
+        programTimeObserver = previewTimeObserver
+        programImage = previewImage
+        programDuration = previewDuration
+        programCurrentTime = previewCurrentTime
+        isProgramPlaying = isPreviewPlaying
+        programAspect = previewAspect
+        programLoopEnabled = previewLoopEnabled
+        programMuted = previewMuted  
+        programRate = previewRate
+        programVolume = previewVolume
+        
+        // Update effect runner for program
+        if let programAVPlayback = programAVPlayback {
+            programAVPlayback.setEffectRunner(programEffectRunner)
+        }
+        
+        // Copy effects
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
-
+        
         // COPY chroma key background by matching effect types, not just indices
         if let prevChain = effectManager.getPreviewEffectChain(),
            let progChain = effectManager.getProgramEffectChain() {
@@ -296,10 +362,29 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
 
-        self.programEffectRunner?.setChain(self.getProgramEffectChain())
+        programEffectRunner?.setChain(getProgramEffectChain())
+        
+        // Clear preview after successful transfer (don't stop resources, just clear references)
+        previewSource = .none
+        previewPlayer = nil
+        previewAVPlayback = nil
+        previewAudioTap = nil
+        previewTimeObserver = nil
+        previewImage = nil
+        isPreviewPlaying = false
+        previewCurrentTime = 0
+        previewDuration = 0
+        previewVTReady = false
+        previewPrimedForPoster = false
+        
         crossfaderValue = 0.0
+        
+        // IMMEDIATE UI update since we've transferred existing resources
         objectWillChange.send()
-        playProgram()
+        
+        print("✅ TAKE completed - preview resources transferred to program")
+        print("   - Program source: \(programSourceDisplayName)")
+        print("   - Program metal texture available: \(programMetalTexture != nil)")
     }
     
     /// Smooth transition from program to preview over time
@@ -524,6 +609,56 @@ final class PreviewProgramManager: ObservableObject {
         }
     }
     
+    // MARK: - Frame Stepping Methods
+    
+    func stepPreviewForward() {
+        guard case .media(_, _) = previewSource else { return }
+        guard let player = previewPlayer else { return }
+        
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        let frameRate: Double = 30.0 // Assume 30fps for stepping
+        let frameTime = 1.0 / frameRate
+        let newTime = currentTime + frameTime
+        
+        seekPreview(to: newTime)
+    }
+    
+    func stepPreviewBackward() {
+        guard case .media(_, _) = previewSource else { return }
+        guard let player = previewPlayer else { return }
+        
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        let frameRate: Double = 30.0 // Assume 30fps for stepping
+        let frameTime = 1.0 / frameRate
+        let newTime = max(0, currentTime - frameTime)
+        
+        seekPreview(to: newTime)
+    }
+    
+    func stepProgramForward() {
+        guard case .media(_, _) = programSource else { return }
+        guard let player = programPlayer else { return }
+        
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        let frameRate: Double = 30.0 // Assume 30fps for stepping
+        let frameTime = 1.0 / frameRate
+        let newTime = currentTime + frameTime
+        
+        seekProgram(to: newTime)
+    }
+    
+    func stepProgramBackward() {
+        guard case .media(_, _) = programSource else { return }
+        guard let player = programPlayer else { return }
+        
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        let frameRate: Double = 30.0 // Assume 30fps for stepping
+        let frameTime = 1.0 / frameRate
+        let newTime = max(0, currentTime - frameTime)
+        
+        seekProgram(to: newTime)
+    }
+    
     // MARK: - Private Implementation
     
     private func loadMediaToPreview(_ file: MediaFile) {
@@ -640,6 +775,29 @@ final class PreviewProgramManager: ObservableObject {
                 self?.captureNextPreviewFrame()
             }
             playback.start()
+            
+            // IMPORTANT: Force immediate UI update when Metal playback starts
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+                print("🎬 PREVIEW Metal playback started - UI updated")
+                
+                // Additional delayed updates to catch late texture availability
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.objectWillChange.send()
+                    print("🎬 PREVIEW delayed UI update (0.1s)")
+                }
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.objectWillChange.send()
+                    print("🎬 PREVIEW delayed UI update (0.5s)")
+                    
+                    if self.previewMetalTexture != nil {
+                        print("✅ PREVIEW Metal texture finally available!")
+                    } else {
+                        print("❌ PREVIEW Metal texture still not available after 0.5s")
+                    }
+                }
+            }
         }
 
         // Autoplay & time observer
@@ -666,6 +824,31 @@ final class PreviewProgramManager: ObservableObject {
 
         objectWillChange.send()
         print("📼 PREVIEW AVPlayer + ItemOutput + Metal playback configured")
+        
+        // START: Texture availability monitoring for first few seconds
+        let startTime = CACurrentMediaTime()
+        var textureCheckCount = 0
+        let textureCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
+            textureCheckCount += 1
+            let elapsed = CACurrentMediaTime() - startTime
+            
+            if self.previewMetalTexture != nil {
+                print("✅ PREVIEW Metal texture became available after \(elapsed) seconds")
+                self.objectWillChange.send()
+                timer.invalidate()
+            } else if elapsed > 3.0 {
+                print("⚠️ PREVIEW Metal texture still not available after 3 seconds")
+                timer.invalidate()
+            } else if textureCheckCount % 10 == 0 {
+                print("🔍 PREVIEW still waiting for Metal texture... (\(elapsed)s)")
+                self.objectWillChange.send() // Force UI refresh
+            }
+        }
     }
 
     private func loadMediaToProgram(_ file: MediaFile) {
@@ -781,6 +964,12 @@ final class PreviewProgramManager: ObservableObject {
                 self?.captureNextProgramFrame()
             }
             playback.start()
+            
+            // IMPORTANT: Force immediate UI update when Metal playback starts
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+                print("📺 PROGRAM Metal playback started - UI updated")
+            }
         }
 
         var statusObserver: NSKeyValueObservation?

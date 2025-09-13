@@ -9,6 +9,7 @@ import Metal
 import ImageIO
 import CoreGraphics
 import VideoToolbox
+import MetalKit
 #if os(macOS)
 import AppKit
 #endif
@@ -708,26 +709,40 @@ class StreamingViewModel: ObservableObject {
             case .camera(let feedId):
                 if let feed = productionManager?.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
                     overlayCG = feed.previewImage
+                    if let cg = overlayCG, model.chromaKey.enabled {
+                        overlayCG = keyPiPImageWithMetal(cg, settings: model.chromaKey) ?? cg
+                    }
                 }
             case .media(let file):
                 switch file.fileType {
                 case .image:
                     overlayCG = loadCGImage(from: file.url)
+                    if let cg = overlayCG, model.chromaKey.enabled {
+                        overlayCG = keyPiPImageWithMetal(cg, settings: model.chromaKey) ?? cg
+                    }
                 case .video:
                     overlayCG = nil
                 case .audio:
                     overlayCG = nil
                 }
-            case .title(let overlay):
+            case .title(_):
                 #if os(macOS)
                 let baseSize = CGSize(width: base.width, height: base.height)
                 let targetSize = CGSize(width: baseSize.width * model.sizeNorm.width,
                                         height: baseSize.height * model.sizeNorm.height)
                 overlayCG = makeTitleCGImage(
-                    text: overlay.text,
-                    fontSize: overlay.fontSize,
-                    color: overlay.color,
-                    alignment: overlay.alignment,
+                    text: (model.source == .title(TitleOverlay()) ? "" : {
+                        if case .title(let ov) = model.source { return ov.text } else { return "" }
+                    }()),
+                    fontSize: {
+                        if case .title(let ov) = model.source { return ov.fontSize } else { return 48 }
+                    }(),
+                    color: {
+                        if case .title(let ov) = model.source { return ov.color } else { return .white }
+                    }(),
+                    alignment: {
+                        if case .title(let ov) = model.source { return ov.alignment } else { return .center }
+                    }(),
                     size: targetSize
                 )
                 #else
@@ -1008,6 +1023,110 @@ class StreamingViewModel: ObservableObject {
             if pos > Double(frames - 1) { pos = Double(frames - 1) }
         }
         return out
+    }
+
+    private let ckDevice: MTLDevice? = MTLCreateSystemDefaultDevice()
+    private lazy var ckQueue: MTLCommandQueue? = ckDevice?.makeCommandQueue()
+    private var ckPipeline: MTLComputePipelineState?
+    private var ckFallbackBGTex: MTLTexture?
+
+    private struct CKUniforms {
+        var keyR: Float, keyG: Float, keyB: Float
+        var strength: Float, softness: Float, balance: Float
+        var matteShift: Float, edgeSoftness: Float
+        var blackClip: Float, whiteClip: Float
+        var spillStrength: Float, spillDesat: Float, despillBias: Float
+        var viewMatte: Float
+        var width: Float, height: Float, padding: Float
+        var bgScale: Float, bgOffsetX: Float, bgOffsetY: Float, bgRotationRad: Float, bgEnabled: Float
+        var interactive: Float
+        var lightWrap: Float
+        var bgW: Float, bgH: Float
+        var fillMode: Float
+        var outputMode: Float
+    }
+
+    private func ensureCKPipeline() {
+        guard ckPipeline == nil, let dev = ckDevice, let lib = dev.makeDefaultLibrary() else { return }
+        if let fn = lib.makeFunction(name: "chromaKeyKernel") {
+            ckPipeline = try? dev.makeComputePipelineState(function: fn)
+        }
+    }
+
+    private func ensureCKFallbackBG() {
+        guard ckFallbackBGTex == nil, let dev = ckDevice else { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        let tex = dev.makeTexture(descriptor: desc)
+        var px: UInt32 = 0x000000FF
+        tex?.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
+        ckFallbackBGTex = tex
+    }
+
+    private func keyPiPImageWithMetal(_ cg: CGImage, settings s: PiPChromaKeySettings) -> CGImage? {
+        ensureCKPipeline()
+        ensureCKFallbackBG()
+        guard let dev = ckDevice,
+              let queue = ckQueue,
+              let pipe = ckPipeline else { return nil }
+
+        let loader = MTKTextureLoader(device: dev)
+        let options: [MTKTextureLoader.Option: Any] = [
+            .SRGB: false,
+            .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+            .textureStorageMode: MTLStorageMode.private.rawValue
+        ]
+        guard let inTex = try? loader.newTexture(cgImage: cg, options: options),
+              let cmd = queue.makeCommandBuffer() else { return nil }
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: inTex.pixelFormat, width: inTex.width, height: inTex.height, mipmapped: false)
+        desc.usage = [.shaderRead, .shaderWrite]
+        guard let outTex = dev.makeTexture(descriptor: desc) else { return nil }
+
+        var u = CKUniforms(
+            keyR: s.keyR, keyG: s.keyG, keyB: s.keyB,
+            strength: s.strength, softness: s.softness, balance: s.balance,
+            matteShift: s.matteShift, edgeSoftness: s.edgeSoftness,
+            blackClip: s.blackClip, whiteClip: s.whiteClip,
+            spillStrength: s.spillStrength, spillDesat: s.spillDesat, despillBias: s.despillBias,
+            viewMatte: s.viewMatte ? 1.0 : 0.0,
+            width: Float(inTex.width), height: Float(inTex.height), padding: 0,
+            bgScale: 1, bgOffsetX: 0, bgOffsetY: 0, bgRotationRad: 0, bgEnabled: 0,
+            interactive: 0,
+            lightWrap: s.lightWrap,
+            bgW: 0, bgH: 0,
+            fillMode: 0,
+            outputMode: 1.0
+        )
+
+        guard let enc = cmd.makeComputeCommandEncoder() else { return nil }
+        enc.setComputePipelineState(pipe)
+        enc.setTexture(inTex, index: 0)
+        enc.setTexture(outTex, index: 1)
+        enc.setTexture(ckFallbackBGTex, index: 2)
+        enc.setBytes(&u, length: MemoryLayout<CKUniforms>.stride, index: 0)
+        let w = pipe.threadExecutionWidth
+        let h = pipe.maxTotalThreadsPerThreadgroup / w
+        enc.dispatchThreads(MTLSize(width: inTex.width, height: inTex.height, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+        enc.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        // Readback to CGImage via CIContext
+        let width = outTex.width
+        let height = outTex.height
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        let totalBytes = height * bytesPerRow
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: totalBytes, alignment: 64)
+        defer { buffer.deallocate() }
+        let region = MTLRegionMake2D(0, 0, width, height)
+        outTex.getBytes(buffer, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let info = CGBitmapInfo.byteOrder32Little.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue))
+        guard let ctx = CGContext(data: buffer, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: cs, bitmapInfo: info.rawValue) else { return nil }
+        return ctx.makeImage()
     }
 }
 

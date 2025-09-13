@@ -77,9 +77,13 @@ struct LayerStackPanel: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(layer.name)
                                     .font(.caption)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                 Text(sourceLabel(layer))
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
                             }
 
                             Spacer()
@@ -182,237 +186,247 @@ struct LayerStackPanel: View {
                 .buttonStyle(.borderless)
             }
 
-            HStack {
-                Text("X").frame(width: 12, alignment: .leading)
-                Slider(value: Binding(
-                    get: { Double(layer.centerNorm.x) },
-                    set: { v in
-                        var l = layer
-                        l.centerNorm.x = CGFloat(v.clamped(to: 0...1))
-                        layerManager.update(l)
-                    }
-                ), in: 0...1)
-            }
-            HStack {
-                Text("Y").frame(width: 12, alignment: .leading)
-                Slider(value: Binding(
-                    get: { Double(layer.centerNorm.y) },
-                    set: { v in
-                        var l = layer
-                        l.centerNorm.y = CGFloat(v.clamped(to: 0...1))
-                        layerManager.update(l)
-                    }
-                ), in: 0...1)
-            }
-            HStack {
-                Text("W").frame(width: 12, alignment: .leading)
-                Slider(value: Binding(
-                    get: { Double(layer.sizeNorm.width) },
-                    set: { v in
-                        var l = layer
-                        l.sizeNorm.width = CGFloat(v.clamped(to: 0.05...1))
-                        layerManager.update(l)
-                    }
-                ), in: 0.05...1)
-            }
-            HStack {
-                Text("H").frame(width: 12, alignment: .leading)
-                Slider(value: Binding(
-                    get: { Double(layer.sizeNorm.height) },
-                    set: { v in
-                        var l = layer
-                        l.sizeNorm.height = CGFloat(v.clamped(to: 0.05...1))
-                        layerManager.update(l)
-                    }
-                ), in: 0.05...1)
-            }
-            HStack {
-                Text("Opacity").frame(width: 50, alignment: .leading)
-                Slider(value: Binding(
-                    get: { Double(layer.opacity) },
-                    set: { v in
-                        var l = layer
-                        l.opacity = Float(v.clamped(to: 0...1))
-                        layerManager.update(l)
-                    }
-                ), in: 0...1)
-            }
-
-            // Audio controls (detailed) for PiP Video layers
-            if case .media(let file) = layer.source, file.fileType == .video {
-                Divider().padding(.vertical, 4)
-                Text("Audio")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                HStack(spacing: 8) {
-                    Toggle("Mute", isOn: Binding(
-                        get: { layer.audioMuted },
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("X").frame(width: 12, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(layer.centerNorm.x) },
                         set: { v in
                             var l = layer
-                            l.audioMuted = v
+                            l.centerNorm.x = CGFloat(v.clamped(to: 0...1))
                             layerManager.update(l)
                         }
-                    ))
-                    .toggleStyle(.switch)
-                    .font(.caption2)
-
-                    Toggle("Solo", isOn: Binding(
-                        get: { layer.audioSolo },
+                    ), in: 0...1)
+                }
+                HStack {
+                    Text("Y").frame(width: 12, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(layer.centerNorm.y) },
                         set: { v in
                             var l = layer
-                            l.audioSolo = v
+                            l.centerNorm.y = CGFloat(v.clamped(to: 0...1))
                             layerManager.update(l)
                         }
-                    ))
-                    .toggleStyle(.switch)
-                    .font(.caption2)
+                    ), in: 0...1)
+                }
+                HStack {
+                    Text("W").frame(width: 12, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(layer.sizeNorm.width) },
+                        set: { v in
+                            var l = layer
+                            l.sizeNorm.width = CGFloat(v.clamped(to: 0.05...1))
+                            layerManager.update(l)
+                        }
+                    ), in: 0.05...1)
+                }
+                HStack {
+                    Text("H").frame(width: 12, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(layer.sizeNorm.height) },
+                        set: { v in
+                            var l = layer
+                            l.sizeNorm.height = CGFloat(v.clamped(to: 0.05...1))
+                            layerManager.update(l)
+                        }
+                    ), in: 0.05...1)
+                }
+                HStack {
+                    Text("Opacity").frame(width: 50, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { Double(layer.opacity) },
+                        set: { v in
+                            var l = layer
+                            l.opacity = Float(v.clamped(to: 0...1))
+                            layerManager.update(l)
+                        }
+                    ), in: 0...1)
+                }
 
-                    HStack(spacing: 6) {
-                        Text("Gain")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(layer.audioGain) },
+                // Audio controls (detailed) for PiP Video layers
+                if case .media(let file) = layer.source, file.fileType == .video {
+                    Divider().padding(.vertical, 4)
+                    Text("Audio")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Mute", isOn: Binding(
+                            get: { layer.audioMuted },
                             set: { v in
                                 var l = layer
-                                l.audioGain = Float(v.clamped(to: 0...2))
+                                l.audioMuted = v
                                 layerManager.update(l)
                             }
-                        ), in: 0...2)
-                        .frame(width: 120)
+                        ))
+                        .toggleStyle(.switch)
+                        .font(.caption2)
 
-                        Text(String(format: "%.2fx", layer.audioGain))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .frame(width: 44, alignment: .trailing)
+                        Toggle("Solo", isOn: Binding(
+                            get: { layer.audioSolo },
+                            set: { v in
+                                var l = layer
+                                l.audioSolo = v
+                                layerManager.update(l)
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .font(.caption2)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Gain")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            HStack {
+                                Slider(value: Binding(
+                                    get: { Double(layer.audioGain) },
+                                    set: { v in
+                                        var l = layer
+                                        l.audioGain = Float(v.clamped(to: 0...2))
+                                        layerManager.update(l)
+                                    }
+                                ), in: 0...2)
+                                Text(String(format: "%.2fx", layer.audioGain))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Pan")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            HStack {
+                                Slider(value: Binding(
+                                    get: { Double(layer.audioPan) },
+                                    set: { v in
+                                        var l = layer
+                                        l.audioPan = Float(v.clamped(to: -1...1))
+                                        layerManager.update(l)
+                                    }
+                                ), in: -1...1)
+                                Text(String(format: "%.2f", layer.audioPan))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
                     }
 
-                    HStack(spacing: 6) {
-                        Text("Pan")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(layer.audioPan) },
-                            set: { v in
-                                var l = layer
-                                l.audioPan = Float(v.clamped(to: -1...1))
-                                layerManager.update(l)
-                            }
-                        ), in: -1...1)
-                        .frame(width: 120)
-
-                        Text(String(format: "%.2f", layer.audioPan))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .frame(width: 40, alignment: .trailing)
+                    if let meter = layerManager.pipAudioMeters[layer.id] {
+                        AudioMeterView(rms: meter.rms, peak: meter.peak)
+                            .frame(height: 10)
+                    } else {
+                        AudioMeterView(rms: 0, peak: 0)
+                            .frame(height: 10)
                     }
                 }
 
-                if let meter = layerManager.pipAudioMeters[layer.id] {
-                    AudioMeterView(rms: meter.rms, peak: meter.peak)
-                        .frame(height: 10)
-                } else {
-                    AudioMeterView(rms: 0, peak: 0)
-                        .frame(height: 10)
-                }
-            }
+                if case .title(let overlay) = layer.source {
+                    Divider().padding(.vertical, 4)
+                    Text("Title")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
-            if case .title(let overlay) = layer.source {
-                Divider().padding(.vertical, 4)
-                Text("Title")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    TextField("Text", text: Binding(
-                        get: { overlay.text },
-                        set: { newText in
-                            var l = layer
-                            if case .title(var ov) = l.source {
-                                ov.text = newText
-                                l.source = .title(ov)
-                                layerManager.update(l)
-                            }
-                        }
-                    ))
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .font(.caption2)
-
-                    HStack {
-                        Text("Font Size").font(.caption2).foregroundColor(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(overlay.fontSize) },
-                            set: { v in
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Text", text: Binding(
+                            get: { overlay.text },
+                            set: { newText in
                                 var l = layer
                                 if case .title(var ov) = l.source {
-                                    ov.fontSize = CGFloat(v.clamped(to: 8...200))
+                                    ov.text = newText
                                     l.source = .title(ov)
                                     layerManager.update(l)
                                 }
                             }
-                        ), in: 8...200)
-                        Text("\(Int(overlay.fontSize))")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .frame(width: 36, alignment: .trailing)
-                    }
+                        ))
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .font(.caption2)
 
-                    HStack {
-                        Text("Color").font(.caption2).foregroundColor(.secondary)
-                        ColorPicker("", selection: Binding(
-                            get: { Color(red: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, opacity: overlay.color.a) },
-                            set: { c in
-                                var l = layer
-                                if case .title(var ov) = l.source {
-                                    if let comps = c.toRGBA() {
-                                        ov.color = comps
+                        HStack {
+                            Text("Font Size").font(.caption2).foregroundColor(.secondary)
+                            Slider(value: Binding(
+                                get: { Double(overlay.fontSize) },
+                                set: { v in
+                                    var l = layer
+                                    if case .title(var ov) = l.source {
+                                        ov.fontSize = CGFloat(v.clamped(to: 8...200))
                                         l.source = .title(ov)
                                         layerManager.update(l)
                                     }
                                 }
-                            }
-                        ))
-                        .labelsHidden()
-                        .frame(width: 120)
-                    }
+                            ), in: 8...200)
+                            Text("\(Int(overlay.fontSize))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .frame(width: 36, alignment: .trailing)
+                        }
 
-                    HStack {
-                        Text("Alignment").font(.caption2).foregroundColor(.secondary)
-                        Picker("", selection: Binding(
-                            get: { overlay.alignment },
-                            set: { value in
+                        HStack {
+                            Text("Color").font(.caption2).foregroundColor(.secondary)
+                            ColorPicker("", selection: Binding(
+                                get: { Color(red: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, opacity: overlay.color.a) },
+                                set: { c in
+                                    var l = layer
+                                    if case .title(var ov) = l.source {
+                                        if let comps = c.toRGBA() {
+                                            ov.color = comps
+                                            l.source = .title(ov)
+                                            layerManager.update(l)
+                                        }
+                                    }
+                                }
+                            ))
+                            .labelsHidden()
+                            .frame(width: 120)
+                        }
+
+                        HStack {
+                            Text("Alignment").font(.caption2).foregroundColor(.secondary)
+                            Picker("", selection: Binding(
+                                get: { overlay.alignment },
+                                set: { value in
+                                    var l = layer
+                                    if case .title(var ov) = l.source {
+                                        ov.alignment = value
+                                        l.source = .title(ov)
+                                        layerManager.update(l)
+                                    }
+                                }
+                            )) {
+                                Text("Left").tag(TextAlignment.leading)
+                                Text("Center").tag(TextAlignment.center)
+                                Text("Right").tag(TextAlignment.trailing)
+                            }
+                            .pickerStyle(SegmentedPickerStyle())
+                            .labelsHidden()
+                        }
+
+                        Toggle("Auto-fit to text", isOn: Binding(
+                            get: { overlay.autoFit },
+                            set: { v in
                                 var l = layer
                                 if case .title(var ov) = l.source {
-                                    ov.alignment = value
+                                    ov.autoFit = v
                                     l.source = .title(ov)
                                     layerManager.update(l)
                                 }
                             }
-                        )) {
-                            Text("Left").tag(TextAlignment.leading)
-                            Text("Center").tag(TextAlignment.center)
-                            Text("Right").tag(TextAlignment.trailing)
-                        }
-                        .pickerStyle(SegmentedPickerStyle())
-                        .labelsHidden()
+                        ))
+                        .font(.caption2)
                     }
+                }
 
-                    Toggle("Auto-fit to text", isOn: Binding(
-                        get: { overlay.autoFit },
-                        set: { v in
-                            var l = layer
-                            if case .title(var ov) = l.source {
-                                ov.autoFit = v
-                                l.source = .title(ov)
-                                layerManager.update(l)
-                            }
-                        }
-                    ))
-                    .font(.caption2)
+                if case .camera = layer.source {
+                    chromaKeyControls(for: layer)
+                } else if case .media = layer.source {
+                    chromaKeyControls(for: layer)
                 }
             }
+            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: .infinity)
         .font(.caption2)
     }
 
@@ -466,5 +480,107 @@ private struct AudioMeterView: View {
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private extension LayerStackPanel {
+    @ViewBuilder
+    func chromaKeyControls(for layer: CompositedLayer) -> some View {
+        Divider().padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Chroma Key")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Toggle("Enable", isOn: Binding(
+                    get: { layer.chromaKey.enabled },
+                    set: { v in
+                        var l = layer
+                        l.chromaKey.enabled = v
+                        layerManager.update(l)
+                    }
+                ))
+                .toggleStyle(.switch)
+                .font(.caption2)
+            }
+
+            if layer.chromaKey.enabled {
+                HStack {
+                    Text("Key Color").font(.caption2).foregroundColor(.secondary)
+                    ColorPicker("", selection: Binding(
+                        get: {
+                            Color(red: Double(layer.chromaKey.keyR),
+                                  green: Double(layer.chromaKey.keyG),
+                                  blue: Double(layer.chromaKey.keyB))
+                        },
+                        set: { c in
+                            if let comps = c.toRGBA() {
+                                var l = layer
+                                l.chromaKey.keyR = Float(comps.r)
+                                l.chromaKey.keyG = Float(comps.g)
+                                l.chromaKey.keyB = Float(comps.b)
+                                layerManager.update(l)
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+
+                sliderRow(title: "Strength", value: Double(layer.chromaKey.strength), range: 0...1) { v in
+                    var l = layer; l.chromaKey.strength = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Softness", value: Double(layer.chromaKey.softness), range: 0...1) { v in
+                    var l = layer; l.chromaKey.softness = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Balance", value: Double(layer.chromaKey.balance), range: 0...1) { v in
+                    var l = layer; l.chromaKey.balance = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Edge", value: Double(layer.chromaKey.edgeSoftness), range: 0...1) { v in
+                    var l = layer; l.chromaKey.edgeSoftness = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Black", value: Double(layer.chromaKey.blackClip), range: 0...0.5) { v in
+                    var l = layer; l.chromaKey.blackClip = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "White", value: Double(layer.chromaKey.whiteClip), range: 0.5...1) { v in
+                    var l = layer; l.chromaKey.whiteClip = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Spill", value: Double(layer.chromaKey.spillStrength), range: 0...1) { v in
+                    var l = layer; l.chromaKey.spillStrength = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Desat", value: Double(layer.chromaKey.spillDesat), range: 0...1) { v in
+                    var l = layer; l.chromaKey.spillDesat = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Bias", value: Double(layer.chromaKey.despillBias), range: 0...1) { v in
+                    var l = layer; l.chromaKey.despillBias = Float(v); layerManager.update(l)
+                }
+                sliderRow(title: "Wrap", value: Double(layer.chromaKey.lightWrap), range: 0...1) { v in
+                    var l = layer; l.chromaKey.lightWrap = Float(v); layerManager.update(l)
+                }
+
+                Toggle("View Matte", isOn: Binding(
+                    get: { layer.chromaKey.viewMatte },
+                    set: { v in
+                        var l = layer; l.chromaKey.viewMatte = v; layerManager.update(l)
+                    }
+                ))
+                .font(.caption2)
+            }
+        }
+    }
+
+    func sliderRow(title: String, value: Double, range: ClosedRange<Double>, onChange: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption2).foregroundColor(.secondary).frame(width: 48, alignment: .leading)
+            Slider(value: Binding(
+                get: { value },
+                set: { v in onChange(v.clamped(to: range)) }
+            ), in: range)
+            Text(String(format: "%.2f", value))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
     }
 }

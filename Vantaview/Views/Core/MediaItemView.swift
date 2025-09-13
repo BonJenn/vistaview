@@ -6,6 +6,7 @@ struct MediaItemView: View {
     @ObservedObject var thumbnailManager: MediaThumbnailManager
     let onMediaSelected: (MediaFile) -> Void
     let onMediaDropped: (MediaFile, CGPoint) -> Void
+    @EnvironmentObject var layerManager: LayerStackManager
     
     @State private var thumbnail: NSImage?
     @State private var isDragging = false
@@ -149,6 +150,20 @@ struct MediaItemView: View {
                 cornerRadius: TahoeDesign.CornerRadius.md,
                 shadowIntensity: .heavy
             )
+        }
+        .contextMenu {
+            Button("Load to Preview") {
+                let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+                feedbackGenerator.perform(.generic, performanceTime: .now)
+                onMediaSelected(mediaFile)
+            }
+            Divider()
+            Button("Add as Picture-in-Picture") {
+                let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+                feedbackGenerator.perform(.generic, performanceTime: .now)
+                let defaultCenter = CGPoint(x: 0.82, y: 0.82)
+                layerManager.addMediaLayer(file: mediaFile, centerNorm: defaultCenter)
+            }
         }
     }
     

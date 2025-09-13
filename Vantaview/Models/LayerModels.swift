@@ -51,6 +51,25 @@ struct TitleOverlay: Equatable, Identifiable {
     }
 }
 
+struct PiPChromaKeySettings: Equatable {
+    var enabled: Bool = false
+    var keyR: Float = 0.0
+    var keyG: Float = 1.0
+    var keyB: Float = 0.0
+    var strength: Float = 0.45
+    var softness: Float = 0.22
+    var balance: Float = 0.55
+    var matteShift: Float = 0.0
+    var edgeSoftness: Float = 0.28
+    var blackClip: Float = 0.04
+    var whiteClip: Float = 0.97
+    var spillStrength: Float = 0.7
+    var spillDesat: Float = 0.35
+    var despillBias: Float = 0.2
+    var lightWrap: Float = 0.15
+    var viewMatte: Bool = false
+}
+
 struct CompositedLayer: Identifiable, Equatable {
     let id: UUID
     var name: String
@@ -70,6 +89,8 @@ struct CompositedLayer: Identifiable, Equatable {
     var audioSolo: Bool = false
     var audioPan: Float = 0.0  // -1 (left) ... 0 (center) ... +1 (right)
 
+    var chromaKey: PiPChromaKeySettings = PiPChromaKeySettings()
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -83,7 +104,8 @@ struct CompositedLayer: Identifiable, Equatable {
         audioMuted: Bool = false,
         audioGain: Float = 1.0,
         audioSolo: Bool = false,
-        audioPan: Float = 0.0
+        audioPan: Float = 0.0,
+        chromaKey: PiPChromaKeySettings = PiPChromaKeySettings()
     ) {
         self.id = id
         self.name = name
@@ -98,5 +120,6 @@ struct CompositedLayer: Identifiable, Equatable {
         self.audioGain = audioGain
         self.audioSolo = audioSolo
         self.audioPan = audioPan
+        self.chromaKey = chromaKey
     }
 }

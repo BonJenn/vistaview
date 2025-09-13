@@ -517,6 +517,9 @@ class ProfessionalVideoView: NSView {
     private var metalLayer: CAMetalLayer?
     private var programRenderer: ExternalProgramMetalRenderer?
     
+    private var ckPipelineState: MTLComputePipelineState?
+    private var ckFallbackBGTexture: MTLTexture?
+
     init(productionManager: UnifiedProductionManager, displayInfo: ExternalDisplayManager.DisplayInfo, frame: CGRect) {
         self.productionManager = productionManager
         self.displayInfo = displayInfo
@@ -821,6 +824,73 @@ class ProfessionalVideoView: NSView {
         return context.makeImage()
     }
     
+    private func ensureChromaKeyPipeline() {
+        if ckPipelineState != nil { return }
+        guard let library = metalDevice.makeDefaultLibrary(),
+              let fn = library.makeFunction(name: "chromaKeyKernel") else { return }
+        ckPipelineState = try? metalDevice.makeComputePipelineState(function: fn)
+    }
+
+    private func ensureFallbackBGTexture() {
+        if ckFallbackBGTexture != nil { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
+        desc.usage = [.shaderRead]
+        if let tex = metalDevice.makeTexture(descriptor: desc) {
+            var px: UInt32 = 0x000000FF
+            tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
+            ckFallbackBGTexture = tex
+        }
+    }
+
+    private func applyChromaKey(to cg: CGImage, with s: PiPChromaKeySettings) -> CGImage? {
+        ensureChromaKeyPipeline()
+        ensureFallbackBGTexture()
+        guard let ck = ckPipelineState,
+              let inTex = convertCGImageToMetalTexture(cg),
+              let cmd = commandQueue.makeCommandBuffer() else { return nil }
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: inTex.pixelFormat,
+            width: inTex.width,
+            height: inTex.height,
+            mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        guard let outTex = metalDevice.makeTexture(descriptor: desc) else { return nil }
+
+        var u = CKUniforms(
+            keyR: s.keyR, keyG: s.keyG, keyB: s.keyB,
+            strength: s.strength, softness: s.softness, balance: s.balance,
+            matteShift: s.matteShift, edgeSoftness: s.edgeSoftness,
+            blackClip: s.blackClip, whiteClip: s.whiteClip,
+            spillStrength: s.spillStrength, spillDesat: s.spillDesat, despillBias: s.despillBias,
+            viewMatte: s.viewMatte ? 1.0 : 0.0,
+            width: Float(inTex.width), height: Float(inTex.height), padding: 0,
+            bgScale: 1, bgOffsetX: 0, bgOffsetY: 0, bgRotationRad: 0, bgEnabled: 0,
+            interactive: 0,
+            lightWrap: s.lightWrap,
+            bgW: 0, bgH: 0,
+            fillMode: 0,
+            outputMode: 1.0
+        )
+
+        guard let enc = cmd.makeComputeCommandEncoder() else { return nil }
+        enc.setComputePipelineState(ck)
+        enc.setTexture(inTex, index: 0)
+        enc.setTexture(outTex, index: 1)
+        enc.setTexture(ckFallbackBGTexture, index: 2)
+        enc.setBytes(&u, length: MemoryLayout<CKUniforms>.stride, index: 0)
+        let w = ck.threadExecutionWidth
+        let h = ck.maxTotalThreadsPerThreadgroup / w
+        enc.dispatchThreads(MTLSize(width: inTex.width, height: inTex.height, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+        enc.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        return convertMetalTextureToCGImage(outTex)
+    }
+
     private func displayPlaceholder(text: String, color: NSColor) {
         // Create simple placeholder image
         let size = CGSize(width: 1920, height: 1080)
@@ -1016,11 +1086,18 @@ class ProfessionalVideoView: NSView {
                     if let feed = pm.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
                         let sub = feed.$previewImage
                             .receive(on: DispatchQueue.main)
-                            .sink { [weak lay] cg in
-                                guard let lay else { return }
+                            .sink { [weak self, weak lay] cg in
+                                guard let self, let lay else { return }
+                                var outCG = cg
+                                if let cg, let cur = self.layerManagerRef?.layers.first(where: { $0.id == model.id }),
+                                   cur.chromaKey.enabled {
+                                    if let keyed = self.applyChromaKey(to: cg, with: cur.chromaKey) {
+                                        outCG = keyed
+                                    }
+                                }
                                 CATransaction.begin()
                                 CATransaction.setDisableActions(true)
-                                lay.contents = cg
+                                lay.contents = outCG
                                 CATransaction.commit()
                             }
                         pipSubscriptions[model.id] = sub
@@ -1031,9 +1108,16 @@ class ProfessionalVideoView: NSView {
                 case .image:
                     if let ns = NSImage(contentsOf: file.url),
                        let cg = ns.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                        var out = cg
+                        if let cur = layerManagerRef?.layers.first(where: { $0.id == model.id }),
+                           cur.chromaKey.enabled {
+                            if let keyed = self.applyChromaKey(to: cg, with: cur.chromaKey) {
+                                out = keyed
+                            }
+                        }
                         CATransaction.begin()
                         CATransaction.setDisableActions(true)
-                        lay.contents = cg
+                        lay.contents = out
                         CATransaction.commit()
                     }
                 case .video:
@@ -1049,7 +1133,6 @@ class ProfessionalVideoView: NSView {
                     }
                     avLayer.frame = lay.bounds
 
-                    // Ensure Player + Looper
                     if pipVideoPlayers[model.id] == nil {
                         let asset = AVURLAsset(url: file.url)
                         let item = AVPlayerItem(asset: asset)
@@ -1199,7 +1282,7 @@ extension ProfessionalVideoView: NSTextFieldDelegate {
                     let padW: CGFloat = 20
                     let padH: CGFloat = 20
                     field.sizeToFit()
-                    let pref = field.fittingSize
+                    let pref = field.intrinsicContentSize
                     let baseBounds = editingLayerRef?.bounds ?? .zero
                     let desiredW = min(self.bounds.width - 20, max(pref.width + padW, baseBounds.width))
                     let desiredH = min(self.bounds.height - 20, max(pref.height + padH, baseBounds.height))
@@ -1257,6 +1340,22 @@ extension ProfessionalVideoView: NSTextFieldDelegate {
         editingLayerId = nil
         editingLayerRef = nil
     }
+}
+
+private struct CKUniforms {
+    var keyR: Float, keyG: Float, keyB: Float
+    var strength: Float, softness: Float, balance: Float
+    var matteShift: Float, edgeSoftness: Float
+    var blackClip: Float, whiteClip: Float
+    var spillStrength: Float, spillDesat: Float, despillBias: Float
+    var viewMatte: Float
+    var width: Float, height: Float, padding: Float
+    var bgScale: Float, bgOffsetX: Float, bgOffsetY: Float, bgRotationRad: Float, bgEnabled: Float
+    var interactive: Float
+    var lightWrap: Float
+    var bgW: Float, bgH: Float
+    var fillMode: Float
+    var outputMode: Float
 }
 
 // MARK: - Error Types

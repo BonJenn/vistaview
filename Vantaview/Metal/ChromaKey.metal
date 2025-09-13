@@ -21,6 +21,7 @@ struct ChromaKeyUniforms {
     float lightWrap;
     float bgW, bgH;
     float fillMode; // 0=Contain, 1=Cover
+    float outputMode; // 0=compose over bg, 1=foreground premultiplied alpha
 };
 
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
@@ -124,6 +125,13 @@ kernel void chromaKeyKernel(
     if (u.viewMatte > 0.5) {
         float m = matte;
         outTex.write(float4(m, m, m, 1.0), gid);
+        return;
+    }
+
+    // Foreground-only premultiplied output for PiP usage
+    if (u.outputMode > 0.5) {
+        float3 premult = fore * matte;
+        outTex.write(float4(premult, matte), gid);
         return;
     }
 

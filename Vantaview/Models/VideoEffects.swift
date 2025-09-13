@@ -727,6 +727,7 @@ final class ChromaKeyEffect: BaseVideoEffect {
         var lightWrap: Float
         var bgW: Float, bgH: Float
         var fillMode: Float
+        var outputMode: Float
     }
 
     // Interactive tuning for smooth UI/scroll while editing
@@ -967,7 +968,8 @@ final class ChromaKeyEffect: BaseVideoEffect {
             lightWrap: parameters["lightWrap"]?.value ?? 0.0,
             bgW: Float(backgroundTexture?.width ?? 0),
             bgH: Float(backgroundTexture?.height ?? 0),
-            fillMode: parameters["bgFillMode"]?.value ?? 0.0
+            fillMode: parameters["bgFillMode"]?.value ?? 0.0,
+            outputMode: 0.0
         )
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return texture }
