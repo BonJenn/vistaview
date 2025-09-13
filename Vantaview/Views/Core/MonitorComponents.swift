@@ -14,6 +14,11 @@ import MetalKit
 struct SimplePreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @State private var debugTimer: Timer?
+    @State private var isTargeted = false
+    
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getPreviewEffectChain()?.effects.count ?? 0
+    }
     
     var body: some View {
         ZStack {
@@ -71,8 +76,63 @@ struct SimplePreviewMonitorView: View {
                     debugTimer = nil
                 }
             }
+            
+            // Drop target overlay
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .cornerRadius(8)
+                            .padding(4)
+                    }
+                }
+            }
         }
         .clipped()
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            handleEffectDrop(items, isPreview: true)
+            return true
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
+        .contextMenu {
+            if effectCount > 0 {
+                Button("Clear Effects") {
+                    productionManager.previewProgramManager.clearPreviewEffects()
+                }
+                
+                Button("View Effects") {
+                    if let chain = productionManager.previewProgramManager.getPreviewEffectChain() {
+                        productionManager.effectManager.selectedChain = chain
+                    }
+                }
+            }
+        }
         .onChange(of: productionManager.previewProgramManager.previewSource) { _, newSource in
             print("🔄 SimplePreviewMonitorView: Preview source changed to \(newSource)")
             
@@ -86,11 +146,30 @@ struct SimplePreviewMonitorView: View {
             }
         }
     }
+    
+    private func handleEffectDrop(_ items: [EffectDragItem], isPreview: Bool) {
+        guard let item = items.first else { return }
+        
+        if isPreview {
+            productionManager.previewProgramManager.addEffectToPreview(item.effectType)
+        } else {
+            productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+        }
+        
+        // Visual feedback
+        let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+        feedbackGenerator.perform(.generic, performanceTime: .now)
+    }
 }
 
 struct SimpleProgramMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @State private var debugTimer: Timer?
+    @State private var isTargeted = false
+    
+    private var effectCount: Int {
+        productionManager.previewProgramManager.getProgramEffectChain()?.effects.count ?? 0
+    }
     
     var body: some View {
         ZStack {
@@ -154,8 +233,63 @@ struct SimpleProgramMonitorView: View {
             // IMPORTANT: PiP layers composited on top
             CompositedLayersContent(productionManager: productionManager)
                 .allowsHitTesting(false) // Prevent interaction in monitor view
+            
+            // Drop target overlay
+            if isTargeted {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.3))
+                    .overlay(
+                        VStack {
+                            Image(systemName: "wand.and.stars")
+                                .font(.title)
+                                .foregroundColor(.white)
+                            Text("Drop Effect Here")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                    )
+            }
+            
+            // Effect count indicator
+            if effectCount > 0 {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("\(effectCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue)
+                            .cornerRadius(8)
+                            .padding(4)
+                    }
+                }
+            }
         }
         .clipped()
+        .dropDestination(for: EffectDragItem.self) { items, location in
+            handleEffectDrop(items, isPreview: false)
+            return true
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
+        .contextMenu {
+            if effectCount > 0 {
+                Button("Clear Effects") {
+                    productionManager.previewProgramManager.clearProgramEffects()
+                }
+                
+                Button("View Effects") {
+                    if let chain = productionManager.previewProgramManager.getProgramEffectChain() {
+                        productionManager.effectManager.selectedChain = chain
+                    }
+                }
+            }
+        }
         .onChange(of: productionManager.previewProgramManager.programSource) { _, newSource in
             print("🔄 SimpleProgramMonitorView: Program source changed to \(newSource)")
             
@@ -168,6 +302,20 @@ struct SimpleProgramMonitorView: View {
                 productionManager.previewProgramManager.objectWillChange.send()
             }
         }
+    }
+    
+    private func handleEffectDrop(_ items: [EffectDragItem], isPreview: Bool) {
+        guard let item = items.first else { return }
+        
+        if isPreview {
+            productionManager.previewProgramManager.addEffectToPreview(item.effectType)
+        } else {
+            productionManager.previewProgramManager.addEffectToProgram(item.effectType)
+        }
+        
+        // Visual feedback
+        let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
+        feedbackGenerator.perform(.generic, performanceTime: .now)
     }
 }
 

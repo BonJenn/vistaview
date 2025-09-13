@@ -14,7 +14,6 @@ import MetalKit
 import CoreImage
 import AVKit
 
-
 /// Represents different types of content that can be displayed
 enum ContentSource: Identifiable, Equatable {
     case camera(CameraFeed)
@@ -51,12 +50,10 @@ final class PreviewProgramManager: ObservableObject {
     @Published var previewPlayer: AVPlayer?
     @Published var programPlayer: AVPlayer?
     
-    // @Published var programAudioOutput: AVPlayerItemAudioOutput?
-
     @Published var programAudioTap: PlayerAudioTap?
-
+    
     @Published var previewAudioTap: PlayerAudioTap?
-
+    
     // Playback state
     @Published var isPreviewPlaying = false
     @Published var isProgramPlaying = false
@@ -130,30 +127,30 @@ final class PreviewProgramManager: ObservableObject {
         
         return texture
     }
-
+    
     @Published var previewVideoTexture: MTLTexture?
     @Published var programVideoTexture: MTLTexture?
     private var previewAudioPlayer: AVPlayer?
     private var programAudioPlayer: AVPlayer?
     private let gpuProcessQueue = DispatchQueue(label: "vistaview.vt.gpu.process", qos: .userInitiated)
-
+    
     @Published var previewVTReady: Bool = false
     @Published var programVTReady: Bool = false
     private var previewPrimedForPoster = false
     private var programPrimedForPoster = false
-
+    
     @Published var previewVideoFrame: CGImage?
     @Published var programVideoFrame: CGImage?
-
+    
     // Playback tuning & diagnostics
     @Published var hdrToneMapEnabled: Bool = false
     @Published var targetFPS: Double = 60
     @Published var previewFPS: Double = 0
     @Published var programFPS: Double = 0
-
+    
     @Published var previewAspect: CGFloat = 16.0/9.0
     @Published var programAspect: CGFloat = 16.0/9.0
-
+    
     // MARK: - Computed Properties for UI
     
     /// Safe access to preview source display name
@@ -170,7 +167,7 @@ final class PreviewProgramManager: ObservableObject {
         self.cameraFeedManager = cameraFeedManager
         self.unifiedProductionManager = unifiedProductionManager
         self.effectManager = effectManager
-
+        
         self.previewEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getPreviewEffectChain())
         self.programEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getProgramEffectChain())
     }
@@ -343,10 +340,10 @@ final class PreviewProgramManager: ObservableObject {
         // COPY chroma key background by matching effect types, not just indices
         if let prevChain = effectManager.getPreviewEffectChain(),
            let progChain = effectManager.getProgramEffectChain() {
-
+            
             let prevKeys = prevChain.effects.compactMap { $0 as? ChromaKeyEffect }
             let progKeys = progChain.effects.compactMap { $0 as? ChromaKeyEffect }
-
+            
             for (idx, srcCK) in prevKeys.enumerated() {
                 guard idx < progKeys.count else { break }
                 let dstCK = progKeys[idx]
@@ -361,7 +358,7 @@ final class PreviewProgramManager: ObservableObject {
                 }
             }
         }
-
+        
         programEffectRunner?.setChain(getProgramEffectChain())
         
         // Clear preview after successful transfer (don't stop resources, just clear references)
@@ -703,7 +700,7 @@ final class PreviewProgramManager: ObservableObject {
                 print("Failed to load PREVIEW duration: \(error)")
             }
         }
-
+        
         let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
         if file.fileType == .audio || !hasVideoTrack {
             print("🎧 Preview: Configuring audio-only playback for \(file.name) (hasVideoTrack=\(hasVideoTrack))")
@@ -711,13 +708,13 @@ final class PreviewProgramManager: ObservableObject {
             previewAudioPlayer = player
             previewPlayer = player
             previewSource = .media(file, player: player)
-
+            
             if let item = player.currentItem {
                 self.previewAudioTap = PlayerAudioTap(playerItem: item)
             } else {
                 self.previewAudioTap = nil
             }
-
+            
             // Add playback end notification for looping
             setupPlayerNotifications(for: player, isPreview: true)
             
@@ -734,7 +731,7 @@ final class PreviewProgramManager: ObservableObject {
         if preferVTDecode && file.fileType == .video {
             // VT path currently disabled by default. Fallthrough to AVPlayer path.
         }
-
+        
         // AVPlayer + ItemOutput path
         let playerItem = AVPlayerItem(url: file.url)
         let attrs: [String: Any] = [
@@ -745,16 +742,20 @@ final class PreviewProgramManager: ObservableObject {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         output.suppressesPlayerRendering = true
         playerItem.add(output)
-
+        
         self.previewAudioTap = PlayerAudioTap(playerItem: playerItem)
-
+        
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
-
+        
+        // Set source BEFORE creating Metal playback to ensure UI knows about it
+        previewSource = .media(file, player: player)
+        previewPlayer = player
+        
         // Add playback end notification for looping
         setupPlayerNotifications(for: player, isPreview: true)
-
+        
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             previewAVPlayback = playback
             playback.setEffectRunner(previewEffectRunner)
@@ -774,61 +775,68 @@ final class PreviewProgramManager: ObservableObject {
                 print("⚠️ Preview watchdog: FPS below target, capturing next frame")
                 self?.captureNextPreviewFrame()
             }
-            playback.start()
             
-            // IMPORTANT: Force immediate UI update when Metal playback starts
-            DispatchQueue.main.async {
+            // Start Metal playback BEFORE setting up observers
+            playback.start()
+            print("🎬 PREVIEW Metal playback started")
+            
+            // IMPORTANT: Multiple UI refresh attempts to catch texture availability
+            objectWillChange.send()
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self.objectWillChange.send()
-                print("🎬 PREVIEW Metal playback started - UI updated")
+                print("🎬 PREVIEW UI update (0.1s)")
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.objectWillChange.send()
+                print("🎬 PREVIEW UI update (0.3s)")
                 
-                // Additional delayed updates to catch late texture availability
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    self.objectWillChange.send()
-                    print("🎬 PREVIEW delayed UI update (0.1s)")
-                }
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.objectWillChange.send()
-                    print("🎬 PREVIEW delayed UI update (0.5s)")
-                    
-                    if self.previewMetalTexture != nil {
-                        print("✅ PREVIEW Metal texture finally available!")
-                    } else {
-                        print("❌ PREVIEW Metal texture still not available after 0.5s")
+                if self.previewMetalTexture != nil {
+                    print("✅ PREVIEW Metal texture available after 0.3s!")
+                } else {
+                    print("⚠️ PREVIEW Metal texture still not available after 0.3s - forcing refresh")
+                    // Force a texture refresh attempt
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        self.objectWillChange.send()
                     }
                 }
             }
         }
-
-        // Autoplay & time observer
+        
+        // Autoplay & time observer - setup AFTER Metal playback is ready
         var statusObserver: NSKeyValueObservation?
         statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
                 if item.status != .unknown { statusObserver?.invalidate() }
                 if item.status == .readyToPlay {
+                    print("🎬 PREVIEW PlayerItem ready to play - starting playback")
                     self?.isPreviewPlaying = true
                     self?.previewPlayer?.rate = self?.previewRate ?? 1.0
                     self?.previewPlayer?.volume = (self?.previewMuted ?? false) ? 0.0 : (self?.previewVolume ?? 1.0)
                     self?.previewPlayer?.play()
+                    
+                    // Additional UI update when playback starts
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self?.objectWillChange.send()
+                        print("🎬 PREVIEW UI update after playback start")
+                    }
                 }
             }
         }
-
-        previewSource = .media(file, player: player)
-        previewPlayer = player
-
+        
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             self?.previewCurrentTime = CMTimeGetSeconds(t)
         }
-
+        
         objectWillChange.send()
         print("📼 PREVIEW AVPlayer + ItemOutput + Metal playback configured")
         
-        // START: Texture availability monitoring for first few seconds
+        // Enhanced texture monitoring with more aggressive refresh attempts
         let startTime = CACurrentMediaTime()
         var textureCheckCount = 0
-        let textureCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+        let textureCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
             guard let self = self else {
                 timer.invalidate()
                 return
@@ -838,19 +846,19 @@ final class PreviewProgramManager: ObservableObject {
             let elapsed = CACurrentMediaTime() - startTime
             
             if self.previewMetalTexture != nil {
-                print("✅ PREVIEW Metal texture became available after \(elapsed) seconds")
+                print("✅ PREVIEW Metal texture became available after \(String(format: "%.2f", elapsed)) seconds")
                 self.objectWillChange.send()
                 timer.invalidate()
-            } else if elapsed > 3.0 {
-                print("⚠️ PREVIEW Metal texture still not available after 3 seconds")
+            } else if elapsed > 5.0 {
+                print("⚠️ PREVIEW Metal texture still not available after 5 seconds - giving up")
                 timer.invalidate()
-            } else if textureCheckCount % 10 == 0 {
-                print("🔍 PREVIEW still waiting for Metal texture... (\(elapsed)s)")
-                self.objectWillChange.send() // Force UI refresh
+            } else if textureCheckCount % 20 == 0 {
+                print("🔍 PREVIEW still waiting for Metal texture... (\(String(format: "%.2f", elapsed))s)")
+                self.objectWillChange.send() // Force UI refresh every 1 second (20 * 0.05s)
             }
         }
     }
-
+    
     private func loadMediaToProgram(_ file: MediaFile) {
         // Stop previous program pipeline
         programVTPlayback?.stop()
@@ -893,7 +901,7 @@ final class PreviewProgramManager: ObservableObject {
                 print("Failed to load PROGRAM duration: \(error)")
             }
         }
-
+        
         let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
         if file.fileType == .audio || !hasVideoTrack {
             print("🎧 Program: Configuring audio-only playback for \(file.name) (hasVideoTrack=\(hasVideoTrack))")
@@ -934,16 +942,16 @@ final class PreviewProgramManager: ObservableObject {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         output.suppressesPlayerRendering = true
         playerItem.add(output)
-
+        
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
-
+        
         self.programAudioTap = PlayerAudioTap(playerItem: playerItem)
-
+        
         // Add playback end notification for looping
         setupPlayerNotifications(for: player, isPreview: false)
-
+        
         if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
             programAVPlayback = playback
             playback.setEffectRunner(programEffectRunner)
@@ -971,7 +979,7 @@ final class PreviewProgramManager: ObservableObject {
                 print("📺 PROGRAM Metal playback started - UI updated")
             }
         }
-
+        
         var statusObserver: NSKeyValueObservation?
         statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
@@ -984,15 +992,15 @@ final class PreviewProgramManager: ObservableObject {
                 }
             }
         }
-
+        
         programSource = .media(file, player: player)
         programPlayer = player
-
+        
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             self?.programCurrentTime = CMTimeGetSeconds(t)
         }
-
+        
         print("📼 PROGRAM AVPlayer + ItemOutput + Metal playback configured")
     }
     
@@ -1155,7 +1163,7 @@ final class PreviewProgramManager: ObservableObject {
         if case .media(let file, _) = previewSource {
             file.url.stopAccessingSecurityScopedResource()
         }
-
+        
         previewSource = .none
         previewPlayer = nil
         previewImage = nil
@@ -1164,7 +1172,7 @@ final class PreviewProgramManager: ObservableObject {
         previewDuration = 0
         previewVTReady = false
         previewPrimedForPoster = false
-
+        
         previewAudioTap = nil
     }
     
@@ -1265,7 +1273,7 @@ final class PreviewProgramManager: ObservableObject {
     
     private var previewEffectRunner: EffectRunner?
     private var programEffectRunner: EffectRunner?
-
+    
     func addEffectToPreview(_ effectType: String) {
         print("✨ PreviewProgramManager: Adding \(effectType) effect to Preview output")
         effectManager.addEffectToPreview(effectType)
@@ -1281,7 +1289,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToProgram(_ effectType: String) {
         print("✨ PreviewProgramManager: Adding \(effectType) effect to Program output")
-        effectManager.addEffectToProgram(effectType);
+        effectManager.addEffectToProgram(effectType)
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -1294,7 +1302,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToPreview(_ effect: any VideoEffect) {
         print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Preview output")
-        effectManager.addEffectToPreview(effect);
+        effectManager.addEffectToPreview(effect)
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -1307,7 +1315,7 @@ final class PreviewProgramManager: ObservableObject {
     
     func addEffectToProgram(_ effect: any VideoEffect) {
         print("✨ PreviewProgramManager: Adding \(effect.name) effect instance to Program output")
-        effectManager.addEffectToProgram(effect);
+        effectManager.addEffectToProgram(effect)
         
         // Force UI update to ensure effects are applied immediately
         DispatchQueue.main.async {
@@ -1343,7 +1351,7 @@ final class PreviewProgramManager: ObservableObject {
         }
         self.programEffectRunner?.setChain(self.getProgramEffectChain())
     }
-
+    
     private func createAudioOnlyPlayer(for asset: AVAsset) -> AVPlayer? {
         let composition = AVMutableComposition()
         let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
@@ -1364,15 +1372,15 @@ final class PreviewProgramManager: ObservableObject {
             return nil
         }
     }
-
+    
     var previewCurrentTexture: MTLTexture? {
         previewAVPlayback?.latestTexture ?? previewVideoTexture
     }
-
+    
     var programCurrentTexture: MTLTexture? {
         programAVPlayback?.latestTexture ?? programVideoTexture
     }
-
+    
     func captureNextPreviewFrame() {
         previewAVPlayback?.captureNextFrame()
     }

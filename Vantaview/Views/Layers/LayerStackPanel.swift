@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct LayerStackPanel: View {
     @ObservedObject var layerManager: LayerStackManager
@@ -506,7 +507,7 @@ private extension LayerStackPanel {
             }
 
             if layer.chromaKey.enabled {
-                HStack {
+                HStack(spacing: 8) {
                     Text("Key Color").font(.caption2).foregroundColor(.secondary)
                     ColorPicker("", selection: Binding(
                         get: {
@@ -525,7 +526,35 @@ private extension LayerStackPanel {
                         }
                     ))
                     .labelsHidden()
-                    .frame(width: 120)
+                    .frame(width: 60)
+                    
+                    // Eyedropper tool for PiP chroma key
+                    Button {
+                        startPiPEyedropper(for: layer)
+                    } label: {
+                        Image(systemName: "eyedropper.halffull")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .help("Pick color from screen")
+                    
+                    Spacer()
+                    
+                    // Quick preset buttons
+                    Button("Green") {
+                        setPiPKeyPreset(for: layer, r: 0.0, g: 1.0, b: 0.0)
+                    }
+                    .controlSize(.mini)
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
+                    
+                    Button("Blue") {
+                        setPiPKeyPreset(for: layer, r: 0.0, g: 0.5, b: 1.0)
+                    }
+                    .controlSize(.mini)
+                    .buttonStyle(.bordered)
+                    .font(.caption2)
                 }
 
                 sliderRow(title: "Strength", value: Double(layer.chromaKey.strength), range: 0...1) { v in
@@ -582,5 +611,34 @@ private extension LayerStackPanel {
                 .foregroundColor(.secondary)
                 .frame(width: 44, alignment: .trailing)
         }
+    }
+    
+    // MARK: - PiP Chroma Key Helper Functions
+    
+    private func startPiPEyedropper(for layer: CompositedLayer) {
+        let sampler = NSColorSampler()
+        sampler.show { color in
+            guard let color = color?.usingColorSpace(.sRGB) else { return }
+            
+            var updatedLayer = layer
+            updatedLayer.chromaKey.keyR = Float(color.redComponent)
+            updatedLayer.chromaKey.keyG = Float(color.greenComponent)
+            updatedLayer.chromaKey.keyB = Float(color.blueComponent)
+            
+            layerManager.update(updatedLayer)
+            
+            print("🎨 PiP Eyedropper picked color: R=\(updatedLayer.chromaKey.keyR), G=\(updatedLayer.chromaKey.keyG), B=\(updatedLayer.chromaKey.keyB)")
+        }
+    }
+    
+    private func setPiPKeyPreset(for layer: CompositedLayer, r: Float, g: Float, b: Float) {
+        var updatedLayer = layer
+        updatedLayer.chromaKey.keyR = r
+        updatedLayer.chromaKey.keyG = g
+        updatedLayer.chromaKey.keyB = b
+        
+        layerManager.update(updatedLayer)
+        
+        print("🎨 PiP Chroma key preset applied: R=\(r), G=\(g), B=\(b)")
     }
 }
