@@ -494,7 +494,12 @@ class ProfessionalVideoView: NSView {
     private var pipVideoLayers: [UUID: AVPlayerLayer] = [:]
     private var pipVideoPlayers: [UUID: AVQueuePlayer] = [:]
     private var pipVideoLoopers: [UUID: AVPlayerLooper] = [:]
-    
+
+    private weak var layerManagerRef: LayerStackManager?
+    private var editingField: NSTextField?
+    private var editingLayerId: UUID?
+    private var editingLayerRef: CALayer?
+
     // LIVE IMAGE PROCESSING
     private var currentOutputMapping: OutputMapping = OutputMapping()
     private var lastProcessedFrameCount: Int = 0
@@ -935,6 +940,8 @@ class ProfessionalVideoView: NSView {
         pipVideoPlayers.removeAll()
         pipVideoLoopers.removeAll()
 
+        self.layerManagerRef = manager
+
         if let manager, let productionManager {
             self.cancellables.insert(
                 manager.$layers
@@ -1059,7 +1066,33 @@ class ProfessionalVideoView: NSView {
                 case .audio:
                     break
                 }
+            case .title(let overlay):
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                lay.contents = nil
+                lay.sublayers?.forEach { $0.removeFromSuperlayer() }
+                let textLayer = CATextLayer()
+                textLayer.frame = lay.bounds
+                textLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+                textLayer.isWrapped = true
+                textLayer.truncationMode = .none
+                textLayer.string = overlay.text
+                textLayer.fontSize = overlay.fontSize
+                textLayer.font = NSFont.systemFont(ofSize: overlay.fontSize, weight: .bold)
+                let color = NSColor(srgbRed: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, alpha: overlay.color.a)
+                textLayer.foregroundColor = color.cgColor
+                switch overlay.alignment {
+                case .leading:
+                    textLayer.alignmentMode = .left
+                case .trailing:
+                    textLayer.alignmentMode = .right
+                default:
+                    textLayer.alignmentMode = .center
+                }
+                lay.addSublayer(textLayer)
+                CATransaction.commit()
             }
+
         }
 
         // Apply ordering (zPosition)
@@ -1073,10 +1106,156 @@ class ProfessionalVideoView: NSView {
         }
     }
 
-    deinit {
-        cancellables.removeAll()
-        stopProgramMetalRenderer()
-        print("🚀 Professional video view deinitialized")
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        guard event.clickCount == 2 else { return }
+        let pInWindow = event.locationInWindow
+        let pInView = convert(pInWindow, from: nil)
+        guard let root = self.layer else { return }
+        let pInTransform = transformLayer.convert(pInView, from: root)
+        guard let hit = layersContainer.hitTest(pInTransform) else { return }
+
+        guard let (hitId, hitLay) = pipLayers.first(where: { (_, lay) in
+            hit === lay || hit.isDescendant(of: lay)
+        }) else { return }
+
+        guard let mgr = layerManagerRef,
+              let model = mgr.layers.first(where: { $0.id == hitId }),
+              case .title(let overlay) = model.source else { return }
+
+        beginEditingTitle(for: hitId, in: hitLay, currentText: overlay.text, fontSize: overlay.fontSize, alignment: overlay.alignment)
+    }
+
+    // Note: CALayer doesn't expose isDescendant(of:) directly; implement manually
+    // We'll use this simple walk-up method via an extension.
+}
+
+private extension CALayer {
+    func isDescendant(of ancestor: CALayer) -> Bool {
+        var node: CALayer? = self
+        while let n = node {
+            if n === ancestor { return true }
+            node = n.superlayer
+        }
+        return false
+    }
+}
+
+extension ProfessionalVideoView: NSTextFieldDelegate {
+    private func beginEditingTitle(for id: UUID, in layer: CALayer, currentText: String, fontSize: CGFloat, alignment: TextAlignment) {
+        if let field = editingField {
+            field.removeFromSuperview()
+            editingField = nil
+            editingLayerId = nil
+            editingLayerRef = nil
+        }
+        guard let root = self.layer else { return }
+
+        var rect = layer.frame
+        rect = layersContainer.convert(rect, to: transformLayer)
+        rect = transformLayer.convert(rect, to: root)
+
+        let field = NSTextField(frame: rect.insetBy(dx: 4, dy: 4))
+        field.stringValue = currentText
+        field.font = .systemFont(ofSize: fontSize, weight: .bold)
+        field.isEditable = true
+        field.isBordered = true
+        field.drawsBackground = true
+        field.backgroundColor = NSColor.black.withAlphaComponent(0.35)
+        field.textColor = .white
+        field.focusRingType = .none
+        field.isBezeled = true
+        field.usesSingleLineMode = false
+        field.lineBreakMode = .byWordWrapping
+        field.delegate = self
+
+        switch alignment {
+        case .leading: field.alignment = .left
+        case .trailing: field.alignment = .right
+        default: field.alignment = .center
+        }
+
+        addSubview(field)
+        window?.makeFirstResponder(field)
+        editingField = field
+        editingLayerId = id
+        editingLayerRef = layer
+
+        layer.isHidden = true
+
+        relayoutEditingField()
+    }
+
+    // LIVE update while typing
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = editingField, let id = editingLayerId else { return }
+        if let mgr = layerManagerRef, let idx = mgr.layers.firstIndex(where: { $0.id == id }) {
+            var model = mgr.layers[idx]
+            if case .title(var ov) = model.source {
+                ov.text = field.stringValue
+                model.source = .title(ov)
+
+                if ov.autoFit {
+                    let padW: CGFloat = 20
+                    let padH: CGFloat = 20
+                    field.sizeToFit()
+                    let pref = field.fittingSize
+                    let baseBounds = editingLayerRef?.bounds ?? .zero
+                    let desiredW = min(self.bounds.width - 20, max(pref.width + padW, baseBounds.width))
+                    let desiredH = min(self.bounds.height - 20, max(pref.height + padH, baseBounds.height))
+                    let wNorm = min(1.0, max(24, desiredW) / self.bounds.width)
+                    let hNorm = min(1.0, max(20, desiredH) / self.bounds.height)
+                    model.sizeNorm = CGSize(width: wNorm, height: hNorm)
+                }
+
+                mgr.update(model)
+            }
+        }
+        relayoutEditingField()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        endEditingUI()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if editingField != nil {
+            if event.keyCode == 53 {
+                endEditingUI()
+                return
+            }
+        }
+        super.keyDown(with: event)
+    }
+
+    private func relayoutEditingField() {
+        guard let field = editingField, let layer = editingLayerRef, let root = self.layer else { return }
+
+        let maxW = bounds.width - 20
+        let maxH = bounds.height - 20
+
+        let fitting = field.intrinsicContentSize
+        let prefW = min(maxW, max(fitting.width + 20, layer.bounds.width))
+        let prefH = min(maxH, max(fitting.height + 20, layer.bounds.height))
+
+        var rect = layer.frame
+        rect = layersContainer.convert(rect, to: transformLayer)
+        rect = transformLayer.convert(rect, to: root)
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+
+        field.setFrameSize(NSSize(width: prefW, height: prefH))
+        field.setFrameOrigin(NSPoint(x: center.x - prefW / 2, y: center.y - prefH / 2))
+        field.needsLayout = true
+    }
+
+    private func endEditingUI() {
+        if let field = editingField {
+            field.removeFromSuperview()
+        }
+        editingLayerRef?.isHidden = false
+        editingField = nil
+        editingLayerId = nil
+        editingLayerRef = nil
     }
 }
 

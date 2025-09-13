@@ -6,6 +6,8 @@ final class LayerStackManager: ObservableObject {
     @Published var layers: [CompositedLayer] = []
     @Published var selectedLayerID: UUID?
 
+    @Published var editingLayerID: UUID?
+
     private weak var productionManager: UnifiedProductionManager?
 
     var pipAudioTaps: [UUID: PlayerAudioTap] = [:]
@@ -100,5 +102,13 @@ final class LayerStackManager: ObservableObject {
 
     func updatePiPAudioMeter(for id: UUID, rms: Float, peak: Float) {
         pipAudioMeters[id] = AudioMeter(rms: rms, peak: peak)
+    }
+
+    func beginEditingLayer(_ id: UUID) {
+        editingLayerID = id
+    }
+
+    func endEditing() {
+        editingLayerID = nil
     }
 }

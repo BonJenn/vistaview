@@ -63,6 +63,29 @@ struct CompositedLayersContent: View {
             case .audio:
                 Color.clear
             }
+
+        case .title(let overlay):
+            if layerManager.editingLayerID == model.id {
+                Color.clear
+            } else {
+                ZStack {
+                    Color.clear
+                    Text(overlay.text)
+                        .font(.system(size: overlay.fontSize, weight: .bold))
+                        .foregroundColor(Color(red: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, opacity: overlay.color.a))
+                        .multilineTextAlignment(overlay.alignment)
+                        .minimumScaleFactor(0.2)
+                        .lineLimit(nil)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: {
+                            switch overlay.alignment {
+                            case .leading: return .leading
+                            case .trailing: return .trailing
+                            case .center: return .center
+                            default: return .center
+                            }
+                        }())
+                }
+            }
         }
     }
-}// touch
+}

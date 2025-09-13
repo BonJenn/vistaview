@@ -1,15 +1,53 @@
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 enum LayerSource: Equatable, Identifiable {
     case camera(UUID)
     case media(MediaFile)
+    case title(TitleOverlay)
 
     var id: String {
         switch self {
         case .camera(let id): return "camera-\(id.uuidString)"
         case .media(let file): return "media-\(file.id)"
+        case .title(let overlay): return "title-\(overlay.id.uuidString)"
         }
+    }
+}
+
+struct RGBAColor: Equatable {
+    var r: Double
+    var g: Double
+    var b: Double
+    var a: Double
+
+    static let white = RGBAColor(r: 1, g: 1, b: 1, a: 1)
+    static let black = RGBAColor(r: 0, g: 0, b: 0, a: 1)
+}
+
+struct TitleOverlay: Equatable, Identifiable {
+    let id: UUID
+    var text: String
+    var fontSize: CGFloat
+    var color: RGBAColor
+    var alignment: TextAlignment
+    var autoFit: Bool
+
+    init(
+        id: UUID = UUID(),
+        text: String = "Title",
+        fontSize: CGFloat = 48,
+        color: RGBAColor = .white,
+        alignment: TextAlignment = .center,
+        autoFit: Bool = true
+    ) {
+        self.id = id
+        self.text = text
+        self.fontSize = fontSize
+        self.color = color
+        self.alignment = alignment
+        self.autoFit = autoFit
     }
 }
 

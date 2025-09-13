@@ -9,6 +9,9 @@ import Metal
 import ImageIO
 import CoreGraphics
 import VideoToolbox
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor
 class StreamingViewModel: ObservableObject {
@@ -715,6 +718,21 @@ class StreamingViewModel: ObservableObject {
                 case .audio:
                     overlayCG = nil
                 }
+            case .title(let overlay):
+                #if os(macOS)
+                let baseSize = CGSize(width: base.width, height: base.height)
+                let targetSize = CGSize(width: baseSize.width * model.sizeNorm.width,
+                                        height: baseSize.height * model.sizeNorm.height)
+                overlayCG = makeTitleCGImage(
+                    text: overlay.text,
+                    fontSize: overlay.fontSize,
+                    color: overlay.color,
+                    alignment: overlay.alignment,
+                    size: targetSize
+                )
+                #else
+                overlayCG = nil
+                #endif
             }
             if let image = overlayCG {
                 snapshots.append(OverlaySnapshot(image: image, centerNorm: model.centerNorm, sizeNorm: model.sizeNorm, rotationDegrees: model.rotationDegrees, opacity: model.opacity))
@@ -872,6 +890,54 @@ class StreamingViewModel: ObservableObject {
             kCGImageSourceShouldCache: true as CFBoolean
         ] as CFDictionary)
     }
+
+    #if os(macOS)
+    private func makeTitleCGImage(text: String, fontSize: CGFloat, color: RGBAColor, alignment: TextAlignment, size: CGSize) -> CGImage? {
+        let width = max(Int(size.width.rounded()), 2)
+        let height = max(Int(size.height.rounded()), 2)
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+
+        // Transparent background
+        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0))
+        ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+
+        let nsctx = NSGraphicsContext(cgContext: ctx, flipped: true)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsctx
+
+        let paragraph = NSMutableParagraphStyle()
+        switch alignment {
+        case .leading: paragraph.alignment = .left
+        case .trailing: paragraph.alignment = .right
+        default: paragraph.alignment = .center
+        }
+
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let nsColor = NSColor(srgbRed: color.r, green: color.g, blue: color.b, alpha: color.a)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: nsColor,
+            .paragraphStyle: paragraph
+        ]
+
+        let inset: CGFloat = max(4, fontSize * 0.15)
+        let drawRect = CGRect(x: inset, y: inset, width: CGFloat(width) - inset*2, height: CGFloat(height) - inset*2)
+        let attributed = NSAttributedString(string: text, attributes: attrs)
+        attributed.draw(in: drawRect)
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        return ctx.makeImage()
+    }
+    #endif
 
     func resetAndSetupWithDevice(_ videoDevice: AVCaptureDevice) async {
         print("🔄 Resetting StreamingViewModel to use device: \(videoDevice.localizedName)")

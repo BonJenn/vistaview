@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct LayersInteractiveOverlay: View {
     @EnvironmentObject var layerManager: LayerStackManager
@@ -15,6 +18,7 @@ struct LayersInteractiveOverlay: View {
                         onSelect: { layerManager.selectedLayerID = layer.id },
                         onUpdate: { updated in layerManager.update(updated) }
                     )
+                    .environmentObject(layerManager)
                 }
             }
         }
@@ -29,9 +33,14 @@ private struct LayerHandleView: View {
     var onSelect: () -> Void
     var onUpdate: (CompositedLayer) -> Void
 
+    @EnvironmentObject private var layerManager: LayerStackManager
+
     @State private var dragStartCenter = CGPoint.zero
     @State private var dragStartSize = CGSize.zero
     @State private var activeHandle: Handle?
+    @State private var isEditingTitle = false
+    @State private var editText: String = ""
+    @FocusState private var titleFocused: Bool
 
     enum Handle: CaseIterable {
         case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
@@ -59,6 +68,33 @@ private struct LayerHandleView: View {
         }
     }
 
+    // Measure text precisely (macOS) and return tight bounding size
+    private func measuredTextSize(_ text: String, fontSize: CGFloat, maxWidth: CGFloat) -> CGSize {
+        #if os(macOS)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
+            .paragraphStyle: paragraph
+        ]
+        let bound = NSSize(width: maxWidth, height: .greatestFiniteMagnitude)
+        let rect = (text as NSString).boundingRect(
+            with: bound,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attrs
+        )
+        // Add a small font-metric fudge to ensure no descender clipping
+        let ascent = NSFont.systemFont(ofSize: fontSize, weight: .bold).ascender
+        let descent = abs(NSFont.systemFont(ofSize: fontSize, weight: .bold).descender)
+        let leading: CGFloat = 2
+        let lineHeight = ascent + descent + leading
+        let h = max(rect.height, lineHeight)
+        return CGSize(width: ceil(rect.width), height: ceil(h))
+        #else
+        return CGSize(width: 200, height: fontSize * 1.35)
+        #endif
+    }
+
     var body: some View {
         ZStack {
             // Select/move gesture area
@@ -71,10 +107,99 @@ private struct LayerHandleView: View {
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
                 .contentShape(Rectangle())
+                .highPriorityGesture(
+                    TapGesture(count: 2).onEnded {
+                        onSelect()
+                        if case .title(let overlay) = layer.source {
+                            editText = overlay.text
+                            isEditingTitle = true
+                            layerManager.beginEditingLayer(layer.id)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                                titleFocused = true
+                            }
+                        }
+                    }
+                )
+                .simultaneousGesture(
+                    TapGesture(count: 1).onEnded { onSelect() }
+                )
                 .gesture(dragMoveGesture())
-                .onTapGesture {
-                    onSelect()
+
+            // Live-updating, precisely-sized editor (no clipping, single visible layer)
+            if isSelected, isEditingTitle, case .title(let overlay) = layer.source {
+                let textSize = measuredTextSize(
+                    editText.isEmpty ? " " : editText,
+                    fontSize: overlay.fontSize,
+                    maxWidth: canvasSize.width * 0.95
+                )
+                let padW: CGFloat = 22
+                let padH: CGFloat = 22
+                let fieldW = max(60, textSize.width + padW)
+                let fieldH = max(overlay.fontSize + padH * 0.5, textSize.height + padH)
+
+                TextField("", text: Binding(
+                    get: { editText },
+                    set: { editText = $0 }
+                ))
+                .focused($titleFocused)
+                .textFieldStyle(PlainTextFieldStyle()) // avoid border-induced clipping
+                .font(.system(size: overlay.fontSize, weight: .bold))
+                .foregroundColor(Color.white)
+                .frame(width: fieldW, height: fieldH, alignment: .center)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.black.opacity(0.35))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.blue.opacity(0.6), lineWidth: 2)
+                )
+                .position(x: rect.midX, y: rect.midY)
+                .onChange(of: editText) { _, newValue in
+                    var updated = layer
+                    if case .title(var ov) = updated.source {
+                        ov.text = newValue
+                        updated.source = .title(ov)
+
+                        if ov.autoFit {
+                            // Auto-fit layer to measured size
+                            let tSize = measuredTextSize(newValue.isEmpty ? " " : newValue, fontSize: ov.fontSize, maxWidth: canvasSize.width * 0.95)
+                            let desiredW = tSize.width + padW
+                            let desiredH = tSize.height + padH
+                            let minW = max(canvasSize.width * 0.05, 24)
+                            let minH = max(canvasSize.height * 0.05, 20)
+                            let wNorm = min(1.0, max(minW, desiredW) / canvasSize.width)
+                            let hNorm = min(1.0, max(minH, desiredH) / canvasSize.height)
+                            updated.sizeNorm = CGSize(width: wNorm, height: hNorm)
+                        }
+                        onUpdate(updated)
+                    }
                 }
+                .onChange(of: layer) { _, _ in
+                    if case .title(let ov) = layer.source, ov.autoFit {
+                        // Refit on external changes (e.g. font size)
+                        var updated = layer
+                        let text = isEditingTitle ? editText : ov.text
+                        let tSize = measuredTextSize(text.isEmpty ? " " : text, fontSize: ov.fontSize, maxWidth: canvasSize.width * 0.95)
+                        let desiredW = tSize.width + padW
+                        let desiredH = tSize.height + padH
+                        let minW = max(canvasSize.width * 0.05, 24)
+                        let minH = max(canvasSize.height * 0.05, 20)
+                        let wNorm = min(1.0, max(minW, desiredW) / canvasSize.width)
+                        let hNorm = min(1.0, max(minH, desiredH) / canvasSize.height)
+                        updated.sizeNorm = CGSize(width: wNorm, height: hNorm)
+                        onUpdate(updated)
+                    }
+                }
+                .onSubmit {
+                    isEditingTitle = false
+                    layerManager.endEditing()
+                }
+                .onExitCommand {
+                    isEditingTitle = false
+                    layerManager.endEditing()
+                }
+            }
 
             if isSelected {
                 ForEach(Handle.allCases, id: \.self) { h in
@@ -124,7 +249,6 @@ private struct LayerHandleView: View {
                 var dW: CGFloat = value.translation.width / canvasSize.width
                 var dH: CGFloat = value.translation.height / canvasSize.height
 
-                // Corner handles scale both axes; edges scale one axis
                 var newSize = dragStartSize
                 var newCenter = dragStartCenter
 

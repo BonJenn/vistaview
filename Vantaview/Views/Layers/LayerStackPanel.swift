@@ -31,6 +31,23 @@ struct LayerStackPanel: View {
                             }
                         }
                     }
+                    Section("Add Overlay") {
+                        Button("Title") {
+                            var layer = CompositedLayer(
+                                name: "Title",
+                                isEnabled: true,
+                                zIndex: (layerManager.layers.map { $0.zIndex }.max() ?? 0) + 1,
+                                centerNorm: CGPoint(x: 0.5, y: 0.2),
+                                sizeNorm: CGSize(width: 0.6, height: 0.2),
+                                rotationDegrees: 0,
+                                opacity: 1.0,
+                                source: .title(TitleOverlay())
+                            )
+                            layerManager.layers.append(layer)
+                            layerManager.selectedLayerID = layer.id
+                            layerManager.objectWillChange.send()
+                        }
+                    }
                 } label: {
                     Image(systemName: "plus.circle")
                 }
@@ -300,6 +317,101 @@ struct LayerStackPanel: View {
                         .frame(height: 10)
                 }
             }
+
+            if case .title(let overlay) = layer.source {
+                Divider().padding(.vertical, 4)
+                Text("Title")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("Text", text: Binding(
+                        get: { overlay.text },
+                        set: { newText in
+                            var l = layer
+                            if case .title(var ov) = l.source {
+                                ov.text = newText
+                                l.source = .title(ov)
+                                layerManager.update(l)
+                            }
+                        }
+                    ))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.caption2)
+
+                    HStack {
+                        Text("Font Size").font(.caption2).foregroundColor(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(overlay.fontSize) },
+                            set: { v in
+                                var l = layer
+                                if case .title(var ov) = l.source {
+                                    ov.fontSize = CGFloat(v.clamped(to: 8...200))
+                                    l.source = .title(ov)
+                                    layerManager.update(l)
+                                }
+                            }
+                        ), in: 8...200)
+                        Text("\(Int(overlay.fontSize))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
+
+                    HStack {
+                        Text("Color").font(.caption2).foregroundColor(.secondary)
+                        ColorPicker("", selection: Binding(
+                            get: { Color(red: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, opacity: overlay.color.a) },
+                            set: { c in
+                                var l = layer
+                                if case .title(var ov) = l.source {
+                                    if let comps = c.toRGBA() {
+                                        ov.color = comps
+                                        l.source = .title(ov)
+                                        layerManager.update(l)
+                                    }
+                                }
+                            }
+                        ))
+                        .labelsHidden()
+                        .frame(width: 120)
+                    }
+
+                    HStack {
+                        Text("Alignment").font(.caption2).foregroundColor(.secondary)
+                        Picker("", selection: Binding(
+                            get: { overlay.alignment },
+                            set: { value in
+                                var l = layer
+                                if case .title(var ov) = l.source {
+                                    ov.alignment = value
+                                    l.source = .title(ov)
+                                    layerManager.update(l)
+                                }
+                            }
+                        )) {
+                            Text("Left").tag(TextAlignment.leading)
+                            Text("Center").tag(TextAlignment.center)
+                            Text("Right").tag(TextAlignment.trailing)
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+                        .labelsHidden()
+                    }
+
+                    Toggle("Auto-fit to text", isOn: Binding(
+                        get: { overlay.autoFit },
+                        set: { v in
+                            var l = layer
+                            if case .title(var ov) = l.source {
+                                ov.autoFit = v
+                                l.source = .title(ov)
+                                layerManager.update(l)
+                            }
+                        }
+                    ))
+                    .font(.caption2)
+                }
+            }
         }
         .font(.caption2)
     }
@@ -310,6 +422,8 @@ struct LayerStackPanel: View {
             return "Camera"
         case .media(let file):
             return file.fileType == .image ? "Image" : "Video"
+        case .title:
+            return "Title"
         }
     }
 }

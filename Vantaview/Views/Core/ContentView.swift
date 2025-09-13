@@ -37,6 +37,8 @@ struct ContentView: View {
     @StateObject private var layerManager = LayerStackManager()
     @State private var suppressInitialAnimations = true
 
+    @StateObject private var scenesManager = ScenesManager()
+
     var body: some View {
         VStack(spacing: 0) {
             TopToolbarView(
@@ -63,7 +65,8 @@ struct ContentView: View {
                         selectedTab: $selectedTab,
                         showingFilePicker: $showingFilePicker,
                         mediaFiles: $mediaFiles,
-                        selectedPlatform: $selectedPlatform
+                        selectedPlatform: $selectedPlatform,
+                        scenesManager: scenesManager
                     )
                     .environmentObject(layerManager)
                 }
@@ -318,12 +321,15 @@ struct FinalCutProStyleView: View {
     @Binding var selectedPlatform: String
     @EnvironmentObject var layerManager: LayerStackManager
     @EnvironmentObject var licenseManager: LicenseManager
-    
+
+    @ObservedObject var scenesManager: ScenesManager
+
     @State private var showLayersSection = true
     @State private var showEffectsSection = true
     @State private var showOutputMappingSection = true
     @State private var showOutputControlsSection = true
-    
+    @State private var showScenesSection = true
+
     var body: some View {
         HSplitView {
             // Left Panel - Sources
@@ -345,6 +351,11 @@ struct FinalCutProStyleView: View {
             // Right Panel - Output & Streaming Controls
             ScrollView {
                 VStack(spacing: 0) {
+                    CollapsibleSection(title: "Scenes", isExpanded: $showScenesSection) {
+                        ScenesPanel(scenesManager: scenesManager, layerManager: layerManager)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+
                     CollapsibleSection(title: "Layers", isExpanded: $showLayersSection) {
                         LayerStackPanel(layerManager: layerManager, productionManager: productionManager)
                             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1234,7 +1245,7 @@ struct SimpleProgramMonitorView: View {
                             Image(systemName: "wand.and.stars")
                                 .font(.title)
                                 .foregroundColor(.white)
-                            Text("Drop Effect Here (Program)")
+                            Text("Drop Here")
                                 .font(.caption)
                                 .fontWeight(.bold)
                                 .foregroundColor(.white)
@@ -1258,6 +1269,58 @@ struct SimpleProgramMonitorView: View {
             return true
         } isTargeted: { targeted in
             isDropTargeted = targeted
+        }
+        .dropDestination(for: MediaFile.self) { items, location in
+            let norm = CGPoint(
+                x: (lastDropCanvasSize.width > 0) ? (location.x / lastDropCanvasSize.width) : 0.5,
+                y: (lastDropCanvasSize.height > 0) ? (location.y / lastDropCanvasSize.height) : 0.5
+            )
+            for file in items {
+                layerManager.addMediaLayer(file: file, centerNorm: norm)
+            }
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        }
+        .dropDestination(for: CameraFeedDragItem.self) { items, location in
+            let norm = CGPoint(
+                x: (lastDropCanvasSize.width > 0) ? (location.x / lastDropCanvasSize.width) : 0.5,
+                y: (lastDropCanvasSize.height > 0) ? (location.y / lastDropCanvasSize.height) : 0.5
+            )
+            for item in items {
+                if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.id == item.feedId }) {
+                    layerManager.addCameraLayer(feedId: feed.id, name: feed.device.displayName, centerNorm: norm)
+                }
+            }
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
+        }
+        .dropDestination(for: String.self) { items, location in
+            guard let text = items.first?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return false }
+            let norm = CGPoint(
+                x: (lastDropCanvasSize.width > 0) ? (location.x / lastDropCanvasSize.width) : 0.5,
+                y: (lastDropCanvasSize.height > 0) ? (location.y / lastDropCanvasSize.height) : 0.5
+            )
+            var layer = CompositedLayer(
+                name: "Title",
+                isEnabled: true,
+                zIndex: (layerManager.layers.map { $0.zIndex }.max() ?? 0) + 1,
+                centerNorm: norm,
+                sizeNorm: CGSize(width: 0.5, height: 0.2),
+                rotationDegrees: 0,
+                opacity: 1.0,
+                source: .title(TitleOverlay(text: text))
+            )
+            layerManager.layers.append(layer)
+            layerManager.selectedLayerID = layer.id
+            layerManager.objectWillChange.send()
+            #if os(macOS)
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+            #endif
+            return true
         }
     }
 }
