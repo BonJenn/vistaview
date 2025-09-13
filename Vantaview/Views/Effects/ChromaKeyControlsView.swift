@@ -67,6 +67,16 @@ struct ChromaKeyControlsView: View {
                 .padding(.horizontal, 12)
             }
 
+            GroupBox("Keying") {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Range widens tolerance around the eyedropped color (maps to \\"strength\\")
+                    interactiveSlider("Range", key: "strength", range: 0.0...1.0, step: 0.01)
+                    // Feather softens the transition (maps to \\"softness\\")
+                    interactiveSlider("Feather", key: "softness", range: 0.0...1.0, step: 0.01)
+                }
+                .padding(10)
+            }
+
             GroupBox("Background") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .top, spacing: 12) {
