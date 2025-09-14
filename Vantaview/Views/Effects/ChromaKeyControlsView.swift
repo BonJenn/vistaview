@@ -15,10 +15,9 @@ struct ChromaKeyControlsView: View {
             },
             set: { newValue in
                 if let ns = NSColor(newValue).usingColorSpace(.sRGB) {
-                    effect.parameters["keyR"]?.value = Float(ns.redComponent)
-                    effect.parameters["keyG"]?.value = Float(ns.greenComponent)
-                    effect.parameters["keyB"]?.value = Float(ns.blueComponent)
-                    effect.objectWillChange.send()
+                    safeSet("keyR", Float(ns.redComponent))
+                    safeSet("keyG", Float(ns.greenComponent))
+                    safeSet("keyB", Float(ns.blueComponent))
                 }
             }
         )
@@ -27,7 +26,7 @@ struct ChromaKeyControlsView: View {
     private var viewMatteBinding: Binding<Bool> {
         Binding<Bool>(
             get: { (effect.parameters["viewMatte"]?.value ?? 0.0) > 0.5 },
-            set: { effect.parameters["viewMatte"]?.value = $0 ? 1.0 : 0.0 }
+            set: { safeSet("viewMatte", $0 ? 1.0 : 0.0) }
         )
     }
     
@@ -136,7 +135,7 @@ struct ChromaKeyControlsView: View {
                                 
                                 Toggle("Loop", isOn: Binding(
                                     get: { (effect.parameters["bgLoop"]?.value ?? 1.0) > 0.5 },
-                                    set: { effect.parameters["bgLoop"]?.value = $0 ? 1.0 : 0.0 }
+                                    set: { safeSet("bgLoop", $0 ? 1.0 : 0.0) }
                                 ))
                                 .toggleStyle(SwitchToggleStyle(tint: .teal))
                                 .controlSize(.small)
@@ -149,7 +148,7 @@ struct ChromaKeyControlsView: View {
                                     .foregroundColor(.secondary)
                                 Picker("", selection: Binding<Int>(
                                     get: { Int(effect.parameters["bgFillMode"]?.value ?? 0.0) },
-                                    set: { effect.parameters["bgFillMode"]?.value = Float($0); effect.objectWillChange.send() }
+                                    set: { safeSet("bgFillMode", Float($0)) }
                                 )) {
                                     Text("Contain").tag(0)
                                     Text("Cover").tag(1)
@@ -226,7 +225,7 @@ struct ChromaKeyControlsView: View {
             Slider(
                 value: Binding(
                     get: { effect.parameters[key]?.value ?? 0 },
-                    set: { effect.parameters[key]?.value = $0; effect.objectWillChange.send() }
+                    set: { safeSet(key, $0) }
                 ),
                 in: range,
                 step: step,
@@ -247,20 +246,18 @@ struct ChromaKeyControlsView: View {
     }
     
     private func setKeyPreset(r: Double, g: Double, b: Double) {
-        effect.parameters["keyR"]?.value = Float(r)
-        effect.parameters["keyG"]?.value = Float(g)
-        effect.parameters["keyB"]?.value = Float(b)
-        effect.objectWillChange.send()
+        safeSet("keyR", Float(r))
+        safeSet("keyG", Float(g))
+        safeSet("keyB", Float(b))
     }
     
     private func startEyedropper() {
         let sampler = NSColorSampler()
         sampler.show { color in
             guard let c = color?.usingColorSpace(.sRGB) else { return }
-            effect.parameters["keyR"]?.value = Float(c.redComponent)
-            effect.parameters["keyG"]?.value = Float(c.greenComponent)
-            effect.parameters["keyB"]?.value = Float(c.blueComponent)
-            effect.objectWillChange.send()
+            safeSet("keyR", Float(c.redComponent))
+            safeSet("keyG", Float(c.greenComponent))
+            safeSet("keyB", Float(c.blueComponent))
         }
     }
     
@@ -278,26 +275,31 @@ struct ChromaKeyControlsView: View {
 
 private extension ChromaKeyControlsView {
     func quickCenter() {
-        effect.parameters["bgOffsetX"]?.value = 0.0
-        effect.parameters["bgOffsetY"]?.value = 0.0
-        effect.objectWillChange.send()
+        safeSet("bgOffsetX", 0.0)
+        safeSet("bgOffsetY", 0.0)
     }
     
     func quickFitContain() {
-        effect.parameters["bgFillMode"]?.value = 0.0 // Contain (letter/pillar)
-        effect.parameters["bgScale"]?.value = 1.0
-        effect.parameters["bgOffsetX"]?.value = 0.0
-        effect.parameters["bgOffsetY"]?.value = 0.0
-        effect.parameters["bgRotation"]?.value = 0.0
-        effect.objectWillChange.send()
+        safeSet("bgFillMode", 0.0)
+        safeSet("bgScale", 1.0)
+        safeSet("bgOffsetX", 0.0)
+        safeSet("bgOffsetY", 0.0)
+        safeSet("bgRotation", 0.0)
     }
     
     func quickFillCover() {
-        effect.parameters["bgFillMode"]?.value = 1.0 // Cover (crop)
-        effect.parameters["bgScale"]?.value = 1.0
-        effect.parameters["bgOffsetX"]?.value = 0.0
-        effect.parameters["bgOffsetY"]?.value = 0.0
-        effect.parameters["bgRotation"]?.value = 0.0
+        safeSet("bgFillMode", 1.0)
+        safeSet("bgScale", 1.0)
+        safeSet("bgOffsetX", 0.0)
+        safeSet("bgOffsetY", 0.0)
+        safeSet("bgRotation", 0.0)
+    }
+    
+    func safeSet(_ key: String, _ value: Float) {
+        if var p = effect.parameters[key] {
+            p.value = value
+            effect.parameters[key] = p
+        }
         effect.objectWillChange.send()
     }
 }

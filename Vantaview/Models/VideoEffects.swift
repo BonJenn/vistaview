@@ -100,7 +100,10 @@ class BaseVideoEffect: VideoEffect, ObservableObject {
     
     func reset() {
         for (key, parameter) in parameters {
-            parameters[key]?.value = parameter.defaultValue
+            if var p = parameters[key] {
+                p.value = parameter.defaultValue
+                parameters[key] = p
+            }
         }
         objectWillChange.send()
     }

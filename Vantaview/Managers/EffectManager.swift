@@ -147,7 +147,10 @@ class EffectChain: ObservableObject, Identifiable {
     private func copyParameters(from source: any VideoEffect, to destination: any VideoEffect) {
         var dest = destination as! BaseVideoEffect
         for (key, parameter) in source.parameters {
-            dest.parameters[key]?.value = parameter.value
+            if var p = dest.parameters[key] {
+                p.value = parameter.value
+                dest.parameters[key] = p
+            }
         }
         dest.isEnabled = source.isEnabled
     }
