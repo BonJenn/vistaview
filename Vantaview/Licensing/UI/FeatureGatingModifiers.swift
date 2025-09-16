@@ -29,7 +29,7 @@ struct FeatureGatingModifier: ViewModifier {
                         showPaywall = true
                     }
                     .padding()
-                    .background(EmptyView()) // keep overlay non-expanding
+                    .background(EmptyView())
                     .transition(.opacity)
                 }
             }
@@ -95,7 +95,6 @@ struct FeatureLockedOverlay: View {
         .padding(12)
         .background(.ultraThinMaterial)
         .cornerRadius(12)
-        // .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -211,7 +210,7 @@ struct LicenseStatusBanner: View {
             showPaywall = true
         case .grace, .error:
             Task {
-                await licenseManager.refreshLicense(sessionToken: nil) // TODO: Get actual session token
+                await licenseManager.refreshLicense(sessionToken: nil, userID: nil)
             }
         default:
             showPaywall = true
@@ -222,7 +221,6 @@ struct LicenseStatusBanner: View {
 // MARK: - View Extensions
 
 extension View {
-    /// Gate this view behind a feature requirement
     func gated(_ feature: FeatureKey, licenseManager: LicenseManager) -> some View {
         modifier(FeatureGatingModifier(feature: feature, licenseManager: licenseManager))
     }
@@ -230,7 +228,6 @@ extension View {
 
 // MARK: - Utility Functions for MainActor Context
 
-/// Check if a feature is enabled (for imperative usage in MainActor context)
 @MainActor
 func require(_ feature: FeatureKey, licenseManager: LicenseManager) -> Bool {
     return licenseManager.isEnabled(feature)

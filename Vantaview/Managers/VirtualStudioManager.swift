@@ -2268,7 +2268,8 @@ final class VirtualStudioManager: ObservableObject {
             print("🎯 Testing selection on: \(firstObj.name)")
             firstObj.setSelected(true)
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            Task {
+                try await Task.sleep(for: .seconds(3))
                 firstObj.setSelected(false)
                 print("🔄 Deselected test object")
             }

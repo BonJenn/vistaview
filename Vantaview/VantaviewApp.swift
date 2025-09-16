@@ -1,10 +1,16 @@
 import SwiftUI
 import Cocoa
+import os
 
+@MainActor
 @main
 struct VantaviewApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    
     @StateObject private var authManager = AuthenticationManager()
     @StateObject private var licenseManager = LicenseManager()
+    
+    private let logger = Logger(subsystem: "app.vantaview", category: "App")
     
     var body: some Scene {
         WindowGroup {
@@ -12,25 +18,34 @@ struct VantaviewApp: App {
                 if authManager.isAuthenticated {
                     ContentView()
                         .environmentObject(licenseManager)
-                        .onAppear {
-                            setupLicensing()
+                        .task {
+                            await bootstrapLicensing()
                         }
-                        .onChange(of: authManager.accessToken) { _, newToken in
-                            if let token = newToken {
-                                Task {
-                                    await licenseManager.refreshLicense(sessionToken: token, userID: authManager.userID)
-                                }
-                            }
+                        .task(id: authManager.accessToken) {
+                            await handleTokenChange()
                         }
-                        .frame(minWidth: 1200, minHeight: 800) // Full app size
+                        .frame(minWidth: 1200, minHeight: 800)
                 } else {
                     SignInView(authManager: authManager)
-                        .frame(width: 400, height: 650) // Adjusted for proper fit
+                        .frame(width: 400, height: 650)
                 }
             }
             .environmentObject(authManager)
+            .onChange(of: scenePhase) { _, newPhase in
+                switch newPhase {
+                case .active:
+                    guard authManager.isAuthenticated,
+                          let token = authManager.accessToken,
+                          let userID = authManager.userID else { return }
+                    licenseManager.startAutomaticRefresh(sessionToken: token, userID: userID)
+                case .inactive, .background:
+                    licenseManager.stopAutomaticRefresh()
+                @unknown default:
+                    licenseManager.stopAutomaticRefresh()
+                }
+            }
         }
-        .windowResizability(authManager.isAuthenticated ? .contentSize : .contentSize)
+        .windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 if authManager.isAuthenticated {
@@ -42,7 +57,9 @@ struct VantaviewApp: App {
                     Divider()
                     
                     Button("Sign Out") {
+                        licenseManager.stopAutomaticRefresh()
                         Task {
+                            try? Task.checkCancellation()
                             await authManager.signOut()
                         }
                     }
@@ -65,28 +82,46 @@ struct VantaviewApp: App {
         }
     }
     
-    private func setupLicensing() {
-        guard let userID = authManager.userID,
-              let sessionToken = authManager.accessToken else {
-            return
+    private func bootstrapLicensing() async {
+        do {
+            try Task.checkCancellation()
+            guard authManager.isAuthenticated,
+                  let token = authManager.accessToken,
+                  let userID = authManager.userID else {
+                return
+            }
+            
+            licenseManager.setCurrentUser(userID)
+            try await licenseManager.refreshLicense(sessionToken: token, userID: userID)
+            licenseManager.startAutomaticRefresh(sessionToken: token, userID: userID)
+        } catch is CancellationError {
+            logger.debug("bootstrapLicensing cancelled")
+        } catch {
+            logger.error("bootstrapLicensing failed: \(error.localizedDescription, privacy: .public)")
         }
-        
-        #if DEBUG
-        licenseManager.debugImpersonatedTier = .pro
-        licenseManager.debugOfflineMode = false
-        licenseManager.debugExpiredMode = false
-        #endif
-        
-        // Set current user for license caching
-        licenseManager.setCurrentUser(userID)
-        
-        // Fetch initial license
-        Task {
-            await licenseManager.refreshLicense(sessionToken: sessionToken, userID: userID)
+    }
+    
+    private func handleTokenChange() async {
+        do {
+            try Task.checkCancellation()
+            guard authManager.isAuthenticated else {
+                licenseManager.stopAutomaticRefresh()
+                licenseManager.setCurrentUser(nil)
+                return
+            }
+            guard let token = authManager.accessToken,
+                  let userID = authManager.userID else {
+                licenseManager.stopAutomaticRefresh()
+                return
+            }
+            licenseManager.setCurrentUser(userID)
+            try await licenseManager.refreshLicense(sessionToken: token, userID: userID)
+            licenseManager.startAutomaticRefresh(sessionToken: token, userID: userID)
+        } catch is CancellationError {
+            logger.debug("handleTokenChange cancelled")
+        } catch {
+            logger.error("handleTokenChange failed: \(error.localizedDescription, privacy: .public)")
         }
-        
-        // Start automatic refresh with real session token
-        licenseManager.startAutomaticRefresh(sessionToken: sessionToken)
     }
     
     private func showAccountWindow() {
