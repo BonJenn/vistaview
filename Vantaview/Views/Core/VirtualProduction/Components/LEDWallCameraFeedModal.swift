@@ -15,35 +15,23 @@ struct LEDWallCameraFeedModal: View {
     
     let onFeedConnected: (UUID?) -> Void
     
-    // Layout constants
-    private let spacing1: CGFloat = 4   // Tight spacing
+    private let spacing1: CGFloat = 4
     private let spacing2: CGFloat = 8
     private let spacing3: CGFloat = 16
     private let spacing4: CGFloat = 24
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             modalHeader
-            
             Divider()
-            
-            // Content
             ScrollView {
                 VStack(spacing: spacing4) {
-                    // LED Wall info
                     ledWallInfoView
-                    
-                    // Debug info
                     debugInfoView
-                    
-                    // Available camera feeds
                     cameraFeedList
                 }
                 .padding(.all, spacing4)
             }
-            
-            // Actions
             Divider()
             actionButtons
                 .padding(.all, spacing4)
@@ -59,8 +47,6 @@ struct LEDWallCameraFeedModal: View {
             refreshCameraData()
         }
     }
-    
-    // MARK: - Header
     
     private var modalHeader: some View {
         HStack(spacing: spacing3) {
@@ -102,8 +88,6 @@ struct LEDWallCameraFeedModal: View {
         .background(.black.opacity(0.05))
     }
     
-    // MARK: - LED Wall Info
-    
     private var ledWallInfoView: some View {
         HStack(spacing: spacing3) {
             VStack(alignment: .leading, spacing: spacing2) {
@@ -142,8 +126,6 @@ struct LEDWallCameraFeedModal: View {
         .background(ledWall.isDisplayingCameraFeed ? Color.green.opacity(0.1) : Color.gray.opacity(0.15))
         .cornerRadius(8)
     }
-    
-    // MARK: - Debug Info
     
     private var debugInfoView: some View {
         VStack(alignment: .leading, spacing: spacing2) {
@@ -184,15 +166,12 @@ struct LEDWallCameraFeedModal: View {
         .cornerRadius(6)
     }
     
-    // MARK: - Camera Feed List
-    
     private var cameraFeedList: some View {
         VStack(alignment: .leading, spacing: spacing3) {
             Text("Camera Management")
                 .font(.system(.headline, design: .default, weight: .medium))
                 .foregroundColor(.primary)
             
-            // Available Devices Section
             if !cameraFeedManager.availableDevices.isEmpty {
                 VStack(alignment: .leading, spacing: spacing2) {
                     Text("Available Camera Devices")
@@ -222,7 +201,6 @@ struct LEDWallCameraFeedModal: View {
                 .padding(.vertical, spacing4)
             }
             
-            // Active Feeds Section
             if !cameraFeedManager.activeFeeds.isEmpty {
                 Divider()
                 
@@ -238,8 +216,6 @@ struct LEDWallCameraFeedModal: View {
             }
         }
     }
-    
-    // MARK: - Device Rows
     
     private func availableDeviceRow(_ device: CameraDevice) -> some View {
         let hasActiveFeed = cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
@@ -305,63 +281,9 @@ struct LEDWallCameraFeedModal: View {
             connectFeed(feed)
         } label: {
             HStack(spacing: spacing3) {
-                // Feed preview thumbnail
-                Group {
-                    if let nsImage = feed.previewNSImage {
-                        // Use LiveNSImageView wrapper for better live updates
-                        LiveNSImageView(nsImage: nsImage)
-                            .aspectRatio(16/9, contentMode: .fill)
-                            .frame(width: 80, height: 45)
-                            .clipped()
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.green, lineWidth: 1)
-                            )
-                            .id("live-thumbnail-\(feed.id)-\(feed.frameCount)") // Force updates with frame count
-                    } else if let previewImage = feed.previewImage {
-                        // Fallback to CGImage with forced updates
-                        Image(decorative: previewImage, scale: 1.0)
-                            .resizable()
-                            .aspectRatio(16/9, contentMode: .fill)
-                            .frame(width: 80, height: 45)
-                            .clipped()
-                            .cornerRadius(6)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.green, lineWidth: 1)
-                            )
-                            .id("live-cgimage-thumbnail-\(feed.id)-\(feed.frameCount)") // Force updates
-                    } else {
-                        Rectangle()
-                            .fill(Color.black)
-                            .frame(width: 80, height: 45)
-                            .overlay(
-                                VStack(spacing: 2) {
-                                    if feed.connectionStatus == .connected {
-                                        ProgressView()
-                                            .scaleEffect(0.5)
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .green))
-                                        
-                                        Text("Loading...")
-                                            .font(.system(.caption2, design: .default, weight: .medium))
-                                            .foregroundColor(.green)
-                                    } else {
-                                        Image(systemName: "camera.fill")
-                                            .font(.system(.callout, design: .default, weight: .medium))
-                                            .foregroundColor(.white)
-                                        
-                                        Text("No Preview")
-                                            .font(.system(.caption2, design: .default, weight: .medium))
-                                            .foregroundColor(.white)
-                                    }
-                                }
-                            )
-                            .cornerRadius(6)
-                    }
-                }
+                CameraFeedThumbnailView(feed: feed)
+                    .frame(width: 80, height: 45)
                 
-                // Feed info
                 VStack(alignment: .leading, spacing: spacing2) {
                     Text(feed.device.displayName)
                         .font(.system(.body, design: .default, weight: .medium))
@@ -380,7 +302,6 @@ struct LEDWallCameraFeedModal: View {
                 
                 Spacer()
                 
-                // Connection status
                 VStack(alignment: .trailing, spacing: spacing2) {
                     HStack(spacing: spacing2) {
                         Circle()
@@ -392,7 +313,6 @@ struct LEDWallCameraFeedModal: View {
                             .foregroundColor(feed.connectionStatus.color)
                     }
                     
-                    // Already connected indicator
                     if isCurrentlyConnected {
                         Text("Connected")
                             .font(.system(.caption2, design: .default, weight: .semibold))
@@ -425,11 +345,8 @@ struct LEDWallCameraFeedModal: View {
         .opacity(feed.connectionStatus == .connected ? 1.0 : 0.6)
     }
     
-    // MARK: - Action Buttons
-    
     private var actionButtons: some View {
         HStack(spacing: spacing3) {
-            // Disconnect button (if connected)
             if ledWall.isDisplayingCameraFeed {
                 Button(action: {
                     disconnectFeed()
@@ -452,14 +369,12 @@ struct LEDWallCameraFeedModal: View {
             
             Spacer()
             
-            // Cancel button
             Button("Cancel") {
                 isPresented = false
             }
             .font(.system(.body, design: .default, weight: .medium))
             .foregroundColor(.secondary)
             
-            // Debug button
             Button("Debug Cameras") {
                 debugCameras()
             }
@@ -468,50 +383,25 @@ struct LEDWallCameraFeedModal: View {
         }
     }
     
-    // MARK: - Actions
-    
     private func refreshCameraData() {
         Task {
-            print("🔄 Refreshing camera data...")
             await cameraFeedManager.forceRefreshDevices()
-            
-            print("📱 Available devices after refresh: \(cameraFeedManager.availableDevices.count)")
-            for device in cameraFeedManager.availableDevices {
-                print("  - \(device.displayName) (\(device.deviceType.rawValue)) - Available: \(device.isAvailable)")
-            }
-            
-            print("📺 Active feeds: \(cameraFeedManager.activeFeeds.count)")
-            for feed in cameraFeedManager.activeFeeds {
-                print("  - \(feed.device.displayName) - Status: \(feed.connectionStatus.displayText)")
-            }
         }
     }
     
     private func debugCameras() {
         Task {
-            print("🧪 Running camera debug...")
             await cameraFeedManager.debugCameraDetection()
         }
     }
     
     private func startDeviceFeed(_ device: CameraDevice) {
         Task {
-            print("🎬 Starting feed for device: \(device.displayName)")
-            let feed = await cameraFeedManager.startFeed(for: device)
-            if let feed = feed {
-                print("✅ Feed started successfully: \(feed.device.displayName)")
-            } else {
-                print("❌ Failed to start feed for: \(device.displayName)")
-            }
+            _ = await cameraFeedManager.startFeed(for: device)
         }
     }
     
     private func connectFeed(_ feed: CameraFeed) {
-        print("🔗 LEDWallCameraFeedModal: Connecting feed \(feed.id) to LED wall \(ledWall.name)")
-        print("   - Feed status: \(feed.connectionStatus.displayText)")
-        print("   - Feed has preview: \(feed.previewImage != nil)")
-        print("   - Feed device: \(feed.device.displayName)")
-        
         onFeedConnected(feed.id)
         isPresented = false
     }
@@ -522,7 +412,54 @@ struct LEDWallCameraFeedModal: View {
     }
 }
 
-// MARK: - Preview
+struct CameraFeedThumbnailView: View {
+    @ObservedObject var feed: CameraFeed
+    
+    var body: some View {
+        ZStack {
+            if let cg = feed.previewImage {
+                Image(decorative: cg, scale: 1.0)
+                    .resizable()
+                    .aspectRatio(16/9, contentMode: .fill)
+            } else if let ns = feed.previewNSImage {
+                Image(nsImage: ns)
+                    .resizable()
+                    .aspectRatio(16/9, contentMode: .fill)
+            } else {
+                Rectangle()
+                    .fill(Color.black)
+                    .overlay(
+                        VStack(spacing: 2) {
+                            if feed.connectionStatus == .connected {
+                                ProgressView()
+                                    .scaleEffect(0.5)
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .green))
+                                
+                                Text("Loading...")
+                                    .font(.system(.caption2, design: .default, weight: .medium))
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "camera.fill")
+                                    .font(.system(.callout, design: .default, weight: .medium))
+                                    .foregroundColor(.white)
+                                
+                                Text("No Preview")
+                                    .font(.system(.caption2, design: .default, weight: .medium))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    )
+            }
+        }
+        .clipped()
+        .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.green, lineWidth: 1)
+        )
+        .id("live-thumb-\(feed.id)-\(feed.frameCount)")
+    }
+}
 
 #Preview {
     @StateObject var cameraDeviceManager = CameraDeviceManager()
@@ -539,10 +476,9 @@ struct LEDWallCameraFeedModal: View {
         cameraFeedManager: cameraFeedManager,
         isPresented: $isPresented
     ) { feedID in
-        print("Selected feed ID: \(feedID?.uuidString ?? "nil")")
+        _ = feedID
     }
     .onAppear {
-        // Add some mock devices for preview
         cameraDeviceManager.availableDevices = CameraDeviceManager.mockDevices
     }
 }

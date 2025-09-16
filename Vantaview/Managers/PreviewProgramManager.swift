@@ -297,14 +297,16 @@ final class PreviewProgramManager: ObservableObject {
             return
         }
         
-        // EFFICIENT TAKE: Transfer existing resources instead of recreating them
+        if case .camera(let feed) = previewSource {
+            unifiedProductionManager.switchProgram(to: feed.device.deviceID)
+        }
+        
         let oldProgramSource = programSource
         let oldProgramPlayer = programPlayer
         let oldProgramAVPlayback = programAVPlayback
         let oldProgramAudioTap = programAudioTap
         let oldProgramTimeObserver = programTimeObserver
         
-        // Clean up old program resources first
         if let observer = oldProgramTimeObserver {
             oldProgramPlayer?.removeTimeObserver(observer)
         }
@@ -313,7 +315,6 @@ final class PreviewProgramManager: ObservableObject {
             file.url.stopAccessingSecurityScopedResource()
         }
         
-        // TRANSFER: Move preview to program (direct transfer, no recreation)
         programSource = previewSource
         programPlayer = previewPlayer
         programAVPlayback = previewAVPlayback
@@ -329,15 +330,12 @@ final class PreviewProgramManager: ObservableObject {
         programRate = previewRate
         programVolume = previewVolume
         
-        // Update effect runner for program
         if let programAVPlayback = programAVPlayback {
             programAVPlayback.setEffectRunner(programEffectRunner)
         }
         
-        // Copy effects
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
         
-        // COPY chroma key background by matching effect types, not just indices
         if let prevChain = effectManager.getPreviewEffectChain(),
            let progChain = effectManager.getProgramEffectChain() {
             
@@ -361,7 +359,6 @@ final class PreviewProgramManager: ObservableObject {
         
         programEffectRunner?.setChain(getProgramEffectChain())
         
-        // Clear preview after successful transfer (don't stop resources, just clear references)
         previewSource = .none
         previewPlayer = nil
         previewAVPlayback = nil
@@ -376,7 +373,6 @@ final class PreviewProgramManager: ObservableObject {
         
         crossfaderValue = 0.0
         
-        // IMMEDIATE UI update since we've transferred existing resources
         objectWillChange.send()
         
         print("✅ TAKE completed - preview resources transferred to program")

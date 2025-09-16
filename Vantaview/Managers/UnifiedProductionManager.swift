@@ -7,6 +7,7 @@ import Foundation
 import SwiftUI
 import SceneKit
 import Metal
+import AVFoundation
 
 @MainActor
 final class UnifiedProductionManager: ObservableObject {
@@ -44,6 +45,26 @@ final class UnifiedProductionManager: ObservableObject {
     // Add media thumbnail manager
     let mediaThumbnailManager = MediaThumbnailManager()
     
+    // MARK: - Live Camera Flow (Program/Preview)
+    @Published var selectedProgramCameraID: String?
+    @Published var selectedPreviewCameraID: String? {
+        didSet { ensurePreviewRunning() }
+    }
+    
+    private var programRenderer: VideoRenderable?
+    private var programCapture: CameraCaptureSession?
+    private var programFramesTask: Task<Void, Never>?
+    
+    // Preview pipeline
+    private var previewRenderer: VideoRenderable?
+    private var previewCapture: CameraCaptureSession?
+    private var previewFramesTask: Task<Void, Never>?
+    
+    // Expose textures for views
+    var previewCurrentTexture: MTLTexture? {
+        previewRenderer?.currentTexture
+    }
+    
     init(studioManager: VirtualStudioManager? = nil,
          cameraFeedManager: CameraFeedManager? = nil) {
         self.studioManager = studioManager ?? VirtualStudioManager()
@@ -69,67 +90,175 @@ final class UnifiedProductionManager: ObservableObject {
     }
     
     private func setupIntegration() {
-        // Connect camera feed manager to streaming view model
         cameraFeedManager.setStreamingViewModel(streamingViewModel)
-        
-        // Connect external display manager to production manager
         externalDisplayManager.setProductionManager(self)
+    }
+    
+    // MARK: - Program switching and binding
+    
+    func switchProgram(to cameraID: String) {
+        selectedProgramCameraID = cameraID
+        ensureProgramRunning()
+    }
+    
+    func bindProgramOutput(to renderer: VideoRenderable) {
+        programRenderer = renderer
+        ensureProgramRunning()
+    }
+    
+    func rebindProgram(to cameraID: String?, renderer: VideoRenderable) {
+        programRenderer = renderer
+        selectedProgramCameraID = cameraID
+        ensureProgramRunning()
+    }
+    
+    func ensureProgramRunning() {
+        guard let cameraID = selectedProgramCameraID else { return }
         
-        print("🔗 Unified Production Manager: Integration setup complete")
-        print("🎯 Output Mapping Manager: Initialized with \(outputMappingManager.presets.count) presets")
-        print("🖥️ External Display Manager: Ready for multi-display output")
+        // Cancel any existing stream consumption
+        programFramesTask?.cancel()
+        programFramesTask = nil
+        
+        // Start/Restart capture off the main actor to avoid blocking UI
+        let capture = programCapture ?? CameraCaptureSession()
+        programCapture = capture
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                try Task.checkCancellation()
+                try await capture.start(cameraID: cameraID)
+                
+                await MainActor.run {
+                    self.log("Program capture started for cameraID=\(cameraID)")
+                }
+                
+                let stream = await capture.sampleBuffers()
+                let renderer = await MainActor.run { self.programRenderer }
+                
+                await MainActor.run {
+                    // Consume frames on a child task bound to manager lifetime
+                    self.programFramesTask?.cancel()
+                    self.programFramesTask = Task(priority: .userInitiated) {
+                        var gotFirst = false
+                        let firstDeadline = ContinuousClock.now.advanced(by: .milliseconds(500))
+                        
+                        for await sb in stream {
+                            if Task.isCancelled { break }
+                            if let pb = CMSampleBufferGetImageBuffer(sb) {
+                                renderer?.push(pb)
+                            }
+                            if !gotFirst {
+                                gotFirst = true
+                                self.log("Program first frame received")
+                            }
+                            
+                            if !gotFirst && ContinuousClock.now > firstDeadline {
+                                self.log("Warning: No program frames within 500 ms after switch")
+                            }
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run { self.log("Program capture cancelled") }
+            } catch {
+                await MainActor.run { self.log("Program capture failed: \(error.localizedDescription)") }
+            }
+        }
+    }
+    
+    // MARK: - Preview switching/binding for live camera
+    
+    func ensurePreviewRunning() {
+        guard let cameraID = selectedPreviewCameraID else { return }
+        
+        // Cancel existing
+        previewFramesTask?.cancel()
+        previewFramesTask = nil
+        
+        // Create capture
+        let capture = previewCapture ?? CameraCaptureSession()
+        previewCapture = capture
+        
+        // Ensure we have a renderer to push into
+        if previewRenderer == nil {
+            if let device = MTLCreateSystemDefaultDevice() {
+                previewRenderer = ProgramRenderer(device: device)
+            }
+        }
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                try Task.checkCancellation()
+                try await capture.start(cameraID: cameraID)
+                
+                await MainActor.run {
+                    self.log("Preview capture started for cameraID=\(cameraID)")
+                }
+                
+                let stream = await capture.sampleBuffers()
+                let renderer = await MainActor.run { self.previewRenderer }
+                
+                await MainActor.run {
+                    self.previewFramesTask?.cancel()
+                    self.previewFramesTask = Task(priority: .userInitiated) {
+                        var gotFirst = false
+                        let firstDeadline = ContinuousClock.now.advanced(by: .milliseconds(500))
+                        
+                        for await sb in stream {
+                            if Task.isCancelled { break }
+                            if let pb = CMSampleBufferGetImageBuffer(sb) {
+                                renderer?.push(pb)
+                            }
+                            if !gotFirst {
+                                gotFirst = true
+                                self.log("Preview first frame received")
+                            }
+                            
+                            if !gotFirst && ContinuousClock.now > firstDeadline {
+                                self.log("Warning: No preview frames within 500 ms after switch")
+                            }
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run { self.log("Preview capture cancelled") }
+            } catch {
+                await MainActor.run { self.log("Preview capture failed: \(error.localizedDescription)") }
+            }
+        }
+    }
+    
+    func routeProgramToPreview() {
+        selectedPreviewCameraID = selectedProgramCameraID
+    }
+    
+    func log(_ msg: String) {
+        print("🎥 [UnifiedProductionManager] \(msg)")
     }
     
     // MARK: - Mode Switching with State Management
     
     func switchToVirtualMode() {
-        print("🎬 Switching to Virtual Production mode...")
         isVirtualStudioActive = true
-        
-        // Ensure camera feeds are properly managed when switching
         Task {
             await refreshCameraFeedStateForMode()
         }
     }
     
     func switchToLiveMode() {
-        print("📺 Switching to Live Production mode...")
-        
-        // Sync virtual studio changes to live production
         syncVirtualToLive()
-        
-        // Ensure camera feeds are properly managed when switching
         Task {
             await refreshCameraFeedStateForMode()
         }
     }
     
-    /// CRITICAL: Refresh camera feed state when switching modes
     func refreshCameraFeedStateForMode() async {
-        print("🔄 Refreshing camera feed state for mode switch...")
-        
-        // Force UI updates for all active feeds
         for feed in cameraFeedManager.activeFeeds {
-            print("   - Refreshing feed: \(feed.device.displayName)")
-            print("     - Status: \(feed.connectionStatus.displayText)")
-            print("     - Has preview: \(feed.previewImage != nil)")
-            print("     - Frame count: \(feed.frameCount)")
-            
-            // Force objectWillChange to trigger UI updates
             feed.objectWillChange.send()
         }
-        
-        // If there's a selected feed, ensure it's properly connected
-        if let selectedFeed = cameraFeedManager.selectedFeedForLiveProduction {
-            print("   - Selected feed: \(selectedFeed.device.displayName)")
-            print("     - Forcing UI refresh for selected feed")
-            selectedFeed.objectWillChange.send()
-        }
-        
-        // Force camera feed manager UI update
         cameraFeedManager.objectWillChange.send()
-        
-        print("✅ Camera feed state refresh complete")
     }
     
     // MARK: - Computed Properties
@@ -145,7 +274,6 @@ final class UnifiedProductionManager: ObservableObject {
     // MARK: - Initialization
     
     func initialize() async {
-        // Initialize both managers
         isVirtualStudioActive = true
         hasUnsavedChanges = false
     }
@@ -154,19 +282,14 @@ final class UnifiedProductionManager: ObservableObject {
     
     func loadDefaultStudio() {
         currentStudioName = "Default Studio"
-        
-        // Load default studio configuration
         let defaultStudio = StudioConfiguration(id: UUID(), name: "Default Studio", description: "Default studio setup", icon: "tv.circle")
         currentStudio = defaultStudio
         availableStudios.append(defaultStudio)
-        
         hasUnsavedChanges = false
     }
     
     func loadStudio(_ studio: StudioConfiguration) {
         currentStudioName = studio.name
-        
-        // Load based on studio type
         switch studio.name {
         case "News Studio":
             loadTemplate(.news)
@@ -183,7 +306,6 @@ final class UnifiedProductionManager: ObservableObject {
         default:
             loadTemplate(.custom)
         }
-        
         hasUnsavedChanges = false
     }
     
@@ -211,9 +333,6 @@ final class UnifiedProductionManager: ObservableObject {
     }
     
     func loadTemplate(_ template: StudioTemplate) {
-        // Optionally: clear scene first
-        // studioManager.clearAll()
-        
         switch template {
         case .news:        buildNewsStudio()
         case .talkShow:    buildTalkShowStudio()
@@ -225,8 +344,6 @@ final class UnifiedProductionManager: ObservableObject {
         }
         currentTemplate = template
     }
-    
-    // MARK: - Builders
     
     private func buildNewsStudio() {
         if let wall = LEDWallAsset.predefinedWalls.first(where: { $0.name.contains("Wide") }) {
@@ -333,11 +450,10 @@ final class UnifiedProductionManager: ObservableObject {
     }
     
     // MARK: - Virtual Live (stub)
-    func saveCurrentStudioState() { /* persist if needed */ }
-    func syncVirtualToLive() { /* push to streamingViewModel */ }
+    func saveCurrentStudioState() { }
+    func syncVirtualToLive() { }
     func setVirtualCameraActive(_ cam: VirtualCamera) {
         studioManager.selectCamera(cam)
-        // streamingViewModel.switchToVirtual(cam)
     }
 }
 

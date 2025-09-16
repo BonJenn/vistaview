@@ -489,6 +489,9 @@ struct PreviewProgramCenterView: View {
                     Button("TAKE") {
                         if productionManager.previewProgramManager.previewSource == .none {
                         } else {
+                            if case .camera(let feed) = productionManager.previewProgramManager.previewSource {
+                                productionManager.switchProgram(to: feed.device.deviceID)
+                            }
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
                             }

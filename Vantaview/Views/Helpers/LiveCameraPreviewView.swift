@@ -8,62 +8,58 @@
 import SwiftUI
 import AppKit
 
-/// A specialized view for displaying live camera feeds that forces SwiftUI updates
+@MainActor
 struct LiveCameraPreviewView: View {
     @ObservedObject var cameraFeed: CameraFeed
     let maxHeight: CGFloat
     
-    var previewProgramManager: PreviewProgramManager? = nil
-    @State private var refreshTrigger = false
-    
     var body: some View {
-        Group {
-            if let nsImage = cameraFeed.previewNSImage {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                    .onReceive(Timer.publish(every: 0.033, on: .main, in: .common).autoconnect()) { _ in
-                        refreshTrigger.toggle()
+        ZStack {
+            CameraFeedDisplayLayerView(feed: cameraFeed)
+                .background(Color.black)
+                .overlay(alignment: .topLeading) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "camera.fill")
+                            .foregroundColor(.white.opacity(0.9))
+                        Text(cameraFeed.connectionStatus.displayText)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.9))
                     }
-                    .id("\(cameraFeed.frameCount)-\(refreshTrigger)")
-            } else {
-                Rectangle()
-                    .fill(Color.black)
-                    .overlay(
-                        VStack(spacing: 2) {
+                    .padding(6)
+                    .background(Color.black.opacity(0.35))
+                    .cornerRadius(6)
+                    .padding(6)
+                }
+                .overlay {
+                    if cameraFeed.currentSampleBuffer == nil && cameraFeed.previewImage == nil && cameraFeed.previewNSImage == nil {
+                        VStack(spacing: 6) {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.4)
-                            Text("CONNECTING...")
+                                .scaleEffect(0.6)
+                            Text(cameraFeed.connectionStatus == .connecting ? "CONNECTING..." : "INITIALIZING...")
                                 .font(.caption2)
-                                .foregroundColor(.white)
+                                .foregroundColor(.white.opacity(0.9))
                         }
-                    )
-            }
+                    }
+                }
         }
-    }
-}
-
-/// NSImageView wrapper for SwiftUI that better handles live updates
-struct LiveNSImageView: NSViewRepresentable {
-    let nsImage: NSImage
-    
-    func makeNSView(context: Context) -> AppKit.NSImageView {
-        let imageView = AppKit.NSImageView()
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.imageAlignment = .alignCenter
-        return imageView
+        .aspectRatio(aspect, contentMode: .fit)
+        .frame(maxHeight: maxHeight)
+        .clipped()
     }
     
-    func updateNSView(_ nsView: AppKit.NSImageView, context: Context) {
-        nsView.image = nsImage
+    private var aspect: CGFloat {
+        if let cg = cameraFeed.previewImage {
+            return cg.height > 0 ? CGFloat(cg.width) / CGFloat(cg.height) : 16.0/9.0
+        }
+        if let ns = cameraFeed.previewNSImage, ns.size.height > 0 {
+            return ns.size.width / ns.size.height
+        }
+        return 16.0/9.0
     }
 }
 
 #Preview {
-    // Mock preview
     Rectangle()
         .fill(Color.gray)
         .aspectRatio(16/9, contentMode: .fit)
