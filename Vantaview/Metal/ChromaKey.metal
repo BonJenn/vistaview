@@ -34,17 +34,24 @@ inline float saturation(float3 c) {
     return d / (1.0 - fabs(2.0 * l - 1.0) + 1e-5);
 }
 
+inline float safeAngleN(float2 uv, float2 kuv) {
+    float uvl = length(uv);
+    float kuvl = length(kuv);
+    if (uvl < 1e-6 || kuvl < 1e-6) { return 0.0; }
+    float2 uva = uv / uvl;
+    float2 kuva = kuv / kuvl;
+    float d = clamp(dot(uva, kuva), -1.0, 1.0);
+    float ang = acos(d);
+    return ang / (0.5 * 3.14159265);
+}
+
 inline float computeKeyness(float3 rgb, float3 keyRgb, constant ChromaKeyUniforms& u) {
     float3 yuv  = rgb2yuv(rgb);
     float3 kyuv = rgb2yuv(keyRgb);
     float2 uv   = yuv.yz;
     float2 kuv  = kyuv.yz;
 
-    float2 uva = normalize(uv);
-    float2 kuva = normalize(kuv);
-    float ang = acos(clamp(dot(uva, kuva), -1.0, 1.0));
-    float angN = ang / (0.5 * 3.14159265);
-
+    float angN = safeAngleN(uv, kuv);
     float distUV = length(uv - kuv);
     float distRGB = distance(rgb, keyRgb);
 
@@ -52,8 +59,10 @@ inline float computeKeyness(float3 rgb, float3 keyRgb, constant ChromaKeyUniform
     float satW = mix(0.6, 1.4, saturate(saturation(rgb)));
     float d = chromaMix * satW;
 
-    float thr = mix(0.03, 0.35, saturate(u.strength));
-    float halfW = max(0.001, u.softness * max(0.02, thr));
+    // More permissive threshold mapping for typical greenscreens
+    float thr = mix(0.01, 0.45, saturate(u.strength));
+    float halfW = max(0.002, u.softness * max(0.02, thr) * 0.6);
+
     float k = 1.0 - smoothstep(thr - halfW, thr + halfW, d);
     return clamp(k, 0.0, 1.0);
 }
@@ -97,6 +106,8 @@ kernel void chromaKeyKernel(
     float3 keyRgb = float3(u.keyR, u.keyG, u.keyB);
 
     float k = computeKeyness(src.rgb, keyRgb, u);
+
+    // Edge smoothing (interactive mode lowers radius for responsiveness)
     if (u.edgeSoftness > 0.001) {
         float r = clamp(u.edgeSoftness * (u.interactive > 0.5 ? 2.0 : 4.0), 1.0, u.interactive > 0.5 ? 4.0 : 8.0);
         int radius = int(r);
@@ -115,6 +126,14 @@ kernel void chromaKeyKernel(
     }
 
     float matte = 1.0 - k;
+
+    // Matte grow/shrink in pixel units
+    if (fabs(u.matteShift) > 1e-5) {
+        float px = u.matteShift / max(u.width, u.height);
+        matte = clamp(matte + px, 0.0, 1.0);
+    }
+
+    // Black/white clip
     float black = clamp(u.blackClip, 0.0, 1.0);
     float white = clamp(u.whiteClip, 0.0, 1.0);
     if (white < black + 1e-3) white = black + 1e-3;
@@ -128,14 +147,12 @@ kernel void chromaKeyKernel(
         return;
     }
 
-    // Foreground-only premultiplied output for PiP usage
     if (u.outputMode > 0.5) {
         float3 premult = fore * matte;
         outTex.write(float4(premult, matte), gid);
         return;
     }
 
-    // Aspect-true mapping with Contain/Cover; never stretch
     float3 bgRGB = float3(0.0);
     if (u.bgEnabled > 0.5 && u.bgW > 0.5 && u.bgH > 0.5) {
         float2 scrSize = float2(u.width, u.height);

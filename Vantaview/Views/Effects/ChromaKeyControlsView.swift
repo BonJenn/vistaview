@@ -32,7 +32,6 @@ struct ChromaKeyControlsView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Centered, lightweight control row (instant open)
             VStack(spacing: 8) {
                 HStack(spacing: 12) {
                     ColorPicker("", selection: keyColorBinding, supportsOpacity: false)
@@ -68,9 +67,7 @@ struct ChromaKeyControlsView: View {
 
             GroupBox("Keying") {
                 VStack(alignment: .leading, spacing: 8) {
-                    // Range widens tolerance around the eyedropped color (maps to \\"strength\\")
                     interactiveSlider("Range", key: "strength", range: 0.0...1.0, step: 0.01)
-                    // Feather softens the transition (maps to \\"softness\\")
                     interactiveSlider("Feather", key: "softness", range: 0.0...1.0, step: 0.01)
                 }
                 .padding(10)
@@ -199,7 +196,6 @@ struct ChromaKeyControlsView: View {
                         Spacer(minLength: 0)
                     }
                     
-                    // Interactive-friendly sliders: tell effect when dragging
                     VStack(spacing: 8) {
                         interactiveSlider("Scale", key: "bgScale", range: 0.1...4.0, step: 0.01)
                         HStack(spacing: 12) {
@@ -249,6 +245,9 @@ struct ChromaKeyControlsView: View {
         safeSet("keyR", Float(r))
         safeSet("keyG", Float(g))
         safeSet("keyB", Float(b))
+        // Nudge tolerance defaults for presets
+        if (effect.parameters["strength"]?.value ?? 0) < 0.55 { safeSet("strength", 0.55) }
+        if (effect.parameters["softness"]?.value ?? 0) < 0.20 { safeSet("softness", 0.20) }
     }
     
     private func startEyedropper() {
@@ -258,6 +257,9 @@ struct ChromaKeyControlsView: View {
             safeSet("keyR", Float(c.redComponent))
             safeSet("keyG", Float(c.greenComponent))
             safeSet("keyB", Float(c.blueComponent))
+            // Auto-bump tolerance so the result is immediately visible
+            if (effect.parameters["strength"]?.value ?? 0) < 0.6 { safeSet("strength", 0.6) }
+            if (effect.parameters["softness"]?.value ?? 0) < 0.25 { safeSet("softness", 0.25) }
         }
     }
     
