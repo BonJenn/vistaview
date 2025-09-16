@@ -25,21 +25,34 @@ struct SimplePreviewMonitorView: View {
             Rectangle()
                 .fill(Color.black)
             
-            if case .camera(let feed) = productionManager.previewProgramManager.previewSource {
+            switch productionManager.previewProgramManager.previewSource {
+            case .camera(let feed):
                 CameraFeedLivePreview(feed: feed)
-            } else if productionManager.previewProgramManager.previewMetalTexture != nil {
-                MetalVideoView(textureSupplier: {
-                    productionManager.previewProgramManager.previewMetalTexture
-                })
-            } else if productionManager.previewCurrentTexture != nil {
-                MetalVideoView(textureSupplier: {
-                    productionManager.previewCurrentTexture
-                })
-            } else if let previewImage = productionManager.previewProgramManager.previewImage {
-                Image(previewImage, scale: 1.0, label: Text("Preview"))
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else {
+                
+            case .media(let file, _):
+                if file.fileType == .image, let previewImage = productionManager.previewProgramManager.previewImage {
+                    Image(previewImage, scale: 1.0, label: Text("Preview"))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    MetalVideoView(
+                        textureSupplier: productionManager.previewProgramManager.makePreviewTextureSupplier(),
+                        preferredFPS: 60,
+                        device: productionManager.effectManager.metalDevice
+                    )
+                }
+                
+            case .virtual(_):
+                VStack(spacing: 8) {
+                    Image(systemName: "video.3d")
+                        .font(.system(size: 24))
+                        .foregroundColor(.gray.opacity(0.5))
+                    Text("Virtual Source")
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+                
+            case .none:
                 VStack(spacing: 8) {
                     Image(systemName: "tv")
                         .font(.system(size: 24))
@@ -161,13 +174,37 @@ struct SimpleProgramMonitorView: View {
             Rectangle()
                 .fill(Color.black)
             
-            if case .camera(let feed) = productionManager.previewProgramManager.programSource {
+            switch productionManager.previewProgramManager.programSource {
+            case .camera(let feed):
                 CameraFeedLivePreview(feed: feed)
-            } else {
+                
+            case .media(let file, _):
+                if file.fileType == .image, let programImage = productionManager.previewProgramManager.programImage {
+                    Image(programImage, scale: 1.0, label: Text("Program"))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    MetalVideoView(
+                        textureSupplier: productionManager.previewProgramManager.makeProgramTextureSupplier(),
+                        preferredFPS: 60,
+                        device: productionManager.effectManager.metalDevice
+                    )
+                }
+                
+            case .virtual(_):
+                VStack(spacing: 8) {
+                    Image(systemName: "video.3d")
+                        .font(.system(size: 24))
+                        .foregroundColor(.gray.opacity(0.5))
+                    Text("Virtual Source")
+                        .font(.caption)
+                        .foregroundColor(.gray.opacity(0.5))
+                }
+                
+            case .none:
                 ProgramFeedView(productionManager: productionManager)
             }
             
-            // Overlay PiP/graphics layers
             CompositedLayersContent(productionManager: productionManager)
                 .allowsHitTesting(false)
             
@@ -340,7 +377,6 @@ struct CameraDeviceButton: View {
         Task {
             _ = await productionManager.cameraFeedManager.startFeed(for: device)
             await MainActor.run {
-                // Immediate switch to Program upon selection
                 productionManager.switchProgram(to: device.deviceID)
                 isConnecting = false
             }

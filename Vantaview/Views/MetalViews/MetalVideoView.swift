@@ -6,10 +6,15 @@ import Metal
 struct MetalVideoView: NSViewRepresentable {
     let textureSupplier: () -> MTLTexture?
     var preferredFPS: Int = 60
+    var device: MTLDevice? = nil
     
     func makeNSView(context: Context) -> MTKView {
         let view = MTKView()
-        view.device = MTLCreateSystemDefaultDevice()
+        if let device {
+            view.device = device
+        } else {
+            view.device = MTLCreateSystemDefaultDevice()
+        }
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = true
         view.isPaused = false
@@ -30,7 +35,14 @@ struct MetalVideoView: NSViewRepresentable {
         return view
     }
     
-    func updateNSView(_ nsView: MTKView, context: Context) { }
+    func updateNSView(_ nsView: MTKView, context: Context) {
+        if let renderer = context.coordinator.renderer {
+            renderer.setTextureSupplier(textureSupplier)
+        }
+        if let device, nsView.device?.registryID != device.registryID {
+            nsView.device = device
+        }
+    }
     
     func makeCoordinator() -> Coordinator { Coordinator() }
     final class Coordinator { var renderer: MetalTextureRenderer? }

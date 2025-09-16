@@ -14,8 +14,7 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
         var scale: SIMD2<Float>
     }
 
-    // Supplier returns the current texture to display
-    private let textureSupplier: () -> MTLTexture?
+    private var textureSupplier: () -> MTLTexture?
 
     init?(mtkView: MTKView, textureSupplier: @escaping () -> MTLTexture?) {
         guard let device = mtkView.device ?? MTLCreateSystemDefaultDevice(),
@@ -49,6 +48,10 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
+    func setTextureSupplier(_ supplier: @escaping () -> MTLTexture?) {
+        self.textureSupplier = supplier
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { }
 
     func draw(in view: MTKView) {
@@ -74,11 +77,9 @@ final class MetalTextureRenderer: NSObject, MTKViewDelegate {
             var sx: Float = 1.0
             var sy: Float = 1.0
             if viewAspect > texAspect {
-                // View is wider: limit by height
                 sx = Float(texAspect / viewAspect)
                 sy = 1.0
             } else {
-                // View is taller: limit by width
                 sx = 1.0
                 sy = Float(viewAspect / texAspect)
             }

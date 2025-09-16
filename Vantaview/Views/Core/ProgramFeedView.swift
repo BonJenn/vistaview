@@ -11,12 +11,12 @@ struct ProgramFeedView: View {
     
     init(productionManager: UnifiedProductionManager) {
         self.productionManager = productionManager
-        self.device = MTLCreateSystemDefaultDevice()!
+        self.device = productionManager.effectManager.metalDevice
         self.renderer = ProgramRenderer(device: device)
     }
     
     var body: some View {
-        MetalVideoView(textureSupplier: { renderer.currentTexture }, preferredFPS: 60)
+        MetalVideoView(textureSupplier: { renderer.currentTexture }, preferredFPS: 60, device: device)
             .contentShape(Rectangle())
             .onTapGesture {
                 Task { @MainActor in

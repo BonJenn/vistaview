@@ -224,11 +224,12 @@ final class PreviewProgramManager: ObservableObject {
             print("🎬 PreviewProgramManager: Preview source set to camera")
             
         case .media(let file, let player):
+            // Ensure any prior preview camera pipeline is not used as a visual fallback
+            unifiedProductionManager.selectedPreviewCameraID = nil
             print("🎬 PreviewProgramManager: Loading media file to preview: \(file.name)")
             print("🎬 PreviewProgramManager: Player is \(player == nil ? "nil" : "not nil")")
             print("🎬 PreviewProgramManager: File type is: \(file.fileType)")
             
-            // Handle different media types appropriately
             switch file.fileType {
             case .image:
                 print("🖼️ PreviewProgramManager: Loading image to preview")
@@ -239,6 +240,8 @@ final class PreviewProgramManager: ObservableObject {
             }
             
         case .virtual(let camera):
+            // No preview camera should be active during virtual/media preview
+            unifiedProductionManager.selectedPreviewCameraID = nil
             print("🎬 PreviewProgramManager: Loading virtual camera to preview: \(camera.name)")
             previewSource = source
             updatePreviewFromVirtual(camera)
@@ -738,9 +741,10 @@ final class PreviewProgramManager: ObservableObject {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         output.suppressesPlayerRendering = true
         playerItem.add(output)
-        
+        output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
+
         self.previewAudioTap = PlayerAudioTap(playerItem: playerItem)
-        
+
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
@@ -771,7 +775,7 @@ final class PreviewProgramManager: ObservableObject {
                 print("⚠️ Preview watchdog: FPS below target, capturing next frame")
                 self?.captureNextPreviewFrame()
             }
-            
+
             // Start Metal playback BEFORE setting up observers
             playback.start()
             print("🎬 PREVIEW Metal playback started")
@@ -853,6 +857,9 @@ final class PreviewProgramManager: ObservableObject {
                 self.objectWillChange.send() // Force UI refresh every 1 second (20 * 0.05s)
             }
         }
+        player.rate = previewRate
+        player.volume = previewMuted ? 0.0 : previewVolume
+        player.play()
     }
     
     private func loadMediaToProgram(_ file: MediaFile) {
@@ -938,7 +945,8 @@ final class PreviewProgramManager: ObservableObject {
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         output.suppressesPlayerRendering = true
         playerItem.add(output)
-        
+        output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
+
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
@@ -976,19 +984,24 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
+        player.rate = programRate
+        player.volume = programMuted ? 0.0 : programVolume
+        player.play()
+
         var statusObserver: NSKeyValueObservation?
         statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
                 if item.status != .unknown { statusObserver?.invalidate() }
                 if item.status == .readyToPlay {
                     self?.isProgramPlaying = true
+                    // Re-affirm playback
                     self?.programPlayer?.rate = self?.programRate ?? 1.0
                     self?.programPlayer?.volume = (self?.programMuted ?? false) ? 0.0 : (self?.programVolume ?? 1.0)
                     self?.programPlayer?.play()
                 }
             }
         }
-        
+
         programSource = .media(file, player: player)
         programPlayer = player
         
@@ -996,7 +1009,7 @@ final class PreviewProgramManager: ObservableObject {
         programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             self?.programCurrentTime = CMTimeGetSeconds(t)
         }
-        
+
         print("📼 PROGRAM AVPlayer + ItemOutput + Metal playback configured")
     }
     
@@ -1411,6 +1424,23 @@ final class PreviewProgramManager: ObservableObject {
                     self.isProgramPlaying = false
                 }
             }
+        }
+    }
+}
+
+
+extension PreviewProgramManager {
+    func makePreviewTextureSupplier() -> () -> MTLTexture? {
+        let playback = self.previewAVPlayback
+        return { [weak playback] in
+            playback?.latestTexture
+        }
+    }
+    
+    func makeProgramTextureSupplier() -> () -> MTLTexture? {
+        let playback = self.programAVPlayback
+        return { [weak playback] in
+            playback?.latestTexture
         }
     }
 }
