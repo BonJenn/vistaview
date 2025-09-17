@@ -495,6 +495,8 @@ struct PreviewProgramCenterView: View {
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
                             }
+                            // Push Preview overlay layers to Program so edits are independent until TAKE
+                            layerManager.pushPreviewToProgram(overwrite: true)
                             DispatchQueue.main.async {
                                 productionManager.previewProgramManager.objectWillChange.send()
                                 productionManager.objectWillChange.send()

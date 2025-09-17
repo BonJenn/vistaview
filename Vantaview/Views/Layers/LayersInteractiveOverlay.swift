@@ -5,18 +5,20 @@ import AppKit
 
 struct LayersInteractiveOverlay: View {
     @EnvironmentObject var layerManager: LayerStackManager
+    var isPreview: Bool = false
 
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
             ZStack {
-                ForEach(layerManager.layers.sorted(by: { $0.zIndex < $1.zIndex })) { layer in
+                ForEach(layerManager.layers(isPreview: isPreview).sorted(by: { $0.zIndex < $1.zIndex })) { layer in
                     LayerHandleView(
                         layer: layer,
                         canvasSize: size,
-                        isSelected: layerManager.selectedLayerID == layer.id,
-                        onSelect: { layerManager.selectedLayerID = layer.id },
-                        onUpdate: { updated in layerManager.update(updated) }
+                        isSelected: isPreview ? (layerManager.selectedPreviewLayerID == layer.id) : (layerManager.selectedLayerID == layer.id),
+                        isPreview: isPreview,
+                        onSelect: { layerManager.selectLayer(layer.id, isPreview: isPreview) },
+                        onUpdate: { updated in layerManager.update(updated, isPreview: isPreview) }
                     )
                     .environmentObject(layerManager)
                 }
@@ -30,6 +32,7 @@ private struct LayerHandleView: View {
     var layer: CompositedLayer
     var canvasSize: CGSize
     var isSelected: Bool
+    var isPreview: Bool
     var onSelect: () -> Void
     var onUpdate: (CompositedLayer) -> Void
 
@@ -68,7 +71,6 @@ private struct LayerHandleView: View {
         }
     }
 
-    // Measure text precisely (macOS) and return tight bounding size
     private func measuredTextSize(_ text: String, fontSize: CGFloat, maxWidth: CGFloat) -> CGSize {
         #if os(macOS)
         let paragraph = NSMutableParagraphStyle()
@@ -83,7 +85,6 @@ private struct LayerHandleView: View {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attrs
         )
-        // Add a small font-metric fudge to ensure no descender clipping
         let ascent = NSFont.systemFont(ofSize: fontSize, weight: .bold).ascender
         let descent = abs(NSFont.systemFont(ofSize: fontSize, weight: .bold).descender)
         let leading: CGFloat = 2
@@ -97,7 +98,6 @@ private struct LayerHandleView: View {
 
     var body: some View {
         ZStack {
-            // Select/move gesture area
             Rectangle()
                 .fill(Color.clear)
                 .overlay(
@@ -107,25 +107,20 @@ private struct LayerHandleView: View {
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
                 .contentShape(Rectangle())
-                .highPriorityGesture(
-                    TapGesture(count: 2).onEnded {
+                .simultaneousGesture(
+                    TapGesture(count: 1).onEnded {
                         onSelect()
                         if case .title(let overlay) = layer.source {
                             editText = overlay.text
                             isEditingTitle = true
-                            layerManager.beginEditingLayer(layer.id)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                                titleFocused = true
-                            }
+                            layerManager.beginEditingLayer(layer.id, isPreview: isPreview)
+                            DispatchQueue.main.async { titleFocused = true }
                         }
                     }
                 )
-                .simultaneousGesture(
-                    TapGesture(count: 1).onEnded { onSelect() }
-                )
                 .gesture(dragMoveGesture())
+                .simultaneousGesture(magnifyGesture())
 
-            // Live-updating, precisely-sized editor (no clipping, single visible layer)
             if isSelected, isEditingTitle, case .title(let overlay) = layer.source {
                 let textSize = measuredTextSize(
                     editText.isEmpty ? " " : editText,
@@ -142,7 +137,7 @@ private struct LayerHandleView: View {
                     set: { editText = $0 }
                 ))
                 .focused($titleFocused)
-                .textFieldStyle(PlainTextFieldStyle()) // avoid border-induced clipping
+                .textFieldStyle(PlainTextFieldStyle())
                 .font(.system(size: overlay.fontSize, weight: .bold))
                 .foregroundColor(Color.white)
                 .frame(width: fieldW, height: fieldH, alignment: .center)
@@ -162,7 +157,6 @@ private struct LayerHandleView: View {
                         updated.source = .title(ov)
 
                         if ov.autoFit {
-                            // Auto-fit layer to measured size
                             let tSize = measuredTextSize(newValue.isEmpty ? " " : newValue, fontSize: ov.fontSize, maxWidth: canvasSize.width * 0.95)
                             let desiredW = tSize.width + padW
                             let desiredH = tSize.height + padH
@@ -175,29 +169,13 @@ private struct LayerHandleView: View {
                         onUpdate(updated)
                     }
                 }
-                .onChange(of: layer) { _, _ in
-                    if case .title(let ov) = layer.source, ov.autoFit {
-                        // Refit on external changes (e.g. font size)
-                        var updated = layer
-                        let text = isEditingTitle ? editText : ov.text
-                        let tSize = measuredTextSize(text.isEmpty ? " " : text, fontSize: ov.fontSize, maxWidth: canvasSize.width * 0.95)
-                        let desiredW = tSize.width + padW
-                        let desiredH = tSize.height + padH
-                        let minW = max(canvasSize.width * 0.05, 24)
-                        let minH = max(canvasSize.height * 0.05, 20)
-                        let wNorm = min(1.0, max(minW, desiredW) / canvasSize.width)
-                        let hNorm = min(1.0, max(minH, desiredH) / canvasSize.height)
-                        updated.sizeNorm = CGSize(width: wNorm, height: hNorm)
-                        onUpdate(updated)
-                    }
-                }
                 .onSubmit {
                     isEditingTitle = false
-                    layerManager.endEditing()
+                    layerManager.endEditing(isPreview: isPreview)
                 }
                 .onExitCommand {
                     isEditingTitle = false
-                    layerManager.endEditing()
+                    layerManager.endEditing(isPreview: isPreview)
                 }
             }
 
@@ -213,6 +191,22 @@ private struct LayerHandleView: View {
             }
         }
         .animation(.easeOut(duration: 0.08), value: isSelected)
+    }
+
+    @State private var magStartSize: CGSize = .zero
+    private func magnifyGesture() -> some Gesture {
+        MagnificationGesture()
+            .onChanged { s in
+                if magStartSize == .zero { magStartSize = layer.sizeNorm }
+                var updated = layer
+                let newW = clampMin(magStartSize.width * s)
+                let newH = clampMin(magStartSize.height * s)
+                updated.sizeNorm = CGSize(width: clamp01(newW), height: clamp01(newH))
+                onUpdate(updated)
+            }
+            .onEnded { _ in
+                magStartSize = .zero
+            }
     }
 
     private func dragMoveGesture() -> some Gesture {

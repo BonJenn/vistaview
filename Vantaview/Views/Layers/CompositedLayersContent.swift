@@ -3,12 +3,13 @@ import AppKit
 import Metal
 import MetalKit
 import AVFoundation
+import CoreImage
 
 struct CompositedLayersContent: View {
     @EnvironmentObject var layerManager: LayerStackManager
     @ObservedObject var productionManager: UnifiedProductionManager
+    let isPreview: Bool
     
-    // Add Metal device and chroma key pipeline for processing
     private var metalDevice: MTLDevice {
         productionManager.outputMappingManager.metalDevice
     }
@@ -21,7 +22,7 @@ struct CompositedLayersContent: View {
         GeometryReader { geo in
             let size = geo.size
             ZStack {
-                ForEach(layerManager.layers.sorted(by: { $0.zIndex < $1.zIndex })) { model in
+                ForEach(layerManager.layers(isPreview: isPreview).sorted(by: { $0.zIndex < $1.zIndex })) { model in
                     if model.isEnabled {
                         layerView(for: model, canvasSize: size)
                             .frame(
@@ -49,7 +50,7 @@ struct CompositedLayersContent: View {
             if let feed = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
                 let ck = effectiveChromaKeySettings(for: model)
                 ChromaKeyAwareCameraView(
-                    feed: feed, 
+                    feed: feed,
                     chromaKeySettings: ck,
                     metalDevice: metalDevice,
                     commandQueue: commandQueue
@@ -95,7 +96,7 @@ struct CompositedLayersContent: View {
             }
 
         case .title(let overlay):
-            if layerManager.editingLayerID == model.id {
+            if (isPreview ? layerManager.editingPreviewLayerID : layerManager.editingLayerID) == model.id {
                 Color.clear
             } else {
                 ZStack {
@@ -121,7 +122,6 @@ struct CompositedLayersContent: View {
     
     private func effectiveChromaKeySettings(for model: CompositedLayer) -> PiPChromaKeySettings {
         var s = model.chromaKey
-        // Prefer Program chain (live), fall back to Preview
         let programCK = productionManager.previewProgramManager
             .getProgramEffectChain()?
             .effects.compactMap { $0 as? ChromaKeyEffect }.first
@@ -133,11 +133,9 @@ struct CompositedLayersContent: View {
             s.keyR = ck.parameters["keyR"]?.value ?? s.keyR
             s.keyG = ck.parameters["keyG"]?.value ?? s.keyG
             s.keyB = ck.parameters["keyB"]?.value ?? s.keyB
-            // Keep PiP tuning (strength, softness, etc.) as-is; only sync color
         }
         return s
     }
-
 }
 
 // MARK: - Chroma Key Aware Camera View
@@ -274,7 +272,6 @@ class ChromaKeyVideoProcessor: NSView {
     }
     
     private func setupPlayer() {
-        // Start security-scoped access for sandboxed file URLs
         if url.isFileURL {
             hasSecurityAccess = url.startAccessingSecurityScopedResource()
         }
@@ -346,7 +343,6 @@ class ChromaKeyVideoProcessor: NSView {
         inputDesc.usage = [.shaderRead, .shaderWrite]
         guard let inputTex = metalDevice.makeTexture(descriptor: inputDesc) else { return }
         
-        // Render the PB into the input texture and run the chroma key on the SAME command buffer
         guard let cb = commandQueue.makeCommandBuffer() else { return }
         let bounds = CGRect(x: 0, y: 0, width: w, height: h)
         let ciSrc = CIImage(cvPixelBuffer: pb)
@@ -405,7 +401,7 @@ class ChromaKeyVideoProcessor: NSView {
             bgW: 0,
             bgH: 0,
             fillMode: 0,
-            outputMode: 1.0 // premultiplied foreground for compositing
+            outputMode: 1.0
         )
         enc.setComputePipelineState(pipelineState)
         enc.setTexture(inputTex, index: 0)
@@ -437,13 +433,11 @@ class ChromaKeyVideoProcessor: NSView {
     private func cgImage(from pixelBuffer: CVPixelBuffer) -> CGImage? {
         let w = CVPixelBufferGetWidth(pixelBuffer)
         let h = CVPixelBufferGetHeight(pixelBuffer)
-        // No vertical flip (fix upside-down)
         let ci = CIImage(cvPixelBuffer: pixelBuffer)
         return ciContext.createCGImage(ci, from: CGRect(x: 0, y: 0, width: w, height: h))
     }
     
     private func convertMetalTextureToCGImage(_ texture: MTLTexture) -> CGImage? {
-        // Match the non-key path orientation: no vertical flip
         guard let ciImage = CIImage(mtlTexture: texture, options: [
             .colorSpace: CGColorSpaceCreateDeviceRGB()
         ]) else { return nil }
@@ -479,12 +473,11 @@ class ChromaKeyVideoProcessor: NSView {
         itemOutput = nil
         if hasSecurityAccess {
             url.stopAccessingSecurityScopedResource()
-            hasSecurityAccess = false
         }
     }
 }
 
-// MARK: - Chrome Key Processor Classes
+// MARK: - Chroma Key Camera Processor
 
 class ChromaKeyProcessor: NSView {
     private let feed: CameraFeed
@@ -496,11 +489,9 @@ class ChromaKeyProcessor: NSView {
     private var frameObservationTimer: Timer?
     private var lastProcessedFrameCount: Int = 0
 
-    // Chroma key pipeline state
     private var ckPipelineState: MTLComputePipelineState?
     private var ckFallbackBGTexture: MTLTexture?
 
-    // Processing queue and safety
     private let processingQueue = DispatchQueue(label: "chromakey.processing", qos: .userInitiated)
     private var isDestroyed = false
 
@@ -534,21 +525,15 @@ class ChromaKeyProcessor: NSView {
     private func setupChromaKeyPipeline() {
         guard let library = metalDevice.makeDefaultLibrary(),
               let function = library.makeFunction(name: "chromaKeyKernel") else {
-            print("❌ Failed to load chromaKeyKernel function")
             return
         }
 
-        do {
-            ckPipelineState = try metalDevice.makeComputePipelineState(function: function)
-        } catch {
-            print("❌ Failed to create chroma key pipeline state: \(error)")
-        }
+        ckPipelineState = try? metalDevice.makeComputePipelineState(function: function)
 
-        // Create fallback background texture
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
         desc.usage = [.shaderRead]
         if let tex = metalDevice.makeTexture(descriptor: desc) {
-            var pixel: UInt32 = 0x000000FF // Black with full alpha
+            var pixel: UInt32 = 0x000000FF
             tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 4)
             ckFallbackBGTexture = tex
         }
@@ -563,10 +548,7 @@ class ChromaKeyProcessor: NSView {
                 self.lastProcessedFrameCount = self.feed.frameCount
             }
 
-            // Always update if chroma key enabled (settings change or color change)
-            if self.chromaKeySettings.enabled {
-                self.updateFrameContent()
-            } else if hasNewFrame {
+            if self.chromaKeySettings.enabled || hasNewFrame {
                 self.updateFrameContent()
             }
         }
@@ -574,7 +556,6 @@ class ChromaKeyProcessor: NSView {
 
     func updateChromaKeySettings(_ newSettings: PiPChromaKeySettings) {
         self.chromaKeySettings = newSettings
-        // Immediate update, trigger new processing
         self.updateFrameContent()
     }
 
@@ -610,10 +591,8 @@ class ChromaKeyProcessor: NSView {
               let pipelineState = ckPipelineState,
               let fallbackBG = ckFallbackBGTexture else { return nil }
         
-        // Convert CGImage to Metal texture
         guard let inputTexture = convertCGImageToMetalTexture(cgImage) else { return nil }
         
-        // Create output texture
         let outputDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: inputTexture.pixelFormat,
             width: inputTexture.width,
@@ -623,11 +602,9 @@ class ChromaKeyProcessor: NSView {
         outputDesc.usage = [.shaderRead, .shaderWrite]
         guard let outputTexture = metalDevice.makeTexture(descriptor: outputDesc) else { return nil }
         
-        // Create command buffer
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
         
-        // Set up uniforms (same as camera processor)
         var uniforms = ChromaKeyUniforms(
             keyR: settings.keyR,
             keyG: settings.keyG,
@@ -656,7 +633,7 @@ class ChromaKeyProcessor: NSView {
             bgW: 0,
             bgH: 0,
             fillMode: 0,
-            outputMode: 1.0 // Premultiplied alpha output for PiP
+            outputMode: 1.0
         )
         
         encoder.setComputePipelineState(pipelineState)
@@ -675,10 +652,8 @@ class ChromaKeyProcessor: NSView {
         encoder.dispatchThreadgroups(threadGroupsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
         
-        // IMPORTANT: Submit asynchronously, don't wait!
         commandBuffer.commit()
         
-        // Use a semaphore with timeout instead of blocking wait
         let semaphore = DispatchSemaphore(value: 0)
         var result: CGImage?
         
@@ -689,10 +664,8 @@ class ChromaKeyProcessor: NSView {
             semaphore.signal()
         }
         
-        // Wait with timeout to avoid blocking indefinitely
         let timeout = DispatchTime.now() + .milliseconds(100)
         if semaphore.wait(timeout: timeout) == .timedOut {
-            print("⚠️ Chroma key processing timed out")
             return nil
         }
         
@@ -707,7 +680,6 @@ class ChromaKeyProcessor: NSView {
                 MTKTextureLoader.Option.textureStorageMode: MTLStorageMode.shared.rawValue
             ])
         } catch {
-            print("❌ Failed to convert CGImage to Metal texture: \(error)")
             return nil
         }
     }
@@ -772,7 +744,6 @@ class ChromaKeyImageProcessor: NSView {
     private var ckPipelineState: MTLComputePipelineState?
     private var ckFallbackBGTexture: MTLTexture?
     
-    // Processing queue and safety
     private let processingQueue = DispatchQueue(label: "chromakey.image.processing", qos: .userInitiated)
     private var isDestroyed = false
     
@@ -805,39 +776,30 @@ class ChromaKeyImageProcessor: NSView {
     private func setupChromaKeyPipeline() {
         guard let library = metalDevice.makeDefaultLibrary(),
               let function = library.makeFunction(name: "chromaKeyKernel") else {
-            print("❌ Failed to load chromaKeyKernel function")
             return
         }
         
-        do {
-            ckPipelineState = try metalDevice.makeComputePipelineState(function: function)
-        } catch {
-            print("❌ Failed to create chroma key pipeline state: \(error)")
-        }
+        ckPipelineState = try? metalDevice.makeComputePipelineState(function: function)
         
-        // Create fallback background texture
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
         desc.usage = [.shaderRead]
         if let tex = metalDevice.makeTexture(descriptor: desc) {
-            var pixel: UInt32 = 0x000000FF // Black with full alpha
+            var pixel: UInt32 = 0x000000FF
             tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 4)
             ckFallbackBGTexture = tex
         }
     }
     
     func updateChromaKeySettings(_ newSettings: PiPChromaKeySettings) {
-        // Only update if settings actually changed
         if chromaKeySettings != newSettings {
             chromaKeySettings = newSettings
             updateImageContent()
-            print("🎨 ChromaKeyImageProcessor: Settings updated, reprocessing image")
         }
     }
     
     private func updateImageContent() {
         guard !isDestroyed, let cgImage = originalImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         
-        // If chroma key is not enabled, just display the original image
         if !chromaKeySettings.enabled {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -846,7 +808,6 @@ class ChromaKeyImageProcessor: NSView {
             return
         }
         
-        // Apply chroma key asynchronously
         processingQueue.async { [weak self] in
             guard let self = self, !self.isDestroyed else { return }
             
@@ -867,10 +828,8 @@ class ChromaKeyImageProcessor: NSView {
               let pipelineState = ckPipelineState,
               let fallbackBG = ckFallbackBGTexture else { return nil }
         
-        // Convert CGImage to Metal texture
         guard let inputTexture = convertCGImageToMetalTexture(cgImage) else { return nil }
         
-        // Create output texture
         let outputDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: inputTexture.pixelFormat,
             width: inputTexture.width,
@@ -880,11 +839,9 @@ class ChromaKeyImageProcessor: NSView {
         outputDesc.usage = [.shaderRead, .shaderWrite]
         guard let outputTexture = metalDevice.makeTexture(descriptor: outputDesc) else { return nil }
         
-        // Create command buffer
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
         
-        // Set up uniforms (same as camera processor)
         var uniforms = ChromaKeyUniforms(
             keyR: settings.keyR,
             keyG: settings.keyG,
@@ -913,7 +870,7 @@ class ChromaKeyImageProcessor: NSView {
             bgW: 0,
             bgH: 0,
             fillMode: 0,
-            outputMode: 1.0 // Premultiplied alpha output for PiP
+            outputMode: 1.0
         )
         
         encoder.setComputePipelineState(pipelineState)
@@ -932,10 +889,8 @@ class ChromaKeyImageProcessor: NSView {
         encoder.dispatchThreadgroups(threadGroupsPerGrid, threadsPerThreadgroup: threadsPerGroup)
         encoder.endEncoding()
         
-        // IMPORTANT: Submit asynchronously, don't wait!
         commandBuffer.commit()
         
-        // Use a semaphore with timeout instead of blocking wait
         let semaphore = DispatchSemaphore(value: 0)
         var result: CGImage?
         
@@ -946,10 +901,8 @@ class ChromaKeyImageProcessor: NSView {
             semaphore.signal()
         }
         
-        // Wait with timeout to avoid blocking indefinitely
         let timeout = DispatchTime.now() + .milliseconds(100)
         if semaphore.wait(timeout: timeout) == .timedOut {
-            print("⚠️ Chroma key processing timed out")
             return nil
         }
         
@@ -964,7 +917,6 @@ class ChromaKeyImageProcessor: NSView {
                 MTKTextureLoader.Option.textureStorageMode: MTLStorageMode.shared.rawValue
             ])
         } catch {
-            print("❌ Failed to convert CGImage to Metal texture: \(error)")
             return nil
         }
     }
@@ -1015,7 +967,7 @@ class ChromaKeyImageProcessor: NSView {
     }
 }
 
-// MARK: - Chroma Key Uniforms Structure
+// MARK: - Chroma Key Uniforms (processors)
 
 private struct ChromaKeyUniforms {
     let keyR: Float

@@ -1,12 +1,18 @@
 import Foundation
 import AVFoundation
+import CoreGraphics
 
 @MainActor
 final class LayerStackManager: ObservableObject {
+    // Program layers (legacy API keeps using \\"layers\\")
     @Published var layers: [CompositedLayer] = []
     @Published var selectedLayerID: UUID?
-
     @Published var editingLayerID: UUID?
+
+    // Preview layers (independent from Program)
+    @Published var previewLayers: [CompositedLayer] = []
+    @Published var selectedPreviewLayerID: UUID?
+    @Published var editingPreviewLayerID: UUID?
 
     private weak var productionManager: UnifiedProductionManager?
 
@@ -21,6 +27,89 @@ final class LayerStackManager: ObservableObject {
     func setProductionManager(_ pm: UnifiedProductionManager) {
         self.productionManager = pm
     }
+
+    // MARK: - Generic helpers for Preview vs Program
+
+    func layers(isPreview: Bool) -> [CompositedLayer] {
+        isPreview ? previewLayers : layers
+    }
+
+    func setLayers(_ newLayers: [CompositedLayer], isPreview: Bool) {
+        if isPreview {
+            previewLayers = newLayers
+        } else {
+            layers = newLayers
+        }
+        objectWillChange.send()
+    }
+
+    func update(_ layer: CompositedLayer, isPreview: Bool) {
+        if isPreview {
+            guard let i = previewLayers.firstIndex(where: { $0.id == layer.id }) else { return }
+            previewLayers[i] = layer
+        } else {
+            guard let i = layers.firstIndex(where: { $0.id == layer.id }) else { return }
+            layers[i] = layer
+        }
+        objectWillChange.send()
+    }
+
+    func selectLayer(_ id: UUID?, isPreview: Bool) {
+        if isPreview {
+            selectedPreviewLayerID = id
+        } else {
+            selectedLayerID = id
+        }
+        objectWillChange.send()
+    }
+
+    func beginEditingLayer(_ id: UUID, isPreview: Bool) {
+        if isPreview {
+            editingPreviewLayerID = id
+        } else {
+            editingLayerID = id
+        }
+        objectWillChange.send()
+    }
+
+    func endEditing(isPreview: Bool) {
+        if isPreview {
+            editingPreviewLayerID = nil
+        } else {
+            editingLayerID = nil
+        }
+        objectWillChange.send()
+    }
+
+    func removeLayer(_ id: UUID, isPreview: Bool) {
+        if isPreview {
+            previewLayers.removeAll { $0.id == id }
+            if selectedPreviewLayerID == id { selectedPreviewLayerID = nil }
+        } else {
+            layers.removeAll { $0.id == id }
+            if selectedLayerID == id { selectedLayerID = nil }
+        }
+        pipAudioTaps.removeValue(forKey: id)
+        pipAudioMeters.removeValue(forKey: id)
+        objectWillChange.send()
+    }
+
+    func moveLayer(from offsets: IndexSet, to index: Int, isPreview: Bool) {
+        if isPreview {
+            previewLayers.move(fromOffsets: offsets, toOffset: index)
+            for (i, idx) in previewLayers.indices.enumerated() {
+                previewLayers[idx].zIndex = i
+            }
+        } else {
+            layers.move(fromOffsets: offsets, toOffset: index)
+            for (i, idx) in layers.indices.enumerated() {
+                layers[idx].zIndex = i
+            }
+        }
+        objectWillChange.send()
+    }
+
+    // MARK: - Program-specific (legacy API)
 
     func addCameraLayer(feedId: UUID, name: String) {
         let layer = CompositedLayer(
@@ -70,26 +159,15 @@ final class LayerStackManager: ObservableObject {
     }
 
     func removeLayer(_ id: UUID) {
-        layers.removeAll { $0.id == id }
-        if selectedLayerID == id { selectedLayerID = nil }
-        pipAudioTaps.removeValue(forKey: id)
-        pipAudioMeters.removeValue(forKey: id)
-        objectWillChange.send()
+        removeLayer(id, isPreview: false)
     }
 
     func moveLayer(from offsets: IndexSet, to index: Int) {
-        layers.move(fromOffsets: offsets, toOffset: index)
-        // Normalize zIndex top-to-bottom
-        for (i, idx) in layers.indices.enumerated() {
-            layers[idx].zIndex = i
-        }
-        objectWillChange.send()
+        moveLayer(from: offsets, to: index, isPreview: false)
     }
 
     func update(_ layer: CompositedLayer) {
-        guard let i = layers.firstIndex(where: { $0.id == layer.id }) else { return }
-        layers[i] = layer
-        objectWillChange.send()
+        update(layer, isPreview: false)
     }
 
     func registerPiPAudioTap(for id: UUID, tap: PlayerAudioTap?) {
@@ -105,10 +183,30 @@ final class LayerStackManager: ObservableObject {
     }
 
     func beginEditingLayer(_ id: UUID) {
-        editingLayerID = id
+        beginEditingLayer(id, isPreview: false)
     }
 
     func endEditing() {
+        endEditing(isPreview: false)
+    }
+
+    // MARK: - TAKE integration
+
+    func pushPreviewToProgram(overwrite: Bool = true) {
+        if overwrite {
+            layers = previewLayers
+        } else {
+            // Append with zIndex normalization (optional behavior)
+            let maxZ = (layers.map { $0.zIndex }.max() ?? 0)
+            var incoming = previewLayers
+            // Rebase zIndex so incoming sit on top
+            for i in incoming.indices {
+                incoming[i].zIndex = maxZ + 1 + i
+            }
+            layers.append(contentsOf: incoming)
+        }
+        selectedLayerID = nil
         editingLayerID = nil
+        objectWillChange.send()
     }
 }

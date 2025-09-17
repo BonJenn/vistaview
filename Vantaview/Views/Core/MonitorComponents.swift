@@ -63,6 +63,14 @@ struct SimplePreviewMonitorView: View {
                 }
             }
             
+            // Render composited PiP layers (non-interactive surface)
+            CompositedLayersContent(productionManager: productionManager, isPreview: true)
+                .allowsHitTesting(false)
+            
+            // Interactive overlay for selecting/moving/scaling/editing titles & PiPs
+            LayersInteractiveOverlay(isPreview: true)
+                .allowsHitTesting(true)
+            
             if isTargeted {
                 Rectangle()
                     .fill(Color.blue.opacity(0.3))
@@ -205,8 +213,13 @@ struct SimpleProgramMonitorView: View {
                 ProgramFeedView(productionManager: productionManager)
             }
             
-            CompositedLayersContent(productionManager: productionManager)
+            // Render composited PiP layers (non-interactive surface)
+            CompositedLayersContent(productionManager: productionManager, isPreview: false)
                 .allowsHitTesting(false)
+            
+            // Interactive overlay for selecting/moving/scaling/editing titles & PiPs
+            LayersInteractiveOverlay(isPreview: false)
+                .allowsHitTesting(true)
             
             if isTargeted {
                 Rectangle()
