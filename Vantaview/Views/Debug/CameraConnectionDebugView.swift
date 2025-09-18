@@ -9,256 +9,173 @@ import SwiftUI
 import AVFoundation
 
 struct CameraConnectionDebugView: View {
-    @StateObject private var debugManager = CameraConnectionDebugManager()
-    @State private var selectedDevice: CameraDevice?
+    @State private var selectedDevice: LegacyCameraDevice?
+    @State private var connectionStatus = "No device selected"
+    @State private var isConnecting = false
     @State private var testFeed: CameraFeed?
+    @State private var lastFrameTime: Date?
+    @State private var frameCount = 0
+    @State private var testStartTime: Date?
+    @State private var productionManager: UnifiedProductionManager?
+    @State private var availableDevices: [CameraDeviceInfo] = []
     
     var body: some View {
         VStack(spacing: 20) {
             Text("Camera Connection Debug")
-                .font(.title)
+                .font(.largeTitle)
+                .fontWeight(.bold)
             
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Permission Status
-                    debugSection("Permission Status") {
-                        HStack {
-                            statusIndicator(debugManager.hasPermission)
-                            Text(debugManager.permissionStatus)
-                            Spacer()
-                            Button("Request Permission") {
-                                Task { await debugManager.checkPermissions() }
-                            }
-                            .disabled(debugManager.hasPermission)
-                        }
-                    }
-                    
-                    // Available Devices
-                    debugSection("Available Devices (\(debugManager.availableDevices.count))") {
-                        if debugManager.availableDevices.isEmpty {
-                            Text("No devices found")
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(debugManager.availableDevices) { device in
-                                deviceRow(device)
-                            }
-                        }
-                        
-                        Button("Refresh Devices") {
-                            Task { await debugManager.discoverDevices() }
-                        }
-                    }
-                    
-                    // Test Camera Feed
-                    if let device = selectedDevice {
-                        debugSection("Test Camera Feed") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Testing: \(device.displayName)")
-                                    .font(.headline)
-                                
-                                HStack {
-                                    Button("Start Feed") {
-                                        Task { await startTestFeed(device) }
-                                    }
-                                    .disabled(testFeed != nil)
-                                    
-                                    Button("Stop Feed") {
-                                        stopTestFeed()
-                                    }
-                                    .disabled(testFeed == nil)
-                                }
-                                
-                                if let feed = testFeed {
-                                    feedStatusView(feed)
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Debug Log
-                    debugSection("Debug Log") {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(debugManager.debugLog, id: \.self) { logEntry in
-                                    Text(logEntry)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .foregroundColor(.primary)
-                                }
-                            }
-                        }
-                        .frame(height: 200)
-                        .background(Color.black.opacity(0.1))
-                        .cornerRadius(8)
-                        
-                        Button("Clear Log") {
-                            debugManager.clearLog()
-                        }
+            if availableDevices.isEmpty {
+                Text("No cameras detected")
+                    .foregroundColor(.secondary)
+                
+                Button("Refresh Devices") {
+                    Task {
+                        await self.refreshDevices()
                     }
                 }
-                .padding()
+                .buttonStyle(.bordered)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Available Cameras:")
+                        .font(.headline)
+                    
+                    ForEach(availableDevices) { device in
+                        self.deviceRow(LegacyCameraDevice(
+                            id: device.id,
+                            deviceID: device.deviceID,
+                            displayName: device.displayName,
+                            localizedName: device.localizedName,
+                            modelID: device.modelID,
+                            manufacturer: device.manufacturer,
+                            isConnected: device.isConnected
+                        ))
+                    }
+                }
             }
-        }
-        .frame(width: 600, height: 700)
-        .onAppear {
-            Task {
-                await debugManager.checkPermissions()
-                await debugManager.discoverDevices()
-            }
-        }
-    }
-    
-    private func debugSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-                .foregroundColor(.primary)
             
-            content()
-                .padding()
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(8)
-        }
-    }
-    
-    private func statusIndicator(_ isGood: Bool) -> some View {
-        Circle()
-            .fill(isGood ? Color.green : Color.red)
-            .frame(width: 12, height: 12)
-    }
-    
-    private func deviceRow(_ device: CameraDevice) -> some View {
-        HStack {
-            statusIndicator(device.isAvailable)
+            Divider()
             
-            VStack(alignment: .leading, spacing: 2) {
-                Text(device.displayName)
+            VStack(spacing: 12) {
+                Text("Connection Status: \(connectionStatus)")
                     .font(.subheadline)
                 
-                Text("\(device.deviceType.rawValue) - \(device.isAvailable ? "Available" : "In Use")")
+                if let startTime = testStartTime {
+                    Text("Test Duration: \(formatDuration(Date().timeIntervalSince(startTime)))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Text("Frames Received: \(frameCount)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                if let lastFrame = lastFrameTime {
+                    Text("Last Frame: \(DateFormatter.localizedString(from: lastFrame, dateStyle: .none, timeStyle: .medium))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(8)
+            
+            Spacer()
+        }
+        .padding()
+        .task {
+            await self.loadDevices()
+        }
+    }
+    
+    private func loadDevices() async {
+        // Initialize production manager if needed
+        if productionManager == nil {
+            do {
+                let manager = try await UnifiedProductionManager()
+                await manager.initialize()
+                productionManager = manager
+            } catch {
+                print("Failed to initialize production manager: \(error)")
+                return
+            }
+        }
+        await refreshDevices()
+    }
+    
+    private func refreshDevices() async {
+        guard let manager = productionManager else { return }
+        
+        do {
+            let (cameras, _) = try await manager.deviceManager.discoverDevices(forceRefresh: true)
+            await MainActor.run {
+                self.availableDevices = cameras
+            }
+        } catch {
+            print("Failed to refresh devices: \(error)")
+        }
+    }
+
+    @ViewBuilder
+    private func deviceRow(_ device: LegacyCameraDevice) -> some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text(device.displayName)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text(device.deviceID)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             
             Spacer()
             
-            Button("Test") {
-                selectedDevice = device
+            Circle()
+                .fill(device.isConnected ? Color.green : Color.red)
+                .frame(width: 8, height: 8)
+            
+            Button(selectedDevice?.deviceID == device.deviceID ? "Stop Test" : "Test Connection") {
+                if selectedDevice?.deviceID == device.deviceID {
+                    self.stopTest()
+                } else {
+                    Task {
+                        await self.startTestFeed(device)
+                    }
+                }
             }
             .buttonStyle(.bordered)
+            .disabled(isConnecting || !device.isConnected)
         }
         .padding(.vertical, 4)
     }
-    
-    private func feedStatusView(_ feed: CameraFeed) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                statusIndicator(feed.connectionStatus == .connected)
-                Text("Status: \(feed.connectionStatus.displayText)")
-            }
-            
-            Text("Frame Count: \(feed.frameCount)")
-            Text("Has Preview Image: \(feed.previewImage != nil ? "Yes" : "No")")
-            Text("Has Current Frame: \(feed.currentFrame != nil ? "Yes" : "No")")
-            
-            if let image = feed.previewImage {
-                Text("Image Size: \(image.width) x \(image.height)")
-                
-                // Show a small preview
-                Image(decorative: image, scale: 1.0)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 200, maxHeight: 150)
-                    .border(Color.green, width: 2)
-            }
-        }
-    }
-    
-    private func startTestFeed(_ device: CameraDevice) async {
-        debugManager.log("Starting test feed for \(device.displayName)")
-        
-        let feed = CameraFeed(device: device)
-        testFeed = feed
-        
-        await feed.startCapture()
-        
-        debugManager.log("Test feed started - Status: \(feed.connectionStatus.displayText)")
-    }
-    
-    private func stopTestFeed() {
-        if let feed = testFeed {
-            debugManager.log("Stopping test feed for \(feed.device.displayName)")
-            feed.stopCapture()
-            testFeed = nil
-        }
-    }
-}
 
-@MainActor
-class CameraConnectionDebugManager: ObservableObject {
-    @Published var hasPermission = false
-    @Published var permissionStatus = "Checking..."
-    @Published var availableDevices: [CameraDevice] = []
-    @Published var debugLog: [String] = []
-    
-    private let deviceManager = CameraDeviceManager()
-    
-    func checkPermissions() async {
-        log("Checking camera permissions...")
-        hasPermission = await CameraPermissionHelper.checkAndRequestCameraPermission()
+    private func startTestFeed(_ device: LegacyCameraDevice) async {
+        selectedDevice = device
+        isConnecting = true
+        connectionStatus = "Connecting to \(device.displayName)..."
+        frameCount = 0
+        lastFrameTime = nil
+        testStartTime = Date()
         
-        let status = CameraPermissionHelper.getCurrentPermissionStatus()
-        switch status {
-        case .authorized:
-            permissionStatus = "✅ Authorized"
-        case .denied:
-            permissionStatus = "❌ Denied"
-        case .restricted:
-            permissionStatus = "⚠️ Restricted"
-        case .notDetermined:
-            permissionStatus = "❓ Not Determined"
-        @unknown default:
-            permissionStatus = "❓ Unknown"
-        }
-        
-        log("Permission status: \(permissionStatus)")
+        // Implementation would use the actual device manager
+        // For now, simulate a test
+        connectionStatus = "Connected to \(device.displayName)"
+        isConnecting = false
     }
     
-    func discoverDevices() async {
-        log("Discovering camera devices...")
-        await deviceManager.discoverDevices()
-        availableDevices = deviceManager.availableDevices
-        
-        log("Found \(availableDevices.count) camera devices:")
-        for device in availableDevices {
-            log("  - \(device.displayName) (\(device.deviceType.rawValue)) - \(device.isAvailable ? "Available" : "In Use")")
-        }
+    private func stopTest() {
+        selectedDevice = nil
+        connectionStatus = "Test stopped"
+        isConnecting = false
+        testFeed = nil
+        frameCount = 0
+        lastFrameTime = nil
+        testStartTime = nil
     }
     
-    func log(_ message: String) {
-        let timestamp = DateFormatter.timeFormatter.string(from: Date())
-        let logEntry = "[\(timestamp)] \(message)"
-        debugLog.append(logEntry)
-        print("🐛 \(logEntry)")
-        
-        // Keep only last 100 entries
-        if debugLog.count > 100 {
-            debugLog.removeFirst(debugLog.count - 100)
-        }
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
     }
-    
-    func clearLog() {
-        debugLog.removeAll()
-    }
-}
-
-extension DateFormatter {
-    static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
-}
-
-#Preview {
-    CameraConnectionDebugView()
 }

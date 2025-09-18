@@ -83,10 +83,12 @@ final class PreviewProgramManager: ObservableObject {
     @Published var isTransitioning = false
     @Published var transitionProgress: Double = 0.0
     
-    // Dependencies
+    // Dependencies - now includes background processing actors
     private let cameraFeedManager: CameraFeedManager
     private let unifiedProductionManager: UnifiedProductionManager
     private let effectManager: EffectManager
+    private let frameProcessor: FrameProcessor
+    private let audioEngine: AudioEngine
     
     // Timers for updating playback time
     private var previewTimeObserver: Any?
@@ -101,6 +103,10 @@ final class PreviewProgramManager: ObservableObject {
     
     private var previewAVPlayback: AVPlayerMetalPlayback?
     private var programAVPlayback: AVPlayerMetalPlayback?
+    
+    // Background processing tasks for media content
+    private var previewProcessingTask: Task<Void, Never>?
+    private var programProcessingTask: Task<Void, Never>?
     
     // MARK: - Public accessors for Metal textures
     
@@ -163,10 +169,16 @@ final class PreviewProgramManager: ObservableObject {
         return getDisplayName(for: programSource)
     }
     
-    init(cameraFeedManager: CameraFeedManager, unifiedProductionManager: UnifiedProductionManager, effectManager: EffectManager) {
+    init(cameraFeedManager: CameraFeedManager, 
+         unifiedProductionManager: UnifiedProductionManager, 
+         effectManager: EffectManager,
+         frameProcessor: FrameProcessor,
+         audioEngine: AudioEngine) {
         self.cameraFeedManager = cameraFeedManager
         self.unifiedProductionManager = unifiedProductionManager
         self.effectManager = effectManager
+        self.frameProcessor = frameProcessor
+        self.audioEngine = audioEngine
         
         self.previewEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getPreviewEffectChain())
         self.programEffectRunner = EffectRunner(device: effectManager.metalDevice, chain: effectManager.getProgramEffectChain())
@@ -213,14 +225,16 @@ final class PreviewProgramManager: ObservableObject {
         print("🎬 PreviewProgramManager.loadToPreview() called with: \(displayName)")
         print("🎬 Source type: \(source)")
         
-        // Stop current preview if playing
+        // Stop current preview processing
         stopPreview()
         
         switch source {
         case .camera(let feed):
             print("🎬 PreviewProgramManager: Loading camera feed to preview: \(feed.device.displayName)")
             previewSource = source
-            updatePreviewFromCamera(feed)
+            Task {
+                await updatePreviewFromCamera(feed)
+            }
             print("🎬 PreviewProgramManager: Preview source set to camera")
             
         case .media(let file, let player):
@@ -236,7 +250,9 @@ final class PreviewProgramManager: ObservableObject {
                 loadImageToPreview(file)
             case .video, .audio:
                 print("🎬 PreviewProgramManager: Loading video/audio to preview")
-                loadMediaToPreview(file)
+                Task {
+                    await loadMediaToPreview(file)
+                }
             }
             
         case .virtual(let camera):
@@ -244,7 +260,9 @@ final class PreviewProgramManager: ObservableObject {
             unifiedProductionManager.selectedPreviewCameraID = nil
             print("🎬 PreviewProgramManager: Loading virtual camera to preview: \(camera.name)")
             previewSource = source
-            updatePreviewFromVirtual(camera)
+            Task {
+                await updatePreviewFromVirtual(camera)
+            }
             
         case .none:
             print("🎬 PreviewProgramManager: Clearing preview")
@@ -260,13 +278,15 @@ final class PreviewProgramManager: ObservableObject {
         
         print("📺 Loading to program: \(displayName)")
         
-        // Stop current program if playing
+        // Stop current program processing
         stopProgram()
         
         switch source {
         case .camera(let feed):
             programSource = source
-            updateProgramFromCamera(feed)
+            Task {
+                await updateProgramFromCamera(feed)
+            }
             
         case .media(let file, let player):
             print("📺 PreviewProgramManager: Loading media file to program: \(file.name)")
@@ -279,12 +299,16 @@ final class PreviewProgramManager: ObservableObject {
                 loadImageToProgram(file)
             case .video, .audio:
                 print("📺 PreviewProgramManager: Loading video/audio to program")
-                loadMediaToProgram(file)
+                Task {
+                    await loadMediaToProgram(file)
+                }
             }
             
         case .virtual(let camera):
             programSource = source
-            updateProgramFromVirtual(camera)
+            Task {
+                await updateProgramFromVirtual(camera)
+            }
             
         case .none:
             clearProgram()
@@ -301,7 +325,9 @@ final class PreviewProgramManager: ObservableObject {
         }
         
         if case .camera(let feed) = previewSource {
-            unifiedProductionManager.switchProgram(to: feed.device.deviceID)
+            Task {
+                await unifiedProductionManager.switchProgram(to: feed.device.deviceID)
+            }
         }
         
         let oldProgramSource = programSource
@@ -657,24 +683,27 @@ final class PreviewProgramManager: ObservableObject {
     
     // MARK: - Private Implementation
     
-    private func loadMediaToPreview(_ file: MediaFile) {
-        // Stop previous preview pipeline
+    private func loadMediaToPreview(_ file: MediaFile) async {
+        // Stop previous processing
+        previewProcessingTask?.cancel()
         previewVTPlayback?.stop()
         previewVTPlayback = nil
         previewAVPlayback?.stop()
         previewAVPlayback = nil
         previewVideoTexture = nil
         
-        print("🎬 PreviewProgramManager: Starting loadMediaToPreview for: \(file.name)")
+        print("🎬 PreviewProgramManager: Starting async loadMediaToPreview for: \(file.name)")
         
         // Remove existing observer if any
-        if let observer = previewTimeObserver {
-            previewPlayer?.removeTimeObserver(observer)
-            previewTimeObserver = nil
+        await MainActor.run {
+            if let observer = self.previewTimeObserver {
+                self.previewPlayer?.removeTimeObserver(observer)
+                self.previewTimeObserver = nil
+            }
         }
         
         // Stop accessing previous security-scoped resource if needed
-        if case .media(let previousFile, _) = previewSource {
+        if case .media(let previousFile, _) = await MainActor.run(body: { self.previewSource }) {
             previousFile.url.stopAccessingSecurityScopedResource()
         }
         
@@ -684,182 +713,79 @@ final class PreviewProgramManager: ObservableObject {
             return
         }
         
-        // Duration via AVAsset (async load)
-        let asset = AVURLAsset(url: file.url)
-        Task {
+        // Set up media processing with frame processor integration
+        previewProcessingTask = Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            
             do {
-                let duration = try await asset.load(.duration)
-                if duration.isValid {
+                try Task.checkCancellation()
+                
+                // Create frame processing stream for preview
+                let processingStream = await self.frameProcessor.createFrameStream(
+                    for: "preview_media",
+                    effectChain: self.effectManager.getPreviewEffectChain()
+                )
+                
+                // Set up AVPlayer for media playback
+                let asset = AVURLAsset(url: file.url)
+                let playerItem = AVPlayerItem(url: file.url)
+                let player = AVPlayer(playerItem: playerItem)
+                
+                await MainActor.run {
+                    self.previewSource = .media(file, player: player)
+                    self.previewPlayer = player
+                }
+                
+                // Create Metal playback for texture extraction
+                let attrs: [String: Any] = [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                    kCVPixelBufferMetalCompatibilityKey as String: true
+                ]
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+                playerItem.add(output)
+                
+                if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: self.effectManager.metalDevice) {
                     await MainActor.run {
-                        self.previewDuration = CMTimeGetSeconds(duration)
-                        print("📼 PREVIEW duration loaded (asset): \(self.previewDuration) s")
+                        self.previewAVPlayback = playback
+                        playback.setEffectRunner(self.previewEffectRunner)
+                        playback.start()
+                        player.play()
+                    }
+                    
+                    // Process frames and submit to frame processor
+                    while !Task.isCancelled {
+                        try Task.checkCancellation()
+                        
+                        if let texture = playback.latestTexture {
+                            let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
+                            try await self.frameProcessor.submitTexture(texture, for: "preview_media", timestamp: timestamp)
+                        }
+                        
+                        // Maintain frame rate
+                        try await Task.sleep(nanoseconds: 33_333_333) // ~30fps
                     }
                 }
-            } catch {
-                print("Failed to load PREVIEW duration: \(error)")
-            }
-        }
-        
-        let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
-        if file.fileType == .audio || !hasVideoTrack {
-            print("🎧 Preview: Configuring audio-only playback for \(file.name) (hasVideoTrack=\(hasVideoTrack))")
-            let player = createAudioOnlyPlayer(for: asset) ?? AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            previewAudioPlayer = player
-            previewPlayer = player
-            previewSource = .media(file, player: player)
-            
-            if let item = player.currentItem {
-                self.previewAudioTap = PlayerAudioTap(playerItem: item)
-            } else {
-                self.previewAudioTap = nil
-            }
-            
-            // Add playback end notification for looping
-            setupPlayerNotifications(for: player, isPreview: true)
-            
-            let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
-            previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
-                self?.previewCurrentTime = CMTimeGetSeconds(t)
-            }
-            isPreviewPlaying = false
-            objectWillChange.send()
-            print("✅ Preview audio-only configured")
-            return
-        }
-        
-        if preferVTDecode && file.fileType == .video {
-            // VT path currently disabled by default. Fallthrough to AVPlayer path.
-        }
-        
-        // AVPlayer + ItemOutput path
-        let playerItem = AVPlayerItem(url: file.url)
-        let attrs: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-            kCVPixelBufferMetalCompatibilityKey as String: true
-        ]
-        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
-        output.suppressesPlayerRendering = true
-        playerItem.add(output)
-        output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
-
-        self.previewAudioTap = PlayerAudioTap(playerItem: playerItem)
-
-        let player = AVPlayer(playerItem: playerItem)
-        player.automaticallyWaitsToMinimizeStalling = false
-        player.allowsExternalPlayback = false
-        
-        // Set source BEFORE creating Metal playback to ensure UI knows about it
-        previewSource = .media(file, player: player)
-        previewPlayer = player
-        
-        // Add playback end notification for looping
-        setupPlayerNotifications(for: player, isPreview: true)
-        
-        if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: effectManager.metalDevice) {
-            previewAVPlayback = playback
-            playback.setEffectRunner(previewEffectRunner)
-            playback.toneMapEnabled = hdrToneMapEnabled
-            playback.targetFPS = targetFPS
-            playback.onSizeChange = { [weak self] (w: Int, h: Int) in
-                Task { @MainActor in
-                    if h > 0 { self?.previewAspect = CGFloat(w) / CGFloat(h) }
-                }
-            }
-            playback.onFPSUpdate = { [weak self] fps in
-                Task { @MainActor in
-                    self?.previewFPS = fps
-                }
-            }
-            playback.onWatchdog = { [weak self] in
-                print("⚠️ Preview watchdog: FPS below target, capturing next frame")
-                self?.captureNextPreviewFrame()
-            }
-
-            // Start Metal playback BEFORE setting up observers
-            playback.start()
-            print("🎬 PREVIEW Metal playback started")
-            
-            // IMPORTANT: Multiple UI refresh attempts to catch texture availability
-            objectWillChange.send()
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.objectWillChange.send()
-                print("🎬 PREVIEW UI update (0.1s)")
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self.objectWillChange.send()
-                print("🎬 PREVIEW UI update (0.3s)")
                 
-                if self.previewMetalTexture != nil {
-                    print("✅ PREVIEW Metal texture available after 0.3s!")
-                } else {
-                    print("⚠️ PREVIEW Metal texture still not available after 0.3s - forcing refresh")
-                    // Force a texture refresh attempt
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                // Handle processed frames and update UI
+                for await result in processingStream {
+                    if Task.isCancelled { break }
+                    
+                    await MainActor.run {
+                        self.previewVideoTexture = result.outputTexture
+                        if let cgImage = result.processedImage {
+                            self.previewImage = cgImage
+                        }
                         self.objectWillChange.send()
                     }
                 }
+                
+            } catch is CancellationError {
+                print("🎬 Preview media processing cancelled")
+            } catch {
+                print("❌ Preview media processing failed: \(error)")
             }
         }
-        
-        // Autoplay & time observer - setup AFTER Metal playback is ready
-        var statusObserver: NSKeyValueObservation?
-        statusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
-            Task { @MainActor in
-                if item.status != .unknown { statusObserver?.invalidate() }
-                if item.status == .readyToPlay {
-                    print("🎬 PREVIEW PlayerItem ready to play - starting playback")
-                    self?.isPreviewPlaying = true
-                    self?.previewPlayer?.rate = self?.previewRate ?? 1.0
-                    self?.previewPlayer?.volume = (self?.previewMuted ?? false) ? 0.0 : (self?.previewVolume ?? 1.0)
-                    self?.previewPlayer?.play()
-                    
-                    // Additional UI update when playback starts
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        self?.objectWillChange.send()
-                        print("🎬 PREVIEW UI update after playback start")
-                    }
-                }
-            }
-        }
-        
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
-        previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
-            self?.previewCurrentTime = CMTimeGetSeconds(t)
-        }
-        
-        objectWillChange.send()
-        print("📼 PREVIEW AVPlayer + ItemOutput + Metal playback configured")
-        
-        // Enhanced texture monitoring with more aggressive refresh attempts
-        let startTime = CACurrentMediaTime()
-        var textureCheckCount = 0
-        let textureCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-            
-            textureCheckCount += 1
-            let elapsed = CACurrentMediaTime() - startTime
-            
-            if self.previewMetalTexture != nil {
-                print("✅ PREVIEW Metal texture became available after \(String(format: "%.2f", elapsed)) seconds")
-                self.objectWillChange.send()
-                timer.invalidate()
-            } else if elapsed > 5.0 {
-                print("⚠️ PREVIEW Metal texture still not available after 5 seconds - giving up")
-                timer.invalidate()
-            } else if textureCheckCount % 20 == 0 {
-                print("🔍 PREVIEW still waiting for Metal texture... (\(String(format: "%.2f", elapsed))s)")
-                self.objectWillChange.send() // Force UI refresh every 1 second (20 * 0.05s)
-            }
-        }
-        player.rate = previewRate
-        player.volume = previewMuted ? 0.0 : previewVolume
-        player.play()
     }
     
     private func loadMediaToProgram(_ file: MediaFile) {
@@ -943,7 +869,6 @@ final class PreviewProgramManager: ObservableObject {
             kCVPixelBufferMetalCompatibilityKey as String: true
         ]
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
-        output.suppressesPlayerRendering = true
         playerItem.add(output)
         output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
 

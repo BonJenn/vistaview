@@ -9,249 +9,167 @@ import SwiftUI
 import AVFoundation
 
 struct QuickCameraTestView: View {
-    @State private var testResults: [String] = []
     @State private var isRunning = false
-    @State private var currentTest = ""
+    @State private var testResult = "Press 'Run Quick Test' to start"
+    @State private var productionManager: UnifiedProductionManager?
     
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Quick Camera Diagnostic")
-                .font(.title)
+        VStack(spacing: 24) {
+            Text("Quick Camera Test")
+                .font(.largeTitle)
+                .fontWeight(.bold)
             
-            Text(currentTest)
+            Text("This test will:")
                 .font(.headline)
-                .foregroundColor(.blue)
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(testResults, id: \.self) { result in
-                        Text(result)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(result.hasPrefix("✅") ? .green : 
-                                           result.hasPrefix("❌") ? .red : 
-                                           result.hasPrefix("⚠️") ? .orange : .primary)
-                    }
-                }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(height: 300)
-            .background(Color.black.opacity(0.1))
-            .cornerRadius(8)
             
-            Button("Run Camera Diagnostic") {
-                runDiagnostic()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("1.")
+                        .fontWeight(.bold)
+                    Text("Detect available cameras")
+                }
+                HStack {
+                    Text("2.")
+                        .fontWeight(.bold)
+                    Text("Connect to the first camera found")
+                }
+                HStack {
+                    Text("3.")
+                        .fontWeight(.bold)
+                    Text("Check if frames are being received")
+                }
+                HStack {
+                    Text("4.")
+                        .fontWeight(.bold)
+                    Text("Report success or failure")
+                }
             }
-            .disabled(isRunning)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            Divider()
+            
+            VStack(spacing: 16) {
+                Text("Test Result:")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                ScrollView {
+                    Text(testResult)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+                }
+                .frame(maxHeight: 200)
+                
+                Button(action: {
+                    Task {
+                        await runQuickTest()
+                    }
+                }) {
+                    HStack {
+                        if isRunning {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        }
+                        Text(isRunning ? "Running Test..." : "Run Quick Test")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(isRunning ? Color.gray : Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                }
+                .disabled(isRunning)
+            }
+            
+            Spacer()
         }
         .padding()
-        .frame(width: 500, height: 500)
-    }
-    
-    private func runDiagnostic() {
-        guard !isRunning else { return }
-        
-        isRunning = true
-        testResults.removeAll()
-        
-        Task { @MainActor in
-            await performDiagnostic()
-            isRunning = false
-            currentTest = "Diagnostic Complete"
-        }
-    }
-    
-    private func performDiagnostic() async {
-        log("🧪 Starting camera diagnostic...")
-        
-        // Test 1: Check permissions
-        currentTest = "Checking Permissions..."
-        log("📋 Test 1: Checking camera permissions")
-        
-        let currentStatus = AVCaptureDevice.authorizationStatus(for: .video)
-        log("   Current status: \(currentStatus.rawValue)")
-        
-        if currentStatus != .authorized {
-            log("   Requesting permission...")
-            let granted = await AVCaptureDevice.requestAccess(for: .video)
-            if granted {
-                log("✅ Permission granted")
-            } else {
-                log("❌ Permission denied - cannot proceed")
-                return
+        .frame(maxWidth: 600)
+        .task {
+            // Initialize production manager
+            do {
+                let manager = try await UnifiedProductionManager()
+                await manager.initialize()
+                productionManager = manager
+            } catch {
+                testResult = "Failed to initialize production manager: \(error)"
             }
-        } else {
-            log("✅ Permission already granted")
         }
-        
-        // Test 2: Device discovery
-        currentTest = "Discovering Devices..."
-        log("📱 Test 2: Discovering camera devices")
-        
-        let discoverySession = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
-            mediaType: .video,
-            position: .unspecified
-        )
-        
-        let devices = discoverySession.devices
-        log("   Found \(devices.count) devices via discovery session")
-        
-        for (index, device) in devices.enumerated() {
-            log("   \(index + 1). \(device.localizedName)")
-            log("      - Type: \(device.deviceType.rawValue)")
-            log("      - In use: \(device.isInUseByAnotherApplication)")
-        }
-        
-        if devices.isEmpty {
-            log("❌ No devices found")
-            return
-        } else {
-            log("✅ Found camera devices")
-        }
-        
-        // Test 3: Try to create capture session
-        currentTest = "Testing Camera Connection..."
-        log("🎬 Test 3: Testing capture session with first device")
-        
-        guard let firstDevice = devices.first else {
-            log("❌ No device to test")
-            return
-        }
-        
-        log("   Testing with: \(firstDevice.localizedName)")
+    }
+    
+    private func runQuickTest() async {
+        isRunning = true
+        await quickCameraTest()
+        isRunning = false
+    }
+    
+    private func quickCameraTest() async {
+        print("🧪 QuickCameraTestView: Starting quick camera test")
+        testResult = "Starting quick camera test..."
         
         do {
-            let session = AVCaptureSession()
-            session.beginConfiguration()
-            
-            // Add input
-            let input = try AVCaptureDeviceInput(device: firstDevice)
-            if session.canAddInput(input) {
-                session.addInput(input)
-                log("✅ Added camera input successfully")
-            } else {
-                log("❌ Cannot add camera input")
+            // Check if production manager is available
+            guard let productionManager = productionManager else {
+                testResult = "Production manager not available"
                 return
             }
             
-            // Add output
-            let output = AVCaptureVideoDataOutput()
-            output.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-            ]
+            let deviceManager = productionManager.deviceManager
             
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-                log("✅ Added video output successfully")
-            } else {
-                log("❌ Cannot add video output")
+            print("🧪 QuickCameraTestView: Getting available cameras")
+            let (cameras, _) = try await deviceManager.discoverDevices()
+            
+            guard let firstCamera = cameras.first else {
+                testResult = "No cameras found during discovery"
+                print("🧪 QuickCameraTestView: No cameras found")
                 return
             }
             
-            session.commitConfiguration()
-            log("✅ Session configuration committed")
+            print("🧪 QuickCameraTestView: Found camera: \(firstCamera.displayName)")
+            testResult = "Found camera: \(firstCamera.displayName). Creating feed..."
             
-            // Test 4: Start session
-            currentTest = "Starting Camera Session..."
-            log("▶️ Test 4: Starting capture session")
+            let cameraFeed = CameraFeed(deviceInfo: firstCamera)
             
-            session.startRunning()
+            print("🧪 QuickCameraTestView: Starting capture for: \(firstCamera.displayName)")
+            testResult = "Starting capture for: \(firstCamera.displayName)..."
             
-            // Wait and check
-            try await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            await cameraFeed.startCapture(using: deviceManager)
             
-            if session.isRunning {
-                log("✅ Session is running successfully!")
-                
-                // Test 5: Check for frames with delegate
-                currentTest = "Testing Frame Reception..."
-                log("📸 Test 5: Testing frame reception")
-                
-                let frameReceiver = TestFrameReceiver()
-                let queue = DispatchQueue(label: "test.frame.queue")
-                output.setSampleBufferDelegate(frameReceiver, queue: queue)
-                
-                // Wait for frames
-                try await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                
-                let frameCount = frameReceiver.frameCount
-                if frameCount > 0 {
-                    log("✅ Received \(frameCount) frames in 5 seconds")
-                    log("✅ Camera is working correctly!")
-                } else {
-                    log("❌ No frames received - camera may be in use or blocked")
+            print("🧪 QuickCameraTestView: Capture started, checking for frames...")
+            testResult = "Capture started. Checking for frames..."
+            
+            // Wait for frames to start coming in
+            let maxWaitTime = 5.0 // seconds
+            let checkInterval = 0.1 // seconds
+            var waitTime = 0.0
+            
+            while waitTime < maxWaitTime {
+                if cameraFeed.frameCount > 0 {
+                    testResult = "✅ SUCCESS! Camera is working. Received \(cameraFeed.frameCount) frames from \(firstCamera.displayName)"
+                    print("🧪 QuickCameraTestView: SUCCESS - received \(cameraFeed.frameCount) frames")
+                    
+                    // Stop the feed
+                    await cameraFeed.stopCapture()
+                    return
                 }
-            } else {
-                log("❌ Session failed to start")
+                
+                try await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))
+                waitTime += checkInterval
             }
             
-            session.stopRunning()
-            log("🛑 Test session stopped")
+            // Timeout
+            testResult = "❌ TIMEOUT: No frames received from \(firstCamera.displayName) after \(maxWaitTime) seconds. Status: \(cameraFeed.connectionStatus.displayText)"
+            print("🧪 QuickCameraTestView: TIMEOUT - no frames received")
+            
+            await cameraFeed.stopCapture()
             
         } catch {
-            log("❌ Camera test failed: \(error)")
-        }
-        
-        // Test 6: Compare with CameraFeedManager
-        currentTest = "Testing CameraFeedManager..."
-        log("🔧 Test 6: Testing with CameraFeedManager")
-        
-        let deviceManager = CameraDeviceManager()
-        await deviceManager.discoverDevices()
-        let cameraDevices = deviceManager.availableDevices
-        
-        log("   CameraDeviceManager found \(cameraDevices.count) devices")
-        for device in cameraDevices {
-            log("   - \(device.displayName) (\(device.deviceType.rawValue)) - Available: \(device.isAvailable)")
-        }
-        
-        if let firstCameraDevice = cameraDevices.first(where: { $0.isAvailable }) {
-            log("   Testing CameraFeed with: \(firstCameraDevice.displayName)")
-            
-            let cameraFeed = CameraFeed(device: firstCameraDevice)
-            await cameraFeed.startCapture()
-            
-            log("   CameraFeed status: \(cameraFeed.connectionStatus.displayText)")
-            
-            // Wait and check for frames
-            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-            
-            log("   Frame count: \(cameraFeed.frameCount)")
-            log("   Has preview image: \(cameraFeed.previewImage != nil)")
-            
-            if cameraFeed.frameCount > 0 {
-                log("✅ CameraFeed is working!")
-            } else {
-                log("❌ CameraFeed not receiving frames")
-            }
-            
-            cameraFeed.stopCapture()
-        }
-        
-        log("🏁 Diagnostic complete")
-    }
-    
-    private func log(_ message: String) {
-        testResults.append(message)
-        print("🧪 \(message)")
-    }
-}
-
-class TestFrameReceiver: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    private(set) var frameCount = 0
-    
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        frameCount += 1
-        if frameCount <= 5 {
-            print("🧪 Test frame received: \(frameCount)")
+            testResult = "❌ ERROR: \(error.localizedDescription)"
+            print("🧪 QuickCameraTestView: ERROR - \(error)")
         }
     }
-    
-    func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        print("🧪 Test frame dropped")
-    }
-}
-
-#Preview {
-    QuickCameraTestView()
 }

@@ -11,21 +11,18 @@ import Combine
 import Foundation
 
 struct VJPreviewProgramPane: View {
-    @StateObject private var previewProgramManager: PreviewProgramManager
     @ObservedObject var productionManager: UnifiedProductionManager
-    @ObservedObject var effectManager: EffectManager
-    @Binding var mediaFiles: [MediaFile]
+    @StateObject private var previewProgramManager: PreviewProgramManager
     
-    init(productionManager: UnifiedProductionManager, effectManager: EffectManager, mediaFiles: Binding<[MediaFile]>) {
+    init(productionManager: UnifiedProductionManager) {
         self.productionManager = productionManager
-        self.effectManager = effectManager
-        self._mediaFiles = mediaFiles
-        
-        // Initialize the preview/program manager with effect manager
+        // Initialize with the production manager's components
         self._previewProgramManager = StateObject(wrappedValue: PreviewProgramManager(
             cameraFeedManager: productionManager.cameraFeedManager,
             unifiedProductionManager: productionManager,
-            effectManager: effectManager
+            effectManager: productionManager.effectManager,
+            frameProcessor: productionManager.frameProcessor,
+            audioEngine: productionManager.audioEngine
         ))
     }
     
@@ -85,7 +82,7 @@ struct VJPreviewProgramPane: View {
                     source: previewProgramManager.previewSource,
                     image: previewProgramManager.previewImage,
                     cameraFeedManager: productionManager.cameraFeedManager,
-                    effectManager: effectManager,
+                    effectManager: productionManager.effectManager,
                     previewProgramManager: previewProgramManager,
                     isPreview: true
                 )
@@ -118,7 +115,7 @@ struct VJPreviewProgramPane: View {
                     source: previewProgramManager.programSource,
                     image: previewProgramManager.programImage,
                     cameraFeedManager: productionManager.cameraFeedManager,
-                    effectManager: effectManager,
+                    effectManager: productionManager.effectManager,
                     previewProgramManager: previewProgramManager,
                     isPreview: false
                 )
@@ -181,16 +178,16 @@ struct VJPreviewProgramPane: View {
                     }
                 }
                 
-                // Media sources
-                if !mediaFiles.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            ForEach(mediaFiles.prefix(5)) { file in
-                                sourceButton(for: file.asContentSource(), label: file.name, icon: file.fileType.icon)
-                            }
-                        }
-                        .padding(.horizontal, 2)
-                    }
+                // Show media items if available
+                VStack(spacing: 8) {
+                    Text("Media Library")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    Text("Media files managed by ContentView")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
                 
                 // Virtual sources

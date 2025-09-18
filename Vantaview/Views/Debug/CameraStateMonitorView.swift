@@ -130,8 +130,6 @@ struct CameraStateMonitorView: View {
 }
 
 #Preview {
-    let deviceManager = CameraDeviceManager()
-    let feedManager = CameraFeedManager(cameraDeviceManager: deviceManager)
-    
-    return CameraStateMonitorView(cameraFeedManager: feedManager)
-}
+        Text("Camera State Monitor")
+            .padding()
+    }

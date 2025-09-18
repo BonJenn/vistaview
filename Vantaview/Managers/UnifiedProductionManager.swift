@@ -11,13 +11,19 @@ import AVFoundation
 
 @MainActor
 final class UnifiedProductionManager: ObservableObject {
-    // Core Dependencies
+    // Core Dependencies - now using actors for heavy lifting
     let streamingViewModel: StreamingViewModel
     let studioManager: VirtualStudioManager
     let cameraFeedManager: CameraFeedManager
     let effectManager: EffectManager
     let outputMappingManager: OutputMappingManager
     let externalDisplayManager: ExternalDisplayManager
+    
+    // Background processing actors
+    let frameProcessor: FrameProcessor
+    let audioEngine: AudioEngine
+    let deviceManager: DeviceManager
+    let streamingEngine: StreamingEngine
     
     // Preview/Program Manager - lazy initialized to avoid circular dependencies
     private var _previewProgramManager: PreviewProgramManager?
@@ -26,7 +32,9 @@ final class UnifiedProductionManager: ObservableObject {
             _previewProgramManager = PreviewProgramManager(
                 cameraFeedManager: cameraFeedManager,
                 unifiedProductionManager: self,
-                effectManager: effectManager
+                effectManager: effectManager,
+                frameProcessor: frameProcessor,
+                audioEngine: audioEngine
             )
         }
         return _previewProgramManager!
@@ -45,36 +53,38 @@ final class UnifiedProductionManager: ObservableObject {
     // Add media thumbnail manager
     let mediaThumbnailManager = MediaThumbnailManager()
     
-    // MARK: - Live Camera Flow (Program/Preview)
+    // MARK: - Live Camera Flow (Program/Preview) - now async
     @Published var selectedProgramCameraID: String?
     @Published var selectedPreviewCameraID: String? {
-        didSet { ensurePreviewRunning() }
+        didSet { 
+            Task { await ensurePreviewRunning() }
+        }
     }
     
-    private var programRenderer: VideoRenderable?
-    private var programCapture: CameraCaptureSession?
-    private var programFramesTask: Task<Void, Never>?
+    // Background processing tasks
+    private var programProcessingTask: Task<Void, Never>?
+    private var previewProcessingTask: Task<Void, Never>?
     
-    // Preview pipeline
-    private var previewRenderer: VideoRenderable?
-    private var previewCapture: CameraCaptureSession?
-    private var previewFramesTask: Task<Void, Never>?
-    
-    // Expose textures for views
-    var previewCurrentTexture: MTLTexture? {
-        previewRenderer?.currentTexture
-    }
+    // Expose current textures for UI (updated via background processing)
+    @Published var previewCurrentTexture: MTLTexture?
+    @Published var programCurrentTexture: MTLTexture?
     
     init(studioManager: VirtualStudioManager? = nil,
-         cameraFeedManager: CameraFeedManager? = nil) {
+         cameraFeedManager: CameraFeedManager? = nil) async throws {
         self.studioManager = studioManager ?? VirtualStudioManager()
         
-        // Create shared camera device manager and feed manager
-        let deviceManager = CameraDeviceManager()
-        self.cameraFeedManager = cameraFeedManager ?? CameraFeedManager(cameraDeviceManager: deviceManager)
+        // Create shared device manager and feed manager
+        self.deviceManager = try await DeviceManager()
+        self.cameraFeedManager = cameraFeedManager ?? CameraFeedManager(deviceManager: deviceManager)
         
-        self.streamingViewModel = StreamingViewModel()
+        // Create processing actors
+        let metalDevice = MTLCreateSystemDefaultDevice()!
         self.effectManager = EffectManager()
+        self.frameProcessor = try await FrameProcessor(device: metalDevice, effectManager: effectManager)
+        self.audioEngine = try await AudioEngine()
+        self.streamingEngine = await StreamingEngine()
+        
+        self.streamingViewModel = StreamingViewModel(streamingEngine: streamingEngine, audioEngine: audioEngine)
         
         // Initialize output mapping manager with the same Metal device as effects
         self.outputMappingManager = OutputMappingManager(metalDevice: effectManager.metalDevice)
@@ -94,71 +104,58 @@ final class UnifiedProductionManager: ObservableObject {
         externalDisplayManager.setProductionManager(self)
     }
     
-    // MARK: - Program switching and binding
+    // MARK: - Program switching and binding - now async
     
-    func switchProgram(to cameraID: String) {
+    func switchProgram(to cameraID: String) async {
         selectedProgramCameraID = cameraID
-        ensureProgramRunning()
+        await ensureProgramRunning()
     }
     
-    func bindProgramOutput(to renderer: VideoRenderable) {
-        programRenderer = renderer
-        ensureProgramRunning()
-    }
-    
-    func rebindProgram(to cameraID: String?, renderer: VideoRenderable) {
-        programRenderer = renderer
-        selectedProgramCameraID = cameraID
-        ensureProgramRunning()
-    }
-    
-    func ensureProgramRunning() {
+    private func ensureProgramRunning() async {
         guard let cameraID = selectedProgramCameraID else { return }
         
-        // Cancel any existing stream consumption
-        programFramesTask?.cancel()
-        programFramesTask = nil
+        // Cancel any existing processing
+        programProcessingTask?.cancel()
         
-        // Start/Restart capture off the main actor to avoid blocking UI
-        let capture = programCapture ?? CameraCaptureSession()
-        programCapture = capture
-        
-        Task.detached(priority: .userInitiated) { [weak self] in
+        // Start new processing task
+        programProcessingTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
+            
             do {
                 try Task.checkCancellation()
-                try await capture.start(cameraID: cameraID)
                 
-                await MainActor.run {
-                    self.log("Program capture started for cameraID=\(cameraID)")
-                }
+                // Create camera capture session through device manager
+                let captureSession = try await self.deviceManager.createCameraCaptureSession(for: cameraID)
                 
-                let stream = await capture.sampleBuffers()
-                let renderer = await MainActor.run { self.programRenderer }
+                // Create frame processing stream
+                let processingStream = await self.frameProcessor.createFrameStream(
+                    for: "program",
+                    effectChain: self.effectManager.getProgramEffectChain()
+                )
                 
-                await MainActor.run {
-                    // Consume frames on a child task bound to manager lifetime
-                    self.programFramesTask?.cancel()
-                    self.programFramesTask = Task(priority: .userInitiated) {
-                        var gotFirst = false
-                        let firstDeadline = ContinuousClock.now.advanced(by: .milliseconds(500))
-                        
-                        for await sb in stream {
-                            if Task.isCancelled { break }
-                            if let pb = CMSampleBufferGetImageBuffer(sb) {
-                                renderer?.push(pb)
-                            }
-                            if !gotFirst {
-                                gotFirst = true
-                                self.log("Program first frame received")
-                            }
-                            
-                            if !gotFirst && ContinuousClock.now > firstDeadline {
-                                self.log("Warning: No program frames within 500 ms after switch")
-                            }
-                        }
+                // Process frames from camera
+                let sampleBufferStream = await captureSession.sampleBuffers()
+                
+                for await sampleBuffer in sampleBufferStream {
+                    if Task.isCancelled { break }
+                    
+                    // Extract pixel buffer and submit for processing
+                    if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                        try await self.frameProcessor.submitFrame(pixelBuffer, for: "program", timestamp: timestamp)
                     }
                 }
+                
+                // Update UI with processed frames
+                for await result in processingStream {
+                    if Task.isCancelled { break }
+                    
+                    await MainActor.run {
+                        self.programCurrentTexture = result.outputTexture
+                        self.objectWillChange.send()
+                    }
+                }
+                
             } catch is CancellationError {
                 await MainActor.run { self.log("Program capture cancelled") }
             } catch {
@@ -167,61 +164,53 @@ final class UnifiedProductionManager: ObservableObject {
         }
     }
     
-    // MARK: - Preview switching/binding for live camera
+    // MARK: - Preview switching/binding - now async
     
-    func ensurePreviewRunning() {
+    private func ensurePreviewRunning() async {
         guard let cameraID = selectedPreviewCameraID else { return }
         
-        // Cancel existing
-        previewFramesTask?.cancel()
-        previewFramesTask = nil
+        // Cancel existing processing
+        previewProcessingTask?.cancel()
         
-        // Create capture
-        let capture = previewCapture ?? CameraCaptureSession()
-        previewCapture = capture
-        
-        // Ensure we have a renderer to push into
-        if previewRenderer == nil {
-            if let device = MTLCreateSystemDefaultDevice() {
-                previewRenderer = ProgramRenderer(device: device)
-            }
-        }
-        
-        Task.detached(priority: .userInitiated) { [weak self] in
+        // Start new processing task
+        previewProcessingTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
+            
             do {
                 try Task.checkCancellation()
-                try await capture.start(cameraID: cameraID)
                 
-                await MainActor.run {
-                    self.log("Preview capture started for cameraID=\(cameraID)")
-                }
+                // Create camera capture session through device manager
+                let captureSession = try await self.deviceManager.createCameraCaptureSession(for: cameraID)
                 
-                let stream = await capture.sampleBuffers()
-                let renderer = await MainActor.run { self.previewRenderer }
+                // Create frame processing stream with preview effects
+                let processingStream = await self.frameProcessor.createFrameStream(
+                    for: "preview",
+                    effectChain: self.effectManager.getPreviewEffectChain()
+                )
                 
-                await MainActor.run {
-                    self.previewFramesTask?.cancel()
-                    self.previewFramesTask = Task(priority: .userInitiated) {
-                        var gotFirst = false
-                        let firstDeadline = ContinuousClock.now.advanced(by: .milliseconds(500))
-                        
-                        for await sb in stream {
-                            if Task.isCancelled { break }
-                            if let pb = CMSampleBufferGetImageBuffer(sb) {
-                                renderer?.push(pb)
-                            }
-                            if !gotFirst {
-                                gotFirst = true
-                                self.log("Preview first frame received")
-                            }
-                            
-                            if !gotFirst && ContinuousClock.now > firstDeadline {
-                                self.log("Warning: No preview frames within 500 ms after switch")
-                            }
-                        }
+                // Process frames from camera
+                let sampleBufferStream = await captureSession.sampleBuffers()
+                
+                for await sampleBuffer in sampleBufferStream {
+                    if Task.isCancelled { break }
+                    
+                    // Extract pixel buffer and submit for processing
+                    if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                        try await self.frameProcessor.submitFrame(pixelBuffer, for: "preview", timestamp: timestamp)
                     }
                 }
+                
+                // Update UI with processed frames
+                for await result in processingStream {
+                    if Task.isCancelled { break }
+                    
+                    await MainActor.run {
+                        self.previewCurrentTexture = result.outputTexture
+                        self.objectWillChange.send()
+                    }
+                }
+                
             } catch is CancellationError {
                 await MainActor.run { self.log("Preview capture cancelled") }
             } catch {
@@ -238,7 +227,7 @@ final class UnifiedProductionManager: ObservableObject {
         print("🎥 [UnifiedProductionManager] \(msg)")
     }
     
-    // MARK: - Mode Switching with State Management
+    // MARK: - Mode Switching with State Management - now async
     
     func switchToVirtualMode() {
         isVirtualStudioActive = true
@@ -255,10 +244,16 @@ final class UnifiedProductionManager: ObservableObject {
     }
     
     func refreshCameraFeedStateForMode() async {
-        for feed in cameraFeedManager.activeFeeds {
-            feed.objectWillChange.send()
+        // Use device manager to refresh camera states
+        do {
+            let (cameras, _) = try await deviceManager.discoverDevices(forceRefresh: true)
+            await MainActor.run {
+                // Update UI with refreshed camera information
+                self.objectWillChange.send()
+            }
+        } catch {
+            log("Failed to refresh camera devices: \(error)")
         }
-        cameraFeedManager.objectWillChange.send()
     }
     
     // MARK: - Computed Properties
@@ -271,14 +266,57 @@ final class UnifiedProductionManager: ObservableObject {
         return studioManager.studioObjects.filter { $0.type == .ledWall }
     }
     
-    // MARK: - Initialization
+    // MARK: - Initialization - now async
     
     func initialize() async {
         isVirtualStudioActive = true
         hasUnsavedChanges = false
+        
+        // Initialize background processing
+        do {
+            // Set up device monitoring
+            let deviceChangeStream = await deviceManager.deviceChangeNotifications()
+            Task {
+                for await change in deviceChangeStream {
+                    await self.handleDeviceChange(change)
+                }
+            }
+            
+            // Initialize audio engine
+            _ = try await audioEngine.startMicrophoneCapture()
+            
+        } catch {
+            log("Failed to initialize background systems: \(error)")
+        }
     }
     
-    // MARK: - Studio Management
+    // MARK: - Device Change Handling
+    
+    private func handleDeviceChange(_ change: DeviceChangeNotification) async {
+        await MainActor.run {
+            switch change.changeType {
+            case .added(let device):
+                self.log("Camera device added: \(device.displayName)")
+            case .removed(let deviceID):
+                self.log("Camera device removed: \(deviceID)")
+                // Update UI if the removed device was selected
+                if self.selectedProgramCameraID == deviceID {
+                    self.selectedProgramCameraID = nil
+                    self.programCurrentTexture = nil
+                }
+                if self.selectedPreviewCameraID == deviceID {
+                    self.selectedPreviewCameraID = nil
+                    self.previewCurrentTexture = nil
+                }
+            case .configurationChanged(let device):
+                self.log("Camera device configuration changed: \(device.displayName)")
+            }
+            
+            self.objectWillChange.send()
+        }
+    }
+    
+    // MARK: - Studio Management (unchanged)
     
     func loadDefaultStudio() {
         currentStudioName = "Default Studio"
@@ -314,7 +352,7 @@ final class UnifiedProductionManager: ObservableObject {
         hasUnsavedChanges = true
     }
     
-    // MARK: - Templates
+    // MARK: - Templates (unchanged)
     
     enum StudioTemplate: String, CaseIterable, Identifiable {
         case news, talkShow, podcast, concert, productDemo, gaming, custom
@@ -344,6 +382,8 @@ final class UnifiedProductionManager: ObservableObject {
         }
         currentTemplate = template
     }
+    
+    // MARK: - Template Building Methods (unchanged for brevity)
     
     private func buildNewsStudio() {
         if let wall = LEDWallAsset.predefinedWalls.first(where: { $0.name.contains("Wide") }) {

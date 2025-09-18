@@ -2,418 +2,142 @@
 //  CameraDeviceManager.swift
 //  Vantaview
 //
-//  Created by AI Assistant
+//  Manager for camera device discovery and configuration
 //
 
 import Foundation
 import AVFoundation
+import Combine
 import SwiftUI
 
-/// Represents a physical camera device that can be selected and used
-struct CameraDevice: Identifiable, Hashable {
-    let id = UUID()
+// Rename to avoid collision with new actors
+struct LegacyCameraDevice: Identifiable, Hashable {
+    let id: String
     let deviceID: String
-    let name: String
-    let deviceType: CameraDeviceType
-    let isAvailable: Bool
-    let captureDevice: AVCaptureDevice?
+    let displayName: String
+    let localizedName: String
+    let modelID: String
+    let manufacturer: String
+    let isConnected: Bool
     
-    var displayName: String {
-        switch deviceType {
-        case .builtin:
-            return "Built-in Camera"
-        case .external:
-            return name
-        case .continuity:
-            return "iPhone via Continuity"
-        case .unknown:
-            return name
-        }
-    }
-    
-    var icon: String {
-        switch deviceType {
-        case .builtin:
-            return "camera.fill"
-        case .external:
-            return "camera.on.rectangle"
-        case .continuity:
-            return "iphone.badge.play"
-        case .unknown:
-            return "camera"
-        }
-    }
-    
-    var statusColor: Color {
-        isAvailable ? .green : .orange
-    }
-    
-    var statusText: String {
-        isAvailable ? "Available" : "In Use"
+    // For backwards compatibility, convert to new type when needed
+    var asCameraDeviceInfo: CameraDeviceInfo {
+        // This would require an actual AVCaptureDevice to create proper CameraDeviceInfo
+        // For now, return a basic info structure
+        return CameraDeviceInfo(
+            id: id,
+            deviceID: deviceID,
+            displayName: displayName,
+            localizedName: localizedName,
+            modelID: modelID,
+            manufacturer: manufacturer,
+            isConnected: isConnected,
+            supportedFormats: []
+        )
     }
 }
 
-enum CameraDeviceType: String, CaseIterable {
-    case builtin = "Built-in"
-    case external = "External"
-    case continuity = "Continuity"
-    case unknown = "Unknown"
+// Add convenience initializer to avoid compilation errors
+extension CameraDeviceInfo {
+    init(id: String, deviceID: String, displayName: String, localizedName: String, modelID: String, manufacturer: String, isConnected: Bool, supportedFormats: [VideoFormatInfo]) {
+        self.id = id
+        self.deviceID = deviceID
+        self.displayName = displayName
+        self.localizedName = localizedName
+        self.modelID = modelID
+        self.manufacturer = manufacturer
+        self.isConnected = isConnected
+        self.supportedFormats = supportedFormats
+    }
 }
 
-/// Manages discovery and connection of physical camera devices
 @MainActor
 final class CameraDeviceManager: ObservableObject {
-    @Published var availableDevices: [CameraDevice] = []
     @Published var isDiscovering = false
     @Published var lastDiscoveryError: String?
+    @Published var availableDevices: [LegacyCameraDevice] = []
     
-    private var deviceObservers: [NSObjectProtocol] = []
+    // Use DeviceManager actor for actual device management
+    private let deviceManager: DeviceManager
     
-    init() {
-        setupDeviceObservers()
+    init(deviceManager: DeviceManager) {
+        self.deviceManager = deviceManager
+        
         Task {
-            await discoverDevices()
+            await refreshDevices()
         }
     }
     
-    deinit {
-        deviceObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    func discoverDevices() async {
+        await refreshDevices()
     }
     
-    /// Discover all available camera devices
-    func discoverDevices() async {
-        print("🔍 CameraDeviceManager: Starting device discovery...")
+    func forceRefresh() async {
+        await refreshDevices(forceRefresh: true)
+    }
+    
+    private func refreshDevices(forceRefresh: Bool = false) async {
         isDiscovering = true
         lastDiscoveryError = nil
         
         do {
-            // Request camera permissions if not already granted
-            let hasPermission = await CameraPermissionHelper.checkAndRequestCameraPermission()
-            print("📋 Camera permission status: \(hasPermission)")
+            let (cameras, _) = try await deviceManager.discoverDevices(forceRefresh: forceRefresh)
             
-            guard hasPermission else {
-                lastDiscoveryError = "Camera access denied. Please enable camera access in System Preferences > Privacy & Security > Camera"
-                isDiscovering = false
-                return
-            }
-            
-            var devices: [CameraDevice] = []
-            
-            // First, try comprehensive device discovery with multiple methods
-            print("🔍 Method 1: Using discovery session...")
-            
-            // Get all video devices using discovery session (macOS compatible device types only)
-            let discoverySession = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [
-                    .builtInWideAngleCamera,
-                    .external,
-                    .continuityCamera
-                ],
-                mediaType: .video,
-                position: .unspecified
-            )
-            
-            print("📱 Discovery session found \(discoverySession.devices.count) devices")
-            for device in discoverySession.devices {
-                print("  - \(device.localizedName) (\(device.deviceType.rawValue)) - \(device.uniqueID)")
-            }
-            
-            // Method 2: Try the older AVCaptureDevice.devices method as fallback
-            print("🔍 Method 2: Using AVCaptureDevice.devices...")
-            let allDevices = AVCaptureDevice.devices()
-            let videoDevices = allDevices.filter { $0.hasMediaType(.video) }
-            print("📱 AVCaptureDevice.devices found \(videoDevices.count) video devices")
-            for device in videoDevices {
-                print("  - \(device.localizedName) (\(device.deviceType.rawValue)) - \(device.uniqueID)")
-            }
-            
-            // Method 3: Try default devices
-            print("🔍 Method 3: Checking default devices...")
-            if let defaultDevice = AVCaptureDevice.default(for: .video) {
-                print("  - Default device: \(defaultDevice.localizedName)")
-            } else {
-                print("  - No default device found")
-            }
-            
-            // Combine all found devices (remove duplicates by uniqueID)
-            var allFoundDevices: [AVCaptureDevice] = []
-            var deviceIDs: Set<String> = []
-            
-            // Add from discovery session
-            for device in discoverySession.devices {
-                if !deviceIDs.contains(device.uniqueID) {
-                    allFoundDevices.append(device)
-                    deviceIDs.insert(device.uniqueID)
-                }
-            }
-            
-            // Add from devices() method
-            for device in videoDevices {
-                if !deviceIDs.contains(device.uniqueID) {
-                    allFoundDevices.append(device)
-                    deviceIDs.insert(device.uniqueID)
-                }
-            }
-            
-            // Add default device if not already included
-            if let defaultDevice = AVCaptureDevice.default(for: .video),
-               !deviceIDs.contains(defaultDevice.uniqueID) {
-                allFoundDevices.append(defaultDevice)
-                deviceIDs.insert(defaultDevice.uniqueID)
-            }
-            
-            print("📱 Total unique devices found: \(allFoundDevices.count)")
-            
-            // Convert to CameraDevice objects
-            for device in allFoundDevices {
-                let deviceType = determineDeviceType(device)
-                let isAvailable = !device.isInUseByAnotherApplication
-                
-                let cameraDevice = CameraDevice(
-                    deviceID: device.uniqueID,
-                    name: device.localizedName,
-                    deviceType: deviceType,
-                    isAvailable: isAvailable,
-                    captureDevice: device
+            // Convert to legacy format
+            let legacyDevices = cameras.map { camera in
+                LegacyCameraDevice(
+                    id: camera.id,
+                    deviceID: camera.deviceID,
+                    displayName: camera.displayName,
+                    localizedName: camera.localizedName,
+                    modelID: camera.modelID,
+                    manufacturer: camera.manufacturer,
+                    isConnected: camera.isConnected
                 )
-                
-                devices.append(cameraDevice)
-                print("  ✅ \(cameraDevice.displayName) - \(cameraDevice.statusText) - Type: \(deviceType.rawValue)")
             }
             
-            // If no devices found, show debug info
-            if devices.isEmpty {
-                print("❌ No camera devices detected!")
-                print("📋 System info:")
-                print("  - macOS version: \(ProcessInfo.processInfo.operatingSystemVersionString)")
-                print("  - App permissions: Camera=\(hasPermission)")
-                
-                lastDiscoveryError = "No camera devices detected. Check camera connections and permissions."
-            }
-            
-            // Sort devices by preference (built-in first, then external, then continuity)
-            devices.sort { lhs, rhs in
-                let order: [CameraDeviceType] = [.builtin, .external, .continuity, .unknown]
-                let lhsIndex = order.firstIndex(of: lhs.deviceType) ?? order.count
-                let rhsIndex = order.firstIndex(of: rhs.deviceType) ?? order.count
-                return lhsIndex < rhsIndex
-            }
-            
-            availableDevices = devices
-            print("✅ Device discovery complete - found \(devices.count) cameras")
+            availableDevices = legacyDevices
             
         } catch {
-            lastDiscoveryError = "Device discovery failed: \(error.localizedDescription)"
-            print("❌ Device discovery error: \(error)")
-            availableDevices = []
+            lastDiscoveryError = error.localizedDescription
         }
         
         isDiscovering = false
     }
     
-    /// Get a specific device by ID
-    func device(withID deviceID: String) -> CameraDevice? {
+    func device(withID deviceID: String) -> LegacyCameraDevice? {
         return availableDevices.first { $0.deviceID == deviceID }
     }
     
-    /// Check if a device is currently available for use
-    func isDeviceAvailable(_ deviceID: String) -> Bool {
-        return device(withID: deviceID)?.isAvailable ?? false
+    func debugCameraDetection() async {
+        let stats = await deviceManager.getDiscoveryStats()
+        print("Camera Detection Debug:")
+        print("- Total cameras: \(stats.totalCameraDevices)")
+        print("- Connected cameras: \(stats.connectedCameraDevices)")
+        print("- Last discovery: \(stats.lastDiscoveryTime?.description ?? "Never")")
+        print("- Discovery duration: \(stats.discoveryDuration)s")
     }
     
-    /// Get the AVCaptureDevice for a given device ID
-    func captureDevice(for deviceID: String) -> AVCaptureDevice? {
-        return device(withID: deviceID)?.captureDevice
-    }
+    // MARK: - Mock data for development
     
-    /// Manual refresh for debugging
-    func forceRefresh() async {
-        print("🔄 Force refreshing camera devices...")
-        await discoverDevices()
-    }
-    
-    // MARK: - Private Methods
-    
-    private func determineDeviceType(_ device: AVCaptureDevice) -> CameraDeviceType {
-        print("🔍 Determining type for device: \(device.localizedName) - \(device.deviceType.rawValue)")
-        
-        switch device.deviceType {
-        case .builtInWideAngleCamera:
-            return .builtin
-        case .external:
-            return .external
-        case .continuityCamera:
-            return .continuity
-        default:
-            print("⚠️ Unknown device type: \(device.deviceType.rawValue)")
-            return .unknown
-        }
-    }
-    
-    private func setupDeviceObservers() {
-        // Observe device connection/disconnection
-        let connectObserver = NotificationCenter.default.addObserver(
-            forName: .AVCaptureDeviceWasConnected,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                await self?.discoverDevices()
-            }
-        }
-        
-        let disconnectObserver = NotificationCenter.default.addObserver(
-            forName: .AVCaptureDeviceWasDisconnected,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                await self?.discoverDevices()
-            }
-        }
-        
-        deviceObservers = [connectObserver, disconnectObserver]
-    }
-}
-
-/// Extension to make it easier to work with mock data during development
-extension CameraDeviceManager {
-    static let mockDevices: [CameraDevice] = [
-        CameraDevice(
-            deviceID: "builtin-camera",
-            name: "FaceTime HD Camera",
-            deviceType: .builtin,
-            isAvailable: true,
-            captureDevice: nil
+    static let mockDevices: [LegacyCameraDevice] = [
+        LegacyCameraDevice(
+            id: "mock-builtin-camera-1",
+            deviceID: "builtin-camera-wide",
+            displayName: "Built-in Wide Camera",
+            localizedName: "Built-in Wide Camera",
+            modelID: "com.apple.camera.builtin",
+            manufacturer: "Apple Inc.",
+            isConnected: true
         ),
-        CameraDevice(
-            deviceID: "iphone-continuity",
-            name: "iPhone 15 Pro",
-            deviceType: .continuity,
-            isAvailable: true,
-            captureDevice: nil
-        ),
-        CameraDevice(
-            deviceID: "external-webcam",
-            name: "Logitech BRIO",
-            deviceType: .external,
-            isAvailable: false,
-            captureDevice: nil
+        LegacyCameraDevice(
+            id: "mock-external-camera-1",
+            deviceID: "external-usb-camera",
+            displayName: "USB Camera",
+            localizedName: "External USB Camera",
+            modelID: "com.generic.usb.camera",
+            manufacturer: "Generic",
+            isConnected: true
         )
     ]
-}
-
-/// Extension for debugging camera issues
-extension CameraDeviceManager {
-    /// Comprehensive debug function to troubleshoot camera detection
-    func debugCameraDetection() {
-        Task { @MainActor in
-            print("\n🔍 =================================")
-            print("🔍 CAMERA DEBUG SESSION STARTED")
-            print("🔍 =================================")
-            
-            // Check permissions first
-            print("\n📋 1. Checking Permissions...")
-            let permission = AVCaptureDevice.authorizationStatus(for: .video)
-            print("   Current permission status: \(permission.rawValue)")
-            switch permission {
-            case .authorized:
-                print("   ✅ Camera access is AUTHORIZED")
-            case .denied:
-                print("   ❌ Camera access is DENIED")
-            case .notDetermined:
-                print("   ⚠️ Camera access is NOT DETERMINED")
-            case .restricted:
-                print("   🚫 Camera access is RESTRICTED")
-            @unknown default:
-                print("   ❓ Unknown permission status")
-            }
-            
-            // Request permission if needed
-            if permission != .authorized {
-                print("\n📋 2. Requesting Camera Permission...")
-                let granted = await AVCaptureDevice.requestAccess(for: .video)
-                print("   Permission granted: \(granted)")
-                if !granted {
-                    print("   ❌ Camera permission denied - this is likely the issue!")
-                    return
-                }
-            }
-            
-            // Try discovery session
-            print("\n📱 3. Testing Discovery Session...")
-            let discoverySession = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
-                mediaType: .video,
-                position: .unspecified
-            )
-            print("   Found \(discoverySession.devices.count) devices via discovery session")
-            
-            for (index, device) in discoverySession.devices.enumerated() {
-                print("   Device \(index + 1):")
-                print("     Name: \(device.localizedName)")
-                print("     Type: \(device.deviceType.rawValue)")
-                print("     ID: \(device.uniqueID)")
-                print("     In use: \(device.isInUseByAnotherApplication)")
-                print("     Connected: \(device.isConnected)")
-                print("     Has video: \(device.hasMediaType(.video))")
-            }
-            
-            // Try legacy method
-            print("\n📱 4. Testing Legacy Device Query...")
-            let legacyDevices = AVCaptureDevice.devices()
-            let videoDevices = legacyDevices.filter { $0.hasMediaType(.video) }
-            print("   Found \(videoDevices.count) video devices via legacy method")
-            
-            for (index, device) in videoDevices.enumerated() {
-                print("   Legacy Device \(index + 1):")
-                print("     Name: \(device.localizedName)")
-                print("     Type: \(device.deviceType.rawValue)")
-                print("     ID: \(device.uniqueID)")
-            }
-            
-            // Try default device
-            print("\n📱 5. Testing Default Device...")
-            if let defaultDevice = AVCaptureDevice.default(for: .video) {
-                print("   ✅ Default device found:")
-                print("     Name: \(defaultDevice.localizedName)")
-                print("     Type: \(defaultDevice.deviceType.rawValue)")
-                print("     ID: \(defaultDevice.uniqueID)")
-                print("     In use: \(defaultDevice.isInUseByAnotherApplication)")
-            } else {
-                print("   ❌ No default device found")
-            }
-            
-            // Try other common device queries
-            print("\n📱 6. Testing Specific Device Queries...")
-            
-            // Built-in wide angle
-            if let builtIn = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) {
-                print("   ✅ Built-in wide angle camera found: \(builtIn.localizedName)")
-            } else {
-                print("   ❌ No built-in wide angle camera")
-            }
-            
-            // External cameras
-            if let external = AVCaptureDevice.default(.external, for: .video, position: .unspecified) {
-                print("   ✅ External camera found: \(external.localizedName)")
-            } else {
-                print("   ❌ No external camera")
-            }
-            
-            // Continuity camera
-            if let continuity = AVCaptureDevice.default(.continuityCamera, for: .video, position: .unspecified) {
-                print("   ✅ Continuity camera found: \(continuity.localizedName)")
-            } else {
-                print("   ❌ No continuity camera")
-            }
-            
-            print("\n🔍 =================================")
-            print("🔍 CAMERA DEBUG SESSION COMPLETED")
-            print("🔍 =================================\n")
-            
-            // Trigger normal discovery after debug
-            await discoverDevices()
-        }
-    }
 }

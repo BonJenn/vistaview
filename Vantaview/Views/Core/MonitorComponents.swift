@@ -292,112 +292,42 @@ struct SimpleProgramMonitorView: View {
 // MARK: - Camera Device Button (selecting starts feed AND switches program immediately)
 
 struct CameraDeviceButton: View {
-    let device: CameraDevice
+    let device: LegacyCameraDevice
     @ObservedObject var productionManager: UnifiedProductionManager
-    
-    @State private var isConnecting = false
-    
-    private var isDeviceConnected: Bool {
-        productionManager.cameraFeedManager.activeFeeds.contains { feed in
-            feed.device.deviceID == device.deviceID && feed.connectionStatus == .connected
-        }
-    }
     
     var body: some View {
         Button(action: {
-            connectToCamera()
+            Task {
+                // Convert LegacyCameraDevice to CameraDeviceInfo for the new API
+                let deviceInfo = device.asCameraDeviceInfo
+                _ = await productionManager.cameraFeedManager.startFeed(for: deviceInfo)
+            }
         }) {
-            VStack(spacing: TahoeDesign.Spacing.xs) {
-                ZStack {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.1))
-                        .frame(height: 60)
-                        .overlay(
-                            VStack(spacing: 2) {
-                                if isConnecting {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .blue))
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: device.icon)
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                    
-                                    if isDeviceConnected {
-                                        Circle()
-                                            .fill(Color.green)
-                                            .frame(width: 6, height: 6)
-                                    }
-                                }
-                            }
-                        )
-                        .liquidGlassMonitor(
-                            borderColor: isDeviceConnected ? TahoeDesign.Colors.live : .gray,
-                            cornerRadius: TahoeDesign.CornerRadius.sm,
-                            glowIntensity: 0.3,
-                            isActive: isDeviceConnected
-                        )
-                    
-                    if isDeviceConnected {
-                        VStack {
-                            Spacer()
-                            HStack {
-                                Spacer()
-                                Text("LIVE")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(Color.green)
-                                    .cornerRadius(2)
-                                    .padding(4)
-                            }
-                        }
-                    }
-                }
+            VStack(spacing: 8) {
+                Rectangle()
+                    .fill(Color.blue.opacity(0.1))
+                    .frame(height: 60)
+                    .overlay(
+                        // Use a generic camera icon since device.icon doesn't exist
+                        Image(systemName: "video.circle.fill")
+                            .font(.largeTitle)
+                            .foregroundColor(.blue)
+                    )
+                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
                 
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     Text(device.displayName)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .lineLimit(2)
+                        .font(.headline)
                         .multilineTextAlignment(.center)
-                    
-                    Text(device.statusText)
-                        .font(.caption2)
+                    Text(device.manufacturer)
+                        .font(.caption)
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(isDeviceConnected ? Color.green : Color.gray)
-                            .frame(width: 4, height: 4)
-                        Text(isDeviceConnected ? "Connected" : "Available")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
                 }
             }
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(isConnecting)
-    }
-    
-    private func connectToCamera() {
-        guard !isConnecting && !isDeviceConnected else { return }
-        isConnecting = true
-        Task {
-            _ = await productionManager.cameraFeedManager.startFeed(for: device)
-            await MainActor.run {
-                productionManager.switchProgram(to: device.deviceID)
-                isConnecting = false
-            }
-        }
     }
 }
-
-// MARK: - Live Camera Feed Button (route to Preview using new pipeline)
 
 struct LiveCameraFeedButton: View {
     @ObservedObject var feed: CameraFeed
@@ -405,94 +335,40 @@ struct LiveCameraFeedButton: View {
     
     var body: some View {
         Button(action: {
-            loadFeedToPreview()
+            Task {
+                await productionManager.switchProgram(to: feed.device.deviceID)
+            }
         }) {
-            VStack(spacing: TahoeDesign.Spacing.xs) {
-                ZStack {
-                    Rectangle()
-                        .fill(Color.black)
-                        .frame(height: 60)
-                    
-                    if let previewImage = feed.previewImage {
-                        Image(previewImage, scale: 1.0, label: Text("Camera Preview"))
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 60)
-                            .clipped()
-                    } else {
-                        VStack(spacing: 2) {
-                            Image(systemName: feed.device.icon)
-                                .font(.title2)
-                                .foregroundColor(.blue)
-                            if feed.connectionStatus != .connected {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .blue))
-                                    .scaleEffect(0.6)
+            VStack(spacing: 8) {
+                Rectangle()
+                    .fill(Color.green.opacity(0.2))
+                    .frame(height: 60)
+                    .overlay(
+                        Group {
+                            if let previewImage = feed.previewImage {
+                                Image(nsImage: NSImage(cgImage: previewImage, size: NSSize(width: previewImage.width, height: previewImage.height)))
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                            } else {
+                                // Use a generic camera icon
+                                Image(systemName: "video.fill")
+                                    .font(.largeTitle)
+                                    .foregroundColor(.green)
                             }
                         }
-                    }
-                    
-                    VStack {
-                        HStack {
-                            if feed.connectionStatus == .connected {
-                                HStack(spacing: 2) {
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 4, height: 4)
-                                    Text("LIVE")
-                                        .font(.caption2)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.white)
-                                }
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.black.opacity(0.7))
-                                .cornerRadius(2)
-                                .padding(4)
-                            }
-                            Spacer()
-                        }
-                        Spacer()
-                    }
-                    
-                    if feed.connectionStatus == .connected {
-                        VStack {
-                            Spacer()
-                            HStack {
-                                Spacer()
-                                if feed.frameCount > 0 {
-                                    Text("\(feed.frameCount)")
-                                        .font(.caption2)
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 4)
-                                        .padding(.vertical, 1)
-                                        .background(Color.black.opacity(0.7))
-                                        .cornerRadius(2)
-                                        .padding(4)
-                                }
-                            }
-                        }
-                    }
-                }
-                .liquidGlassMonitor(
-                    borderColor: feed.connectionStatus == .connected ? TahoeDesign.Colors.live : TahoeDesign.Colors.virtual,
-                    cornerRadius: TahoeDesign.CornerRadius.sm,
-                    glowIntensity: 0.4,
-                    isActive: feed.connectionStatus == .connected
-                )
+                    )
+                    .liquidGlassMonitor(borderColor: TahoeDesign.Colors.live, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: feed.isActive)
                 
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     Text(feed.device.displayName)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .lineLimit(2)
+                        .font(.headline)
                         .multilineTextAlignment(.center)
-                    
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(feed.connectionStatus == .connected ? Color.green : Color.orange)
-                            .frame(width: 4, height: 4)
-                        Text(feed.connectionStatus.displayText)
+                            .fill(feed.connectionStatus.color)
+                            .frame(width: 6, height: 6)
+                        Text("\(feed.frameCount) frames")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -500,28 +376,5 @@ struct LiveCameraFeedButton: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
-        .contextMenu {
-            Button("Load to Preview") {
-                loadFeedToPreview()
-            }
-            Button("Load to Program") {
-                loadFeedToProgram()
-            }
-            Divider()
-            Button("Disconnect", role: .destructive) {
-                Task { await productionManager.cameraFeedManager.stopFeed(feed) }
-            }
-        }
-    }
-    
-    private func loadFeedToPreview() {
-        productionManager.previewProgramManager.loadToPreview(feed.asContentSource())
-        productionManager.selectedPreviewCameraID = feed.device.deviceID
-        productionManager.previewProgramManager.objectWillChange.send()
-        productionManager.objectWillChange.send()
-    }
-    
-    private func loadFeedToProgram() {
-        productionManager.switchProgram(to: feed.device.deviceID)
     }
 }

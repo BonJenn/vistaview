@@ -16,7 +16,7 @@ enum ProductionMode {
 }
 
 struct ContentView: View {
-    @StateObject private var productionManager = UnifiedProductionManager()
+    @State private var productionManager: UnifiedProductionManager?
     @State private var productionMode: ProductionMode = .live
     @State private var showingStudioSelector = false
     @State private var showingVirtualCameraDemo = false
@@ -40,75 +40,88 @@ struct ContentView: View {
     @StateObject private var scenesManager = ScenesManager()
 
     var body: some View {
-        VStack(spacing: 0) {
-            TopToolbarView(
-                productionManager: productionManager,
-                productionMode: $productionMode,
-                showingStudioSelector: $showingStudioSelector,
-                showingVirtualCameraDemo: $showingVirtualCameraDemo
-            )
-            
-            Divider()
-            
-            Group {
-                switch productionMode {
-                case .virtual:
-                    VirtualProductionView()
-                        .environmentObject(productionManager.studioManager)
-                        .environmentObject(productionManager)
-                        .gated(.virtualSet3D, licenseManager: licenseManager)
-                case .live:
-                    FinalCutProStyleView(
-                        productionManager: productionManager,
-                        rtmpURL: $rtmpURL,
-                        streamKey: $streamKey,
-                        selectedTab: $selectedTab,
-                        showingFilePicker: $showingFilePicker,
-                        mediaFiles: $mediaFiles,
-                        selectedPlatform: $selectedPlatform,
-                        scenesManager: scenesManager
-                    )
-                    .environmentObject(layerManager)
+        if let productionManager = productionManager {
+            VStack(spacing: 0) {
+                TopToolbarView(
+                    productionManager: productionManager,
+                    productionMode: $productionMode,
+                    showingStudioSelector: $showingStudioSelector,
+                    showingVirtualCameraDemo: $showingVirtualCameraDemo
+                )
+                
+                Divider()
+                
+                Group {
+                    switch productionMode {
+                    case .virtual:
+                        VirtualProductionView()
+                            .environmentObject(productionManager.studioManager)
+                            .environmentObject(productionManager)
+                            .gated(.virtualSet3D, licenseManager: licenseManager)
+                    case .live:
+                        FinalCutProStyleView(
+                            productionManager: productionManager,
+                            rtmpURL: $rtmpURL,
+                            streamKey: $streamKey,
+                            selectedTab: $selectedTab,
+                            showingFilePicker: $showingFilePicker,
+                            mediaFiles: $mediaFiles,
+                            selectedPlatform: $selectedPlatform,
+                            scenesManager: scenesManager
+                        )
+                        .environmentObject(layerManager)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .sheet(isPresented: $showingStudioSelector) {
+                StudioSelectorSheet(productionManager: productionManager)
+            }
+            .sheet(isPresented: $showingVirtualCameraDemo) {
+                VirtualCameraDemoView()
+                    .frame(minWidth: 1000, minHeight: 700)
+            }
+            .fileImporter(
+                isPresented: $showingFilePicker,
+                allowedContentTypes: [.movie, .image, .audio],
+                allowsMultipleSelection: true
+            ) { result in
+                handleFileImport(result)
+            }
+            .transaction { tx in
+                if suppressInitialAnimations {
+                    tx.animation = nil
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .sheet(isPresented: $showingStudioSelector) {
-            StudioSelectorSheet(productionManager: productionManager)
-        }
-        .sheet(isPresented: $showingVirtualCameraDemo) {
-            VirtualCameraDemoView()
-                .frame(minWidth: 1000, minHeight: 700)
-        }
-        .task {
-            await requestPermissions()
-            await productionManager.initialize()
-            validateProductionManagerInitialization()
+        } else {
+            ProgressView("Initializing Production Manager...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task {
+                    await requestPermissions()
+                    do {
+                        let manager = try await UnifiedProductionManager()
+                        await manager.initialize()
+                        validateProductionManagerInitialization()
 
-            await MainActor.run {
-                layerManager.setProductionManager(productionManager)
-                productionManager.externalDisplayManager.setLayerStackManager(layerManager)
+                        await MainActor.run {
+                            layerManager.setProductionManager(manager)
+                            manager.externalDisplayManager.setLayerStackManager(layerManager)
 
-                productionManager.streamingViewModel.bindToProgramManager(productionManager.previewProgramManager)
-                productionManager.streamingViewModel.bindToLayerManager(layerManager)
-                productionManager.streamingViewModel.bindToProductionManager(productionManager)
-            }
+                            manager.streamingViewModel.bindToProgramManager(manager.previewProgramManager)
+                            manager.streamingViewModel.bindToLayerManager(layerManager)
+                            manager.streamingViewModel.bindToProductionManager(manager)
+                        }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-                suppressInitialAnimations = false
-            }
-        }
-        .fileImporter(
-            isPresented: $showingFilePicker,
-            allowedContentTypes: [.movie, .image, .audio],
-            allowsMultipleSelection: true
-        ) { result in
-            handleFileImport(result)
-        }
-        .transaction { tx in
-            if suppressInitialAnimations {
-                tx.animation = nil
-            }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            suppressInitialAnimations = false
+                        }
+                        
+                        self.productionManager = manager
+                        
+                    } catch {
+                        print("Failed to initialize production manager: \(error)")
+                    }
+                }
         }
     }
 
@@ -118,6 +131,7 @@ struct ContentView: View {
     }
     
     private func validateProductionManagerInitialization() {
+        guard let productionManager = productionManager else { return }
         productionManager.externalDisplayManager.setProductionManager(productionManager)
         _ = productionManager.effectManager.metalDevice.name
     }
@@ -490,7 +504,9 @@ struct PreviewProgramCenterView: View {
                         if productionManager.previewProgramManager.previewSource == .none {
                         } else {
                             if case .camera(let feed) = productionManager.previewProgramManager.previewSource {
-                                productionManager.switchProgram(to: feed.device.deviceID)
+                                Task {
+                                    await productionManager.switchProgram(to: feed.device.deviceID)
+                                }
                             }
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
@@ -758,7 +774,15 @@ struct CamerasSourceView: View {
                 GridItem(.flexible())
             ], spacing: 8) {
                 ForEach(productionManager.cameraFeedManager.availableDevices, id: \.id) { device in
-                    CameraDeviceButton(device: device, productionManager: productionManager)
+                    CameraDeviceButton(device: LegacyCameraDevice(
+                        id: device.id,
+                        deviceID: device.deviceID,
+                        displayName: device.displayName,
+                        localizedName: device.displayName,
+                        modelID: device.deviceID,
+                        manufacturer: "Unknown",
+                        isConnected: true
+                    ), productionManager: productionManager)
                 }
             }
             if !productionManager.cameraFeedManager.activeFeeds.isEmpty {

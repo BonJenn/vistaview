@@ -11,10 +11,12 @@ import SwiftUI
 import SceneKit
 import CoreVideo
 
+// MARK: - Camera Image Converter Actor
+
 actor CameraImageConverter {
     private let ciContext = CIContext(options: [.cacheIntermediates: false, .workingColorSpace: NSNull()])
     
-    func makeImages(from pixelBuffer: CVPixelBuffer) -> (CGImage?, NSImage?) {
+    func makeImages(from pixelBuffer: CVPixelBuffer) async -> (CGImage?, NSImage?) {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         
@@ -34,7 +36,7 @@ actor CameraImageConverter {
 @MainActor
 final class CameraFeed: ObservableObject, Identifiable {
     let id = UUID()
-    let device: CameraDevice
+    let deviceInfo: CameraDeviceInfo // Use device info from DeviceManager
     
     @Published var isActive = false
     @Published var currentFrame: CVPixelBuffer?
@@ -43,16 +45,13 @@ final class CameraFeed: ObservableObject, Identifiable {
     @Published var previewImage: CGImage?
     @Published var previewNSImage: NSImage?
     
-    private(set) var captureSession: AVCaptureSession?
-    private var videoOutput: AVCaptureVideoDataOutput?
-    private let videoQueue = DispatchQueue(label: "camera.feed.queue", qos: .userInitiated)
+    // Background processing
+    private var captureSession: CameraCaptureSession?
+    private var processingTask: Task<Void, Never>?
     
     @Published private(set) var frameCount = 0
     
-    private var videoDelegate: VideoOutputDelegate?
-    private var sessionObserver: NSObjectProtocol?
     private let converter = CameraImageConverter()
-    
     private var lastProcessedPixelBuffer: CVPixelBuffer?
     private var lastFrameTimestamp: CFTimeInterval = 0
     
@@ -94,107 +93,62 @@ final class CameraFeed: ObservableObject, Identifiable {
         }
     }
     
-    init(device: CameraDevice) {
-        self.device = device
+    // Computed property for backwards compatibility
+    var device: LegacyCameraDevice {
+        return LegacyCameraDevice(
+            id: deviceInfo.id,
+            deviceID: deviceInfo.deviceID,
+            displayName: deviceInfo.displayName,
+            localizedName: deviceInfo.localizedName,
+            modelID: deviceInfo.modelID,
+            manufacturer: deviceInfo.manufacturer,
+            isConnected: deviceInfo.isConnected
+        )
     }
     
-    func startCapture() async {
-        let hasPermission = await CameraPermissionHelper.checkAndRequestCameraPermission()
-        guard hasPermission else {
-            connectionStatus = .error("Camera permission denied")
-            return
-        }
-        
-        guard let captureDevice = device.captureDevice else {
-            connectionStatus = .error("No capture device available")
-            return
-        }
-        
+    init(deviceInfo: CameraDeviceInfo) {
+        self.deviceInfo = deviceInfo
+    }
+    
+    func startCapture(using deviceManager: DeviceManager) async {
         connectionStatus = .connecting
         
         do {
-            let session = AVCaptureSession()
-            session.beginConfiguration()
+            try Task.checkCancellation()
             
-            let presets: [AVCaptureSession.Preset] = [.high, .medium, .low]
-            var selectedPreset: AVCaptureSession.Preset = .medium
-            for preset in presets where session.canSetSessionPreset(preset) {
-                selectedPreset = preset
-                break
-            }
-            session.sessionPreset = selectedPreset
+            // Create capture session through device manager
+            captureSession = try await deviceManager.createCameraCaptureSession(for: deviceInfo.deviceID)
             
-            let videoInput = try AVCaptureDeviceInput(device: captureDevice)
-            if session.canAddInput(videoInput) {
-                session.addInput(videoInput)
-            } else {
-                throw CameraFeedError.cannotAddInput
+            connectionStatus = .connected
+            isActive = true
+            frameCount = 0
+            
+            // Start processing frames in the background
+            processingTask = Task(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                await self.processFrames()
             }
             
-            let output = AVCaptureVideoDataOutput()
-            output.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-            ]
-            output.alwaysDiscardsLateVideoFrames = true
-            
-            let delegate = VideoOutputDelegate(feed: self)
-            self.videoDelegate = delegate
-            output.setSampleBufferDelegate(delegate, queue: videoQueue)
-            
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-            } else {
-                throw CameraFeedError.cannotAddOutput
+            await MainActor.run {
+                self.objectWillChange.send()
             }
             
-            if let connection = output.connection(with: .video) {
-                if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .portrait
-                }
-            }
-            
-            session.commitConfiguration()
-            
-            self.captureSession = session
-            self.videoOutput = output
-            
-            sessionObserver = NotificationCenter.default.addObserver(
-                forName: .AVCaptureSessionDidStartRunning,
-                object: session,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in
-                    self?.connectionStatus = .connected
-                    self?.isActive = true
-                }
-            }
-            
-            session.startRunning()
-            
-            try await Task.sleep(nanoseconds: 150_000_000)
-            if session.isRunning {
-                connectionStatus = .connected
-                isActive = true
-                frameCount = 0
-                objectWillChange.send()
-            } else {
-                throw CameraFeedError.deviceNotAvailable
-            }
+        } catch is CancellationError {
+            connectionStatus = .disconnected
         } catch {
             connectionStatus = .error(error.localizedDescription)
         }
     }
     
-    func stopCapture() {
-        if let observer = sessionObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        sessionObserver = nil
+    func stopCapture() async {
+        processingTask?.cancel()
+        processingTask = nil
         
-        captureSession?.stopRunning()
+        if let session = captureSession {
+            await session.stop()
+        }
         captureSession = nil
-        videoOutput = nil
-        videoDelegate = nil
+        
         isActive = false
         connectionStatus = .disconnected
         currentFrame = nil
@@ -203,6 +157,28 @@ final class CameraFeed: ObservableObject, Identifiable {
         frameCount = 0
         
         lastProcessedPixelBuffer = nil
+        
+        await MainActor.run {
+            self.objectWillChange.send()
+        }
+    }
+    
+    private func processFrames() async {
+        guard let session = captureSession else { return }
+        
+        let sampleBufferStream = await session.sampleBuffers()
+        
+        for await sampleBuffer in sampleBufferStream {
+            if Task.isCancelled { break }
+            
+            // Update frame on main actor
+            await MainActor.run {
+                self.currentSampleBuffer = sampleBuffer
+                if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                    self.updateFrame(pixelBuffer)
+                }
+            }
+        }
     }
     
     private func updateFrame(_ pixelBuffer: CVPixelBuffer) {
@@ -214,13 +190,13 @@ final class CameraFeed: ObservableObject, Identifiable {
             isActive = true
         }
         
-        // Push a CGImage/NSImage in parallel for any fallback UI
+        // Process image for UI display if needed
         if shouldProcessNewFrame(pixelBuffer) {
-            let pb = pixelBuffer
-            Task {
+            Task(priority: .utility) {
                 try? Task.checkCancellation()
-                let (cg, ns) = await converter.makeImages(from: pb)
+                let (cg, ns) = await converter.makeImages(from: pixelBuffer)
                 try? Task.checkCancellation()
+                
                 await MainActor.run {
                     self.previewImage = cg
                     self.previewNSImage = ns
@@ -262,40 +238,19 @@ final class CameraFeed: ObservableObject, Identifiable {
         
         return false
     }
-    
-    private class VideoOutputDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-        private weak var feed: CameraFeed?
-        
-        init(feed: CameraFeed) {
-            self.feed = feed
-            super.init()
-        }
-        
-        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-            Task { @MainActor in
-                self.feed?.currentSampleBuffer = sampleBuffer
-                if let pb = CMSampleBufferGetImageBuffer(sampleBuffer) {
-                    self.feed?.updateFrame(pb)
-                }
-            }
-        }
-        
-        func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        }
-    }
 }
 
-enum CameraFeedError: Error, LocalizedError {
-    case cannotAddInput
-    case cannotAddOutput
-    case deviceNotAvailable
+// MARK: - Backwards Compatibility
+
+struct CameraDevice {
+    let deviceID: String
+    let displayName: String
+    let id: String
     
-    var errorDescription: String? {
-        switch self {
-        case .cannotAddInput: return "Cannot add camera input to session"
-        case .cannotAddOutput: return "Cannot add video output to session"
-        case .deviceNotAvailable: return "Camera device not available"
-        }
+    init(from info: CameraDeviceInfo) {
+        self.deviceID = info.deviceID
+        self.displayName = info.displayName
+        self.id = info.id
     }
 }
 
@@ -306,35 +261,43 @@ final class CameraFeedManager: ObservableObject {
     @Published var isDiscovering = false
     @Published var lastDiscoveryError: String?
     
-    let cameraDeviceManager: CameraDeviceManager
-    
+    private let deviceManager: DeviceManager
     weak var streamingViewModel: StreamingViewModel?
     
     private var lastManagerUIUpdate = CACurrentMediaTime()
     private let managerUIUpdateInterval: CFTimeInterval = 1.0/30.0
+    private var deviceChangeTask: Task<Void, Never>?
     
-    init(cameraDeviceManager: CameraDeviceManager) {
-        self.cameraDeviceManager = cameraDeviceManager
+    init(deviceManager: DeviceManager) {
+        self.deviceManager = deviceManager
         
-        Task { @MainActor in
-            for await _ in cameraDeviceManager.$isDiscovering.values {
-                self.isDiscovering = cameraDeviceManager.isDiscovering
+        // Monitor device changes
+        deviceChangeTask = Task { [weak self] in
+            guard let self else { return }
+            
+            let changeStream = await self.deviceManager.deviceChangeNotifications()
+            for await change in changeStream {
+                await self.handleDeviceChange(change)
             }
         }
         
-        Task { @MainActor in
-            for await _ in cameraDeviceManager.$lastDiscoveryError.values {
-                self.lastDiscoveryError = cameraDeviceManager.lastDiscoveryError
-            }
+        // Initial device discovery
+        Task {
+            await refreshDevices()
         }
+    }
+    
+    deinit {
+        deviceChangeTask?.cancel()
     }
     
     func setStreamingViewModel(_ viewModel: StreamingViewModel) {
         self.streamingViewModel = viewModel
     }
     
-    func startFeed(for device: CameraDevice) async -> CameraFeed? {
-        if let existingFeed = activeFeeds.first(where: { $0.device.deviceID == device.deviceID }) {
+    func startFeed(for deviceInfo: CameraDeviceInfo) async -> CameraFeed? {
+        // Check if feed already exists
+        if let existingFeed = activeFeeds.first(where: { $0.deviceInfo.deviceID == deviceInfo.deviceID }) {
             if existingFeed.frameCount > 0 && existingFeed.connectionStatus != .connected {
                 existingFeed.connectionStatus = .connected
                 existingFeed.isActive = true
@@ -343,18 +306,26 @@ final class CameraFeedManager: ObservableObject {
             return existingFeed
         }
         
-        let feed = CameraFeed(device: device)
-        activeFeeds.append(feed)
-        triggerManagerUIUpdate()
+        let feed = CameraFeed(deviceInfo: deviceInfo)
         
-        await feed.startCapture()
+        await MainActor.run {
+            self.activeFeeds.append(feed)
+            self.triggerManagerUIUpdate()
+        }
         
+        // Start capture in background
+        await feed.startCapture(using: deviceManager)
+        
+        // Wait a bit for frames to start flowing
         try? await Task.sleep(nanoseconds: 300_000_000)
-        if feed.frameCount > 0 && feed.connectionStatus != .connected {
-            feed.connectionStatus = .connected
-            feed.isActive = true
-            feed.objectWillChange.send()
-            triggerManagerUIUpdate()
+        
+        await MainActor.run {
+            if feed.frameCount > 0 && feed.connectionStatus != .connected {
+                feed.connectionStatus = .connected
+                feed.isActive = true
+                feed.objectWillChange.send()
+                self.triggerManagerUIUpdate()
+            }
         }
         
         return feed
@@ -368,21 +339,26 @@ final class CameraFeedManager: ObservableObject {
         }
     }
     
-    func stopFeed(_ feed: CameraFeed) {
-        feed.stopCapture()
-        activeFeeds.removeAll { $0.id == feed.id }
+    func stopFeed(_ feed: CameraFeed) async {
+        await feed.stopCapture()
         
-        if selectedFeedForLiveProduction?.id == feed.id {
-            selectedFeedForLiveProduction = nil
+        await MainActor.run {
+            self.activeFeeds.removeAll { $0.id == feed.id }
+            
+            if self.selectedFeedForLiveProduction?.id == feed.id {
+                self.selectedFeedForLiveProduction = nil
+            }
+            
+            self.triggerManagerUIUpdate()
         }
-        
-        triggerManagerUIUpdate()
     }
     
     func selectFeedForLiveProduction(_ feed: CameraFeed) async {
-        selectedFeedForLiveProduction = feed
-        feed.objectWillChange.send()
-        self.triggerManagerUIUpdate()
+        await MainActor.run {
+            self.selectedFeedForLiveProduction = feed
+            feed.objectWillChange.send()
+            self.triggerManagerUIUpdate()
+        }
     }
     
     var liveProductionFrame: CVPixelBuffer? {
@@ -398,28 +374,110 @@ final class CameraFeedManager: ObservableObject {
     }
     
     func getAvailableDevices() async -> [CameraDevice] {
-        await cameraDeviceManager.discoverDevices()
-        return cameraDeviceManager.availableDevices
+        do {
+            let (cameras, _) = try await deviceManager.discoverDevices()
+            return cameras.map { CameraDevice(from: $0) }
+        } catch {
+            await MainActor.run {
+                self.lastDiscoveryError = error.localizedDescription
+            }
+            return []
+        }
     }
     
     func forceRefreshDevices() async {
-        await cameraDeviceManager.forceRefresh()
+        await refreshDevices(forceRefresh: true)
+    }
+    
+    private func refreshDevices(forceRefresh: Bool = false) async {
+        await MainActor.run {
+            self.isDiscovering = true
+            self.lastDiscoveryError = nil
+        }
+        
+        do {
+            _ = try await deviceManager.discoverDevices(forceRefresh: forceRefresh)
+        } catch {
+            await MainActor.run {
+                self.lastDiscoveryError = error.localizedDescription
+            }
+        }
+        
+        await MainActor.run {
+            self.isDiscovering = false
+            self.objectWillChange.send()
+        }
     }
     
     var availableDevices: [CameraDevice] {
-        return cameraDeviceManager.availableDevices
+        // This is synchronous for UI compatibility, but may not be up-to-date
+        // The UI should call getAvailableDevices() for fresh data
+        Task {
+            await refreshDevices()
+        }
+        return []
     }
     
-    func stopAllFeeds() {
-        for feed in activeFeeds {
-            feed.stopCapture()
+    func stopAllFeeds() async {
+        let feedsToStop = activeFeeds
+        
+        // Stop all feeds concurrently
+        await withTaskGroup(of: Void.self) { group in
+            for feed in feedsToStop {
+                group.addTask {
+                    await feed.stopCapture()
+                }
+            }
         }
-        activeFeeds.removeAll()
-        selectedFeedForLiveProduction = nil
-        triggerManagerUIUpdate()
+        
+        await MainActor.run {
+            self.activeFeeds.removeAll()
+            self.selectedFeedForLiveProduction = nil
+            self.triggerManagerUIUpdate()
+        }
     }
     
     func debugCameraDetection() async {
-        await cameraDeviceManager.debugCameraDetection()
+        let stats = await deviceManager.getDiscoveryStats()
+        print("Camera Detection Debug:")
+        print("- Total cameras: \(stats.totalCameraDevices)")
+        print("- Connected cameras: \(stats.connectedCameraDevices)")
+        print("- Last discovery: \(stats.lastDiscoveryTime?.description ?? "Never")")
+        print("- Discovery duration: \(stats.discoveryDuration)s")
+    }
+    
+    private func handleDeviceChange(_ change: DeviceChangeNotification) async {
+        await MainActor.run {
+            switch change.changeType {
+            case .added(let deviceInfo):
+                print("CameraFeedManager: Device added: \(deviceInfo.displayName)")
+            case .removed(let deviceID):
+                print("CameraFeedManager: Device removed: \(deviceID)")
+                // Stop any active feeds for this device
+                if let feed = self.activeFeeds.first(where: { $0.deviceInfo.deviceID == deviceID }) {
+                    Task {
+                        await self.stopFeed(feed)
+                    }
+                }
+            case .configurationChanged(let deviceInfo):
+                print("CameraFeedManager: Device configuration changed: \(deviceInfo.displayName)")
+            }
+            
+            self.objectWillChange.send()
+        }
+    }
+}
+
+enum CameraFeedError: Error, LocalizedError {
+    case cannotAddInput
+    case cannotAddOutput
+    case deviceNotAvailable
+    
+    var errorDescription: String? {
+        switch self {
+        case .cannotAddInput: return "Cannot add camera input to session"
+        case .cannotAddOutput: return "Cannot add video output to session"
+        case .deviceNotAvailable: return "Camera device not available"
+        }
     }
 }

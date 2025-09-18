@@ -66,7 +66,7 @@ class CameraDebugHelper {
             print("   \(index + 1). \(device.localizedName)")
             print("      - Unique ID: \(device.uniqueID)")
             print("      - Model ID: \(device.modelID)")
-            print("      - Device Type: \(device.deviceType.rawValue)")
+            print("      - Device Type: Unknown")
             print("      - Connected: \(device.isConnected)")
             print("      - In use: \(device.isInUseByAnotherApplication)")
             print("      - Active format: \(device.activeFormat)")
@@ -87,7 +87,7 @@ class CameraDebugHelper {
         print("📱 Found \(videoDevices.count) video devices via legacy method:")
         
         for (index, device) in videoDevices.enumerated() {
-            print("   \(index + 1). \(device.localizedName) (\(device.deviceType.rawValue))")
+            print("   \(index + 1). \(device.localizedName) (ID: \(device.uniqueID))")
         }
     }
     

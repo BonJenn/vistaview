@@ -161,12 +161,10 @@ struct OutputMappingControlsView: View {
 // MARK: - Preview
 
 #Preview {
-    let manager = OutputMappingManager(metalDevice: MTLCreateSystemDefaultDevice()!)
-    let externalManager = ExternalDisplayManager()
-    let production = UnifiedProductionManager()
-    OutputMappingControlsView(
-        outputMappingManager: manager,
-        externalDisplayManager: externalManager,
-        productionManager: production
-    )
+    // Simplified preview without async initialization
+    VStack {
+        Text("Output Mapping Controls View")
+        Text("Requires production manager context")
+    }
+    .padding()
 }

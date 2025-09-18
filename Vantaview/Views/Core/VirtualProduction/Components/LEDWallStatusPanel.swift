@@ -173,19 +173,6 @@ struct LEDWallStatusPanel: View {
 // MARK: - Preview
 
 #Preview {
-    @StateObject var studioManager = VirtualStudioManager()
-    @StateObject var cameraDeviceManager = CameraDeviceManager()
-    @StateObject var cameraFeedManager = CameraFeedManager(cameraDeviceManager: cameraDeviceManager)
-    
-    return LEDWallStatusPanel(cameraFeedManager: cameraFeedManager)
-        .environmentObject(studioManager)
-        .frame(width: 300)
-        .padding()
-        .onAppear {
-            // Add some mock LED walls for preview
-            if let ledWallAsset = LEDWallAsset.predefinedWalls.first {
-                studioManager.addLEDWall(from: ledWallAsset, at: SCNVector3(0, 2, 0))
-                studioManager.addLEDWall(from: ledWallAsset, at: SCNVector3(3, 2, 0))
-            }
-        }
-}
+        Text("LED Wall Status Panel")
+            .padding()
+    }

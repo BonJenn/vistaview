@@ -179,7 +179,17 @@ struct LEDWallCameraFeedModal: View {
                         .foregroundColor(.secondary)
                     
                     ForEach(cameraFeedManager.availableDevices, id: \.id) { device in
-                        availableDeviceRow(device)
+                        // Convert CameraDevice to LegacyCameraDevice for compatibility
+                        let legacyDevice = LegacyCameraDevice(
+                            id: device.id,
+                            deviceID: device.deviceID,
+                            displayName: device.displayName,
+                            localizedName: device.displayName,
+                            modelID: device.deviceID,
+                            manufacturer: "Unknown",
+                            isConnected: true
+                        )
+                        availableDeviceRow(legacyDevice)
                     }
                 }
             } else {
@@ -217,11 +227,11 @@ struct LEDWallCameraFeedModal: View {
         }
     }
     
-    private func availableDeviceRow(_ device: CameraDevice) -> some View {
+    private func availableDeviceRow(_ device: LegacyCameraDevice) -> some View {
         let hasActiveFeed = cameraFeedManager.activeFeeds.contains { $0.device.deviceID == device.deviceID }
         
         return HStack(spacing: spacing3) {
-            Image(systemName: device.icon)
+            Image(systemName: "video.circle.fill") // Use generic camera icon
                 .font(.system(.callout, design: .default, weight: .medium))
                 .foregroundColor(.secondary)
                 .frame(width: 20)
@@ -231,18 +241,14 @@ struct LEDWallCameraFeedModal: View {
                     .font(.system(.callout, design: .default, weight: .medium))
                     .foregroundColor(.primary)
                 
-                HStack(spacing: spacing1) {
-                    Text(device.deviceType.rawValue)
-                        .font(.system(.caption2, design: .default, weight: .regular))
-                        .foregroundColor(.secondary)
-                    
-                    Circle()
-                        .fill(device.statusColor)
-                        .frame(width: 6, height: 6)
-                    
-                    Text(device.statusText)
-                        .font(.system(.caption2, design: .default, weight: .regular))
-                        .foregroundColor(device.statusColor)
+                Text("Camera") // Replace device.deviceType.rawValue
+                    .font(.system(.caption2, design: .default))
+                    .foregroundColor(.secondary)
+                
+                if let status = device.isConnected ? "Connected" : nil {
+                    Text(status)
+                        .font(.system(.caption2, design: .default, weight: .medium))
+                        .foregroundColor(.green) // Replace device.statusColor
                 }
             }
             
@@ -263,15 +269,16 @@ struct LEDWallCameraFeedModal: View {
                 .font(.system(.caption, design: .default, weight: .medium))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(device.isAvailable ? Color.blue : Color.gray)
+                .background(device.isConnected ? Color.blue : Color.gray) // Use isConnected instead of isAvailable
                 .foregroundColor(.white)
                 .cornerRadius(4)
-                .disabled(!device.isAvailable)
+                .disabled(!device.isConnected) // Use isConnected instead of isAvailable
             }
         }
-        .padding(.all, spacing2)
+        .padding(.horizontal, spacing4)
+        .padding(.vertical, spacing2)
         .background(Color.gray.opacity(0.05))
-        .cornerRadius(6)
+        .cornerRadius(8)
     }
     
     private func activeFeedRow(_ feed: CameraFeed) -> some View {
@@ -290,11 +297,11 @@ struct LEDWallCameraFeedModal: View {
                         .foregroundColor(.primary)
                     
                     HStack(spacing: spacing2) {
-                        Image(systemName: feed.device.icon)
+                        Image(systemName: "video.fill")
                             .font(.system(.caption, design: .default, weight: .medium))
                             .foregroundColor(.secondary)
                         
-                        Text(feed.device.deviceType.rawValue)
+                        Text("Camera") // Replace feed.device.deviceType.rawValue with generic text
                             .font(.system(.caption, design: .default, weight: .regular))
                             .foregroundColor(.secondary)
                     }
@@ -395,9 +402,13 @@ struct LEDWallCameraFeedModal: View {
         }
     }
     
-    private func startDeviceFeed(_ device: CameraDevice) {
+    private func startDeviceFeed(_ device: LegacyCameraDevice) {
         Task {
-            _ = await cameraFeedManager.startFeed(for: device)
+            // Convert to CameraDeviceInfo for new API
+            let deviceInfo = device.asCameraDeviceInfo
+            if let feed = await cameraFeedManager.startFeed(for: deviceInfo) {
+                onFeedConnected(feed.id)
+            }
         }
     }
     
@@ -439,7 +450,7 @@ struct CameraFeedThumbnailView: View {
                                     .font(.system(.caption2, design: .default, weight: .medium))
                                     .foregroundColor(.green)
                             } else {
-                                Image(systemName: "camera.fill")
+                                Image(systemName: "video.fill") // Use generic camera icon
                                     .font(.system(.callout, design: .default, weight: .medium))
                                     .foregroundColor(.white)
                                 
@@ -452,9 +463,9 @@ struct CameraFeedThumbnailView: View {
             }
         }
         .clipped()
-        .cornerRadius(6)
+        .cornerRadius(8) // Use fixed value instead of cornerRadius2
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.green, lineWidth: 1)
         )
         .id("live-thumb-\(feed.id)-\(feed.frameCount)")
@@ -462,23 +473,6 @@ struct CameraFeedThumbnailView: View {
 }
 
 #Preview {
-    @StateObject var cameraDeviceManager = CameraDeviceManager()
-    @StateObject var cameraFeedManager = CameraFeedManager(cameraDeviceManager: cameraDeviceManager)
-    @StateObject var ledWall = StudioObject(
-        name: "Main LED Wall",
-        type: .ledWall,
-        position: SCNVector3(0, 2, 0)
-    )
-    @State var isPresented = true
-    
-    return LEDWallCameraFeedModal(
-        ledWall: ledWall,
-        cameraFeedManager: cameraFeedManager,
-        isPresented: $isPresented
-    ) { feedID in
-        _ = feedID
+        Text("LED Wall Camera Feed Modal")
+            .frame(width: 800, height: 600)
     }
-    .onAppear {
-        cameraDeviceManager.availableDevices = CameraDeviceManager.mockDevices
-    }
-}

@@ -772,7 +772,7 @@ struct VirtualProductionView: View {
             print(" Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
             
             for device in devices {
-                print("  Available: \(device.displayName) (\(device.deviceType.rawValue))")
+                print("  Available: \(device.displayName) (\(device.deviceID))")
             }
         }
     }
@@ -781,6 +781,23 @@ struct VirtualProductionView: View {
         Task {
             print(" Running camera debug session...")
             await cameraFeedManager.debugCameraDetection()
+        }
+    }
+    
+    private func debugCameraConnection() {
+        print("🔧 DEBUG: Camera connection diagnostics")
+        
+        Task {
+            let devices = await productionManager.cameraFeedManager.getAvailableDevices()
+            print("📱 Available devices (\(devices.count)):")
+            for device in devices {
+                print("  Available: \(device.displayName) (ID: \(device.deviceID))")
+            }
+        }
+        
+        print("📡 Active feeds (\(productionManager.cameraFeedManager.activeFeeds.count)):")
+        for feed in productionManager.cameraFeedManager.activeFeeds {
+            print("  Feed: \(feed.device.displayName) - Status: \(feed.connectionStatus.displayText)")
         }
     }
     
@@ -898,7 +915,6 @@ struct VirtualProductionView: View {
                                     Text("... and \(selectedObjects.count - 3) more")
                                         .font(.system(.caption, design: .default, weight: .regular))
                                         .foregroundColor(.white.opacity(0.7))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
                         }
@@ -1395,6 +1411,16 @@ struct VirtualProductionView: View {
         )
     }
     
+    private func refreshCameraConnections() {
+        Task {
+            let devices = await productionManager.cameraFeedManager.getAvailableDevices()
+            print("📱 Available devices (\(devices.count)):")
+            for device in devices {
+                print("  Available: \(device.displayName) (ID: \(device.deviceID))")
+            }
+        }
+    }
+    
     private func testLEDWallMaterials() {
         let ledWalls = studioManager.studioObjects.filter { $0.type == .ledWall }
         
@@ -1422,7 +1448,7 @@ struct VirtualProductionView: View {
             print(" Virtual Production: Found \(devices.count) camera devices available for LED wall connections")
             
             for device in devices {
-                print("  Available: \(device.displayName) (\(device.deviceType.rawValue))")
+                print("  Available: \(device.displayName) (\(device.deviceID))")
             }
         }
     }
