@@ -63,28 +63,7 @@ struct ProjectHub: View {
             VStack(alignment: .leading, spacing: 20) {
                 // User section
                 if authManager.isAuthenticated {
-                    if let email = authManager.currentUser?.email {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Circle()
-                                    .fill(Color.green)
-                                    .frame(width: 8, height: 8)
-                                
-                                Text("Signed In")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                
-                                Spacer()
-                            }
-                            
-                            Text(email)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .lineLimit(1)
-                        }
-                    } else {
-                        UserSection()
-                    }
+                    UserSection()
                 }
                 
                 // Quick actions
@@ -151,10 +130,20 @@ struct ProjectHub: View {
                 title: $newProjectTitle,
                 selectedTemplate: $selectedTemplate,
                 recentProjectsManager: recentProjectsManager,
+                projectCoordinator: projectCoordinator,
                 onProjectCreated: { projectState in
-                    // Handle project creation
+                    // Add to recent projects
                     Task {
-                        await projectCoordinator.openProject(projectState)
+                        if let projectURL = await projectState.projectURL {
+                            let recentProject = RecentProject(
+                                projectId: await projectState.manifest.projectId,
+                                title: await projectState.manifest.title,
+                                projectURL: projectURL
+                            )
+                            await MainActor.run {
+                                recentProjectsManager.addRecentProject(recentProject)
+                            }
+                        }
                     }
                 }
             )
@@ -193,9 +182,6 @@ struct ProjectHub: View {
     private func duplicateProject(_ project: RecentProject) {
         Task {
             do {
-                let projectManager = ProjectManager()
-                let originalState = try await projectManager.openProject(at: project.projectURL)
-                
                 // Show save panel for new location
                 let savePanel = NSSavePanel()
                 savePanel.title = "Duplicate Project"
@@ -207,19 +193,9 @@ struct ProjectHub: View {
                     let directory = url.deletingLastPathComponent()
                     let title = url.deletingPathExtension().lastPathComponent
                     
-                    let duplicatedState = try await projectManager.duplicateProject(
-                        originalState,
+                    try await projectCoordinator.duplicateCurrentProject(
                         newTitle: title,
                         at: directory
-                    )
-                    
-                    // Add to recent projects
-                    recentProjectsManager.addRecentProject(
-                        RecentProject(
-                            projectId: duplicatedState.manifest.projectId,
-                            title: duplicatedState.manifest.title,
-                            projectURL: duplicatedState.projectURL!
-                        )
                     )
                 }
                 
@@ -250,11 +226,6 @@ struct ProjectHub: View {
             Task {
                 do {
                     try await projectCoordinator.openProject(at: url)
-                    
-                    // The project coordinator will handle the project state
-                    // We don't need to manually add to recent projects here
-                    // as that should be handled by the coordinator
-                    
                 } catch {
                     print("Failed to open project: \(error)")
                 }
@@ -262,26 +233,6 @@ struct ProjectHub: View {
         case .failure(let error):
             print("File selection failed: \(error)")
         }
-    }
-    
-    private func handleProjectCreated(_ projectState: ProjectState) async {
-        // Add to recent projects
-        if let projectURL = await projectState.projectURL {
-            let recentProject = RecentProject(
-                projectId: await projectState.manifest.projectId,
-                title: await projectState.manifest.title,
-                projectURL: projectURL
-            )
-            recentProjectsManager.addRecentProject(recentProject)
-        }
-        
-        // Use ProjectCoordinator to open the project
-        await projectCoordinator.openProject(projectState)
-    }
-    
-    private func switchToMainApp(with projectState: ProjectState) async {
-        // This is now handled by the ProjectCoordinator
-        await projectCoordinator.openProject(projectState)
     }
 }
 

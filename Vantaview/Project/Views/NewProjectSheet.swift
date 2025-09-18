@@ -5,6 +5,7 @@ struct NewProjectSheet: View {
     @Binding var title: String
     @Binding var selectedTemplate: ProjectTemplate
     let recentProjectsManager: RecentProjectsManager
+    let projectCoordinator: ProjectCoordinator
     let onProjectCreated: (ProjectState) -> Void
     
     @Environment(\.dismiss) private var dismiss
@@ -123,19 +124,21 @@ struct NewProjectSheet: View {
         
         Task { @MainActor in
             do {
-                let projectManager = ProjectManager()
-                
                 // Ensure directory exists
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 
-                let projectState = try await projectManager.createProject(
+                try await projectCoordinator.createNewProject(
                     title: title,
                     template: selectedTemplate,
                     mediaPolicy: mediaPolicy,
                     at: directory
                 )
                 
-                onProjectCreated(projectState)
+                // The project coordinator handles opening the project
+                if let projectState = projectCoordinator.currentProjectState {
+                    onProjectCreated(projectState)
+                }
+                
                 dismiss()
                 
             } catch {
@@ -214,6 +217,7 @@ struct TemplateCard: View {
         title: .constant("My Project"),
         selectedTemplate: .constant(.blank),
         recentProjectsManager: RecentProjectsManager(),
+        projectCoordinator: ProjectCoordinator(),
         onProjectCreated: { _ in }
     )
 }

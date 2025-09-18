@@ -9,6 +9,7 @@ struct VantaviewApp: App {
     
     @StateObject private var authManager = AuthenticationManager()
     @StateObject private var licenseManager = LicenseManager()
+    @StateObject private var projectCoordinator = ProjectCoordinator()
     
     private let logger = Logger(subsystem: "app.vantaview", category: "App")
     
@@ -16,21 +17,32 @@ struct VantaviewApp: App {
         WindowGroup {
             Group {
                 if authManager.isAuthenticated {
-                    ContentView()
-                        .environmentObject(licenseManager)
-                        .task {
-                            await bootstrapLicensing()
-                        }
-                        .task(id: authManager.accessToken) {
-                            await handleTokenChange()
-                        }
-                        .frame(minWidth: 1200, minHeight: 800)
+                    if projectCoordinator.hasOpenProject {
+                        // Main content view with active project
+                        ContentView()
+                            .environmentObject(licenseManager)
+                            .environmentObject(projectCoordinator)
+                            .task {
+                                await bootstrapLicensing()
+                            }
+                            .task(id: authManager.accessToken) {
+                                await handleTokenChange()
+                            }
+                            .frame(minWidth: 1200, minHeight: 800)
+                    } else {
+                        // Project Hub when no project is open
+                        ProjectHub()
+                            .environmentObject(authManager)
+                            .environmentObject(projectCoordinator)
+                            .frame(minWidth: 1000, minHeight: 700)
+                    }
                 } else {
                     SignInView(authManager: authManager)
                         .frame(width: 400, height: 650)
                 }
             }
             .environmentObject(authManager)
+            .environmentObject(projectCoordinator)
             .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:
@@ -47,10 +59,49 @@ struct VantaviewApp: App {
         }
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(after: .newItem) {
+                if authManager.isAuthenticated {
+                    Button("New Project...") {
+                        // This will show Project Hub
+                        Task {
+                            await projectCoordinator.closeCurrentProject()
+                        }
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                    
+                    Button("Open Project...") {
+                        showOpenProjectDialog()
+                    }
+                    .keyboardShortcut("o", modifiers: .command)
+                    
+                    if projectCoordinator.hasOpenProject {
+                        Button("Close Project") {
+                            Task {
+                                await projectCoordinator.closeCurrentProject()
+                            }
+                        }
+                        .keyboardShortcut("w", modifiers: .command)
+                    }
+                }
+            }
+            
+            CommandGroup(after: .saveItem) {
+                if authManager.isAuthenticated && projectCoordinator.hasOpenProject {
+                    Button("Save Project") {
+                        Task {
+                            try? await projectCoordinator.saveCurrentProject()
+                        }
+                    }
+                    .keyboardShortcut("s", modifiers: .command)
+                }
+            }
+            
             CommandGroup(after: .appInfo) {
                 if authManager.isAuthenticated {
                     Button("Project Hub...") {
-                        showProjectHubWindow()
+                        Task {
+                            await projectCoordinator.closeCurrentProject()
+                        }
                     }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     
@@ -85,6 +136,21 @@ struct VantaviewApp: App {
                     }
                     #endif
                 }
+            }
+        }
+    }
+    
+    private func showOpenProjectDialog() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Project"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.init("com.vantaview.project")].compactMap { $0 }
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            Task {
+                try? await projectCoordinator.openProject(at: url)
             }
         }
     }

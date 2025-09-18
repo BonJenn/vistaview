@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var showingStudioSelector = false
     @State private var showingVirtualCameraDemo = false
     @EnvironmentObject var licenseManager: LicenseManager
+    @EnvironmentObject var projectCoordinator: ProjectCoordinator
     
     // Live Production States
     @State private var rtmpURL = "rtmp://live.twitch.tv/app"
@@ -46,7 +47,8 @@ struct ContentView: View {
                     productionManager: productionManager,
                     productionMode: $productionMode,
                     showingStudioSelector: $showingStudioSelector,
-                    showingVirtualCameraDemo: $showingVirtualCameraDemo
+                    showingVirtualCameraDemo: $showingVirtualCameraDemo,
+                    projectCoordinator: projectCoordinator
                 )
                 
                 Divider()
@@ -93,35 +95,74 @@ struct ContentView: View {
                     tx.animation = nil
                 }
             }
+            .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
+                // Apply project template when project changes
+                if let projectState = projectCoordinator.currentProjectState {
+                    await applyProjectTemplate(projectState)
+                }
+            }
         } else {
             ProgressView("Initializing Production Manager...")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .task {
-                    await requestPermissions()
-                    do {
-                        let manager = try await UnifiedProductionManager()
-                        await manager.initialize()
-                        validateProductionManagerInitialization()
-
-                        await MainActor.run {
-                            layerManager.setProductionManager(manager)
-                            manager.externalDisplayManager.setLayerStackManager(layerManager)
-
-                            manager.streamingViewModel.bindToProgramManager(manager.previewProgramManager)
-                            manager.streamingViewModel.bindToLayerManager(layerManager)
-                            manager.streamingViewModel.bindToProductionManager(manager)
-                        }
-
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-                            suppressInitialAnimations = false
-                        }
-                        
-                        self.productionManager = manager
-                        
-                    } catch {
-                        print("Failed to initialize production manager: \(error)")
-                    }
+                    await initializeProductionManager()
                 }
+        }
+    }
+    
+    private func applyProjectTemplate(_ projectState: ProjectState) async {
+        guard let productionManager = productionManager else { return }
+        
+        // Determine template from project
+        let template = determineProjectTemplate(from: projectState)
+        
+        // Apply template configuration
+        await TemplateConfiguration.applyTemplate(
+            template,
+            to: productionManager,
+            with: projectState
+        )
+    }
+    
+    private func determineProjectTemplate(from projectState: ProjectState) -> ProjectTemplate {
+        let title = projectState.manifest.title.lowercased()
+        
+        if title.contains("news") { return .news }
+        if title.contains("talk show") { return .talkShow }
+        if title.contains("podcast") { return .podcast }
+        if title.contains("gaming") { return .gaming }
+        if title.contains("concert") { return .concert }
+        if title.contains("product demo") { return .productDemo }
+        if title.contains("webinar") { return .webinar }
+        if title.contains("interview") { return .interview }
+        
+        return .blank
+    }
+
+    private func initializeProductionManager() async {
+        await requestPermissions()
+        do {
+            let manager = try await UnifiedProductionManager()
+            await manager.initialize()
+            validateProductionManagerInitialization()
+
+            await MainActor.run {
+                layerManager.setProductionManager(manager)
+                manager.externalDisplayManager.setLayerStackManager(layerManager)
+
+                manager.streamingViewModel.bindToProgramManager(manager.previewProgramManager)
+                manager.streamingViewModel.bindToLayerManager(layerManager)
+                manager.streamingViewModel.bindToProductionManager(manager)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                suppressInitialAnimations = false
+            }
+            
+            self.productionManager = manager
+            
+        } catch {
+            print("Failed to initialize production manager: \(error)")
         }
     }
 
@@ -173,20 +214,35 @@ struct TopToolbarView: View {
     @Binding var showingStudioSelector: Bool
     @Binding var showingVirtualCameraDemo: Bool
     @EnvironmentObject var licenseManager: LicenseManager
+    let projectCoordinator: ProjectCoordinator
+    
+    @State private var projectHasUnsavedChanges = false
     
     var body: some View {
         HStack {
             HStack {
-                Image(systemName: "building.2.crop.circle")
+                Image(systemName: "tv.circle.fill")
                     .foregroundColor(.blue)
                 
-                Button(productionManager.currentStudioName) {
-                    showingStudioSelector = true
+                VStack(alignment: .leading, spacing: 2) {
+                    if let currentProject = projectCoordinator.currentProjectState {
+                        Text(currentProject.manifest.title)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        Text("Project Active")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Button(productionManager.currentStudioName) {
+                            showingStudioSelector = true
+                        }
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    }
                 }
-                .font(.headline)
-                .foregroundColor(.primary)
                 
-                if productionManager.hasUnsavedChanges {
+                if projectHasUnsavedChanges || productionManager.hasUnsavedChanges {
                     Circle()
                         .fill(Color.orange)
                         .frame(width: 6, height: 6)
@@ -196,6 +252,12 @@ struct TopToolbarView: View {
             .padding(.vertical, 6)
             .background(Color.gray.opacity(0.1))
             .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
+            .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
+                // Update unsaved changes status
+                if let currentProject = projectCoordinator.currentProjectState {
+                    projectHasUnsavedChanges = await currentProject.hasUnsavedChanges
+                }
+            }
             
             Spacer()
             
