@@ -49,6 +49,13 @@ struct VantaviewApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 if authManager.isAuthenticated {
+                    Button("Project Hub...") {
+                        showProjectHubWindow()
+                    }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    
+                    Divider()
+                    
                     Button("Account...") {
                         showAccountWindow()
                     }
@@ -138,5 +145,21 @@ struct VantaviewApp: App {
         )
         accountWindow.center()
         accountWindow.makeKeyAndOrderFront(nil)
+    }
+    
+    private func showProjectHubWindow() {
+        let projectHubWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        projectHubWindow.title = "Project Hub"
+        projectHubWindow.contentView = NSHostingView(
+            rootView: ProjectHub()
+                .environmentObject(authManager)
+        )
+        projectHubWindow.center()
+        projectHubWindow.makeKeyAndOrderFront(nil)
     }
 }

@@ -1,5 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Vantaview Project</string>
+			<key>CFBundleTypeDescription</key>
+			<string>Vantaview Project Package</string>
+			<key>CFBundleTypeIconFiles</key>
+			<array/>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.vantaview.project</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+				<string>public.composite-content</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Vantaview Project</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.vantaview.project</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>vvproj</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Vantaview needs camera access to capture video for live production and virtual studios.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vantaview needs microphone access to capture audio for live production and streaming.</string>
+	<key>NSScreenCaptureDescription</key>
+	<string>Vantaview needs screen recording permission to capture screen content for streaming and virtual production.</string>
+</dict>
 </plist>
