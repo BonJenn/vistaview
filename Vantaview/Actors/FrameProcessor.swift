@@ -70,7 +70,7 @@ actor FrameProcessor {
     
     private var stats = ProcessingStats(framesProcessed: 0, averageProcessingTime: 0, droppedFrames: 0, queueDepth: 0)
     private var processingTimes: [TimeInterval] = []
-    private let maxQueueDepth = 3 // Drop frames if queue gets too deep
+    private let maxQueueDepth = 3 // Potential future back-pressure control
     
     // MARK: - Texture Management
     
@@ -144,23 +144,24 @@ actor FrameProcessor {
         
         // Clean up texture pool for this source
         texturePool.removeValue(forKey: "\(sourceID)_output")
+        
+        // Periodically flush the CVMetalTextureCache to free transient CVMetalTextures
+        if let cache = textureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
     }
     
     /// Submit a frame for processing
     func submitFrame(_ frame: CVPixelBuffer, for sourceID: String, timestamp: CMTime = CMTime.zero) async throws {
         try Task.checkCancellation()
         
-        // Convert pixel buffer to Metal texture
         guard let texture = try await createMetalTexture(from: frame) else {
             throw ProcessingResult.ProcessingError.textureCreationFailed
         }
         
         let wrapper = TextureWrapper(texture: texture, timestamp: timestamp, identifier: sourceID)
         
-        // Check queue depth to prevent overload
         if let continuation = frameStreams[sourceID] {
-            // For now, we'll use a simple queue depth check
-            // In a production system, you'd want more sophisticated back-pressure handling
             continuation.yield(wrapper)
         }
     }
@@ -194,6 +195,7 @@ actor FrameProcessor {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw ProcessingResult.ProcessingError.metalDeviceUnavailable
         }
+        commandBuffer.label = "FrameProcessor.applyEffects"
         
         let outputTexture = chain?.apply(to: texture, using: commandBuffer, device: device) ?? texture
         
@@ -205,12 +207,10 @@ actor FrameProcessor {
     
     // MARK: - Statistics
     
-    /// Get current processing statistics
     func getStats() async -> ProcessingStats {
         return stats
     }
     
-    /// Reset processing statistics
     func resetStats() async {
         stats = ProcessingStats(framesProcessed: 0, averageProcessingTime: 0, droppedFrames: 0, queueDepth: 0)
         processingTimes.removeAll()
@@ -227,7 +227,6 @@ actor FrameProcessor {
         var processedFrames = 0
         
         for await wrapper in inputStream {
-            // Check for cancellation
             if Task.isCancelled {
                 outputContinuation.finish()
                 return
@@ -238,7 +237,7 @@ actor FrameProcessor {
             do {
                 try Task.checkCancellation()
                 
-                // Apply effects if chain exists
+                // Apply effects if chain exists (can suspend)
                 let processedTexture: MTLTexture?
                 if let effectChain = activeEffectChains[sourceID] {
                     processedTexture = try await applyEffects(to: wrapper.texture, using: effectChain)
@@ -246,17 +245,16 @@ actor FrameProcessor {
                     processedTexture = wrapper.texture
                 }
                 
-                // Convert to CGImage for UI display (optional)
-                let processedImage = processedTexture != nil ? await createCGImage(from: processedTexture!) : nil
+                // Do not produce per-frame CGImages for streaming playback
+                let processedImage: CGImage? = nil
                 
-                let processingTime = CACurrentMediaTime() - startTime
-                processingTimes.append(processingTime)
-                
-                // Keep only recent timing data
-                if processingTimes.count > 100 {
-                    processingTimes.removeFirst()
+                // Use an autoreleasepool only around sync work (no awaits inside)
+                let processingTime: TimeInterval = autoreleasepool {
+                    CACurrentMediaTime() - startTime
                 }
                 
+                processingTimes.append(processingTime)
+                if processingTimes.count > 100 { processingTimes.removeFirst() }
                 processedFrames += 1
                 
                 let result = ProcessingResult(
@@ -302,6 +300,10 @@ actor FrameProcessor {
         )
         
         outputContinuation.finish()
+        if let cache = textureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
+        texturePool.removeValue(forKey: "\(sourceID)_output")
     }
     
     private func createMetalTexture(from pixelBuffer: CVPixelBuffer) async throws -> MTLTexture? {
@@ -332,30 +334,26 @@ actor FrameProcessor {
         return CVMetalTextureGetTexture(cvTexture)
     }
     
+    // Retained for one-off stills only (not used for streaming playback now)
     private func createCGImage(from texture: MTLTexture) async -> CGImage? {
-        // Create CIImage from Metal texture
         guard let ciImage = CIImage(mtlTexture: texture, options: [
             .colorSpace: CGColorSpaceCreateDeviceRGB()
         ]) else {
             return nil
         }
         
-        // Flip image to correct orientation
         let flipped = ciImage.transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -ciImage.extent.height))
-        
         return ciContext.createCGImage(flipped, from: flipped.extent)
     }
     
     private func getOrCreateOutputTexture(for sourceID: String, width: Int, height: Int) -> MTLTexture? {
         let key = "\(sourceID)_output"
         
-        // Check if we have a suitable texture in the pool
         if let existingTexture = texturePool[key],
            existingTexture.width == width && existingTexture.height == height {
             return existingTexture
         }
         
-        // Create new texture
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: width,

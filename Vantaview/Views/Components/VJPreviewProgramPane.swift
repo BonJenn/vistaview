@@ -9,6 +9,7 @@ import SwiftUI
 import AVFoundation
 import Combine
 import Foundation
+import Metal
 
 struct VJPreviewProgramPane: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -204,14 +205,14 @@ struct VJPreviewProgramPane: View {
             }
             
             // Media playback controls (only show if media is selected)
-            if case .media(let file, let player) = previewProgramManager.previewSource {
+            if case .media(_, _) = previewProgramManager.previewSource {
                 VJMediaPlaybackControls(
                     previewProgramManager: previewProgramManager,
                     isPreview: true
                 )
             }
             
-            if case .media(let file, let player) = previewProgramManager.programSource {
+            if case .media(_, _) = previewProgramManager.programSource {
                 VJMediaPlaybackControls(
                     previewProgramManager: previewProgramManager,
                     isPreview: false
@@ -281,21 +282,14 @@ struct VJPreviewMonitor: View {
                     isPreview: isPreview
                 )
                 
-            case .media(let file, let player):
-                // Always use the actual player from the PreviewProgramManager
-                if let actualPlayer = isPreview ? previewProgramManager.previewPlayer : previewProgramManager.programPlayer {
-                    FrameBasedVideoPlayerView(player: actualPlayer)
-                } else {
-                    VStack {
-                        Image(systemName: file.fileType.icon)
-                            .font(.title2)
-                            .foregroundColor(.white.opacity(0.7))
-                        Text(file.name)
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.7))
-                            .lineLimit(1)
-                    }
-                }
+            case .media(let file, _):
+                // Use the GPU texture from the AVPlayerMetalPlayback path to avoid duplicate outputs
+                MetalVideoView(
+                    textureSupplier: isPreview ? previewProgramManager.makePreviewTextureSupplier()
+                                               : previewProgramManager.makeProgramTextureSupplier(),
+                    preferredFPS: Int(previewProgramManager.targetFPS),
+                    device: effectManager.metalDevice
+                )
                 
             case .virtual(let camera):
                 VStack {

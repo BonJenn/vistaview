@@ -129,6 +129,14 @@ final class PreviewProgramManager: ObservableObject {
     private var previewEffectRunner: EffectRunner?
     private var programEffectRunner: EffectRunner?
     
+    // Background feed loop for submitting preview textures to FrameProcessor
+    private var previewFeedLoopTask: Task<Void, Never>?
+    private var previewFeedLoopID: UUID?
+    
+    // Security-scoped URL lifetimes (do not stop early)
+    private var previewSecurityScopedURL: URL?
+    private var programSecurityScopedURL: URL?
+    
     init(cameraFeedManager: CameraFeedManager,
          unifiedProductionManager: UnifiedProductionManager,
          effectManager: EffectManager,
@@ -152,6 +160,12 @@ final class PreviewProgramManager: ObservableObject {
             self.removeKVO(isPreview: true)
             self.removeKVO(isPreview: false)
             self.stopPreviewMediaPipeline()
+            self.previewFeedLoopTask?.cancel()
+            self.previewFeedLoopTask = nil
+            if let url = self.previewSecurityScopedURL { url.stopAccessingSecurityScopedResource() }
+            if let url = self.programSecurityScopedURL { url.stopAccessingSecurityScopedResource() }
+            self.previewSecurityScopedURL = nil
+            self.programSecurityScopedURL = nil
             print("🧹 PreviewProgramManager deinit")
         }
     }
@@ -163,6 +177,12 @@ final class PreviewProgramManager: ObservableObject {
         removeKVO(isPreview: true)
         removeKVO(isPreview: false)
         stopPreviewMediaPipeline()
+        previewFeedLoopTask?.cancel()
+        previewFeedLoopTask = nil
+        if let url = previewSecurityScopedURL { url.stopAccessingSecurityScopedResource() }
+        if let url = programSecurityScopedURL { url.stopAccessingSecurityScopedResource() }
+        previewSecurityScopedURL = nil
+        programSecurityScopedURL = nil
         previewPlayer = nil
         programPlayer = nil
     }
@@ -267,7 +287,12 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        let oldProgramSource = programSource
+        // Release any existing program security scope (old program)
+        if let url = programSecurityScopedURL {
+            url.stopAccessingSecurityScopedResource()
+            programSecurityScopedURL = nil
+        }
+        
         let oldProgramPlayer = programPlayer
         let oldProgramAVPlayback = programAVPlayback
         let oldProgramTimeObserver = programTimeObserver
@@ -276,14 +301,12 @@ final class PreviewProgramManager: ObservableObject {
             oldProgramPlayer?.removeTimeObserver(observer)
         }
         oldProgramAVPlayback?.stop()
-        if case .media(let file, _) = oldProgramSource {
-            file.url.stopAccessingSecurityScopedResource()
-        }
         
         removePlayerNotifications(isPreview: false)
         programNotificationTokens = previewNotificationTokens
         previewNotificationTokens.removeAll()
         
+        // Transfer live pipeline + security token
         programSource = previewSource
         programPlayer = previewPlayer
         programAVPlayback = previewAVPlayback
@@ -298,6 +321,8 @@ final class PreviewProgramManager: ObservableObject {
         programMuted = previewMuted
         programRate = previewRate
         programVolume = previewVolume
+        programSecurityScopedURL = previewSecurityScopedURL
+        previewSecurityScopedURL = nil
         
         if let programAVPlayback = programAVPlayback {
             programAVPlayback.setEffectRunner(programEffectRunner)
@@ -325,6 +350,7 @@ final class PreviewProgramManager: ObservableObject {
         
         programEffectRunner?.setChain(getProgramEffectChain())
         
+        // Reset preview state but keep the program playing
         previewSource = .none
         previewPlayer = nil
         previewAVPlayback = nil
@@ -409,6 +435,9 @@ final class PreviewProgramManager: ObservableObject {
             previewVideoTexture = nil
             removePreviewTimeObserver()
             stopPreviewMediaPipeline()
+            if let pav = previewAVPlayback, pav !== programAVPlayback {
+                detachOutputs(from: previewPlayer)
+            }
             return
         }
         if case .media = previewSource, let actualPlayer = previewPlayer {
@@ -419,6 +448,9 @@ final class PreviewProgramManager: ObservableObject {
         }
         removePreviewTimeObserver()
         stopPreviewMediaPipeline()
+        if let pav = previewAVPlayback, pav !== programAVPlayback {
+            detachOutputs(from: previewPlayer)
+        }
     }
     
     func playProgram() {
@@ -459,6 +491,9 @@ final class PreviewProgramManager: ObservableObject {
             programCurrentTime = 0.0
             programVideoTexture = nil
             removeProgramTimeObserver()
+            if programAVPlayback != nil {
+                detachOutputs(from: programPlayer)
+            }
             return
         }
         if case .media = programSource, let actualPlayer = programPlayer {
@@ -468,6 +503,9 @@ final class PreviewProgramManager: ObservableObject {
             programCurrentTime = 0.0
         }
         removeProgramTimeObserver()
+        if programAVPlayback != nil {
+            detachOutputs(from: programPlayer)
+        }
     }
     
     func seekPreview(to time: TimeInterval) {
@@ -551,30 +589,34 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func loadMediaToPreview(_ file: MediaFile) async {
+        print("🎬 [PVW] Preparing media pipeline...")
         stopPreviewMediaPipeline()
+        previewFeedLoopTask?.cancel()
+        previewFeedLoopTask = nil
+        previewFeedLoopID = nil
         
         if let observer = self.previewTimeObserver {
             self.previewPlayer?.removeTimeObserver(observer)
             self.previewTimeObserver = nil
         }
         
-        if case .media(let previousFile, _) = self.previewSource {
-            previousFile.url.stopAccessingSecurityScopedResource()
+        if let prevURL = previewSecurityScopedURL, prevURL != file.url {
+            prevURL.stopAccessingSecurityScopedResource()
+            previewSecurityScopedURL = nil
         }
         
         guard file.url.startAccessingSecurityScopedResource() else {
             print("❌ Failed to start accessing security-scoped resource for: \(file.name)")
             return
         }
+        previewSecurityScopedURL = file.url
         
         let asset = AVURLAsset(url: file.url)
         Task {
             do {
                 let duration = try await asset.load(.duration)
-                if duration.isValid {
-                    await MainActor.run {
-                        self.previewDuration = CMTimeGetSeconds(duration)
-                    }
+                await MainActor.run {
+                    self.previewDuration = (duration.isValid && !duration.isIndefinite) ? CMTimeGetSeconds(duration) : 0
                 }
             } catch {
                 print("Failed to load PREVIEW duration: \(error)")
@@ -584,82 +626,128 @@ final class PreviewProgramManager: ObservableObject {
         previewProcessingTask = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                defer {
-                    file.url.stopAccessingSecurityScopedResource()
-                    self.stopPreviewMediaPipeline()
-                }
-                
-                try Task.checkCancellation()
-                
-                let processingStream = await self.frameProcessor.createFrameStream(
-                    for: "preview_media",
-                    effectChain: self.effectManager.getPreviewEffectChain()
-                )
-                
-                let playerItem = AVPlayerItem(url: file.url)
-                let player = AVPlayer(playerItem: playerItem)
-                player.automaticallyWaitsToMinimizeStalling = false
-                player.allowsExternalPlayback = false
-                
-                await MainActor.run {
-                    self.previewSource = .media(file, player: player)
-                    self.previewPlayer = player
-                }
-
-                let attrs: [String: Any] = [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                    kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-                    kCVPixelBufferMetalCompatibilityKey as String: true
-                ]
-                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
-                playerItem.add(output)
-                output.suppressesPlayerRendering = true
-                output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
-                
-                if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: self.effectManager.metalDevice) {
+                try await withTaskCancellationHandler(operation: {
+                    try Task.checkCancellation()
+                    
+                    let processingStream = await self.frameProcessor.createFrameStream(
+                        for: "preview_media",
+                        effectChain: self.effectManager.getPreviewEffectChain()
+                    )
+                    
+                    let playerItem = AVPlayerItem(url: file.url)
+                    let player = AVPlayer(playerItem: playerItem)
+                    player.automaticallyWaitsToMinimizeStalling = false
+                    player.allowsExternalPlayback = false
+                    player.actionAtItemEnd = .pause
+                    
                     await MainActor.run {
-                        self.previewAVPlayback = playback
+                        self.previewSource = .media(file, player: player)
+                        self.previewPlayer = player
                     }
-                    playback.setEffectRunner(self.previewEffectRunner)
-                    playback.start()
-                    player.play()
+
+                    let attrs: [String: Any] = [
+                        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                        kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+                        kCVPixelBufferMetalCompatibilityKey as String: true,
+                        kCVPixelBufferPoolMinimumBufferCountKey as String: 3
+                    ]
+                    let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+                    playerItem.add(output)
+                    output.suppressesPlayerRendering = true
+                    output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
                     
-                    let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
-                    self.previewTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
-                        guard let self else { return }
-                        let seconds = CMTimeGetSeconds(t)
-                        Task { @MainActor in
-                            self.previewCurrentTime = seconds
-                        }
-                    }
-                    
-                    let playbackRef = playback
-                    let processor = self.frameProcessor
-                    let sourceID = "preview_media"
-                    let feedLoop = Task.detached(priority: .userInitiated) {
-                        while !Task.isCancelled {
-                            try? Task.checkCancellation()
-                            if let texture = playbackRef.latestTexture {
-                                let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
-                                try? await processor.submitTexture(texture, for: sourceID, timestamp: timestamp)
-                            }
-                            try? await Task.sleep(nanoseconds: 33_333_333)
-                        }
+                    await MainActor.run {
+                        self.setupPlayerNotifications(for: player, isPreview: true)
                     }
                     
-                    for await result in processingStream {
-                        if Task.isCancelled { break }
+                    if let playback = AVPlayerMetalPlayback(player: player, itemOutput: output, device: self.effectManager.metalDevice) {
                         await MainActor.run {
-                            self.previewVideoTexture = result.outputTexture
-                            if let cgImage = result.processedImage {
-                                self.previewImage = cgImage
+                            self.previewAVPlayback = playback
+                        }
+                        playback.setEffectRunner(self.previewEffectRunner)
+                        playback.start()
+                        
+                        await MainActor.run {
+                            player.volume = self.previewMuted ? 0.0 : self.previewVolume
+                            player.playImmediately(atRate: self.previewRate)
+                            self.isPreviewPlaying = true
+                        }
+                        
+                        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+                        let obs = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+                            guard let self else { return }
+                            let seconds = CMTimeGetSeconds(t)
+                            Task { @MainActor in
+                                self.previewCurrentTime = seconds
                             }
-                            self.objectWillChange.send()
+                        }
+                        await MainActor.run {
+                            self.previewTimeObserver = obs
+                        }
+                        
+                        let statusObs = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+                            Task { @MainActor in
+                                guard let self else { return }
+                                if item.status == .readyToPlay {
+                                    self.isPreviewPlaying = true
+                                    self.previewPlayer?.volume = self.previewMuted ? 0.0 : self.previewVolume
+                                    self.previewPlayer?.playImmediately(atRate: self.previewRate)
+                                }
+                            }
+                        }
+                        await MainActor.run {
+                            self.previewKVO.append(statusObs)
+                        }
+                        
+                        let playbackRef = playback
+                        let processor = self.frameProcessor
+                        let sourceID = "preview_media"
+                        let loopID = UUID()
+                        let feedLoop = Task.detached(priority: .userInitiated) {
+                            while !Task.isCancelled {
+                                try? Task.checkCancellation()
+                                if let texture = playbackRef.latestTexture {
+                                    let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
+                                    try? await processor.submitTexture(texture, for: sourceID, timestamp: timestamp)
+                                }
+                                try? await Task.sleep(nanoseconds: 33_333_333)
+                            }
+                        }
+                        await MainActor.run {
+                            self.previewFeedLoopID = loopID
+                            self.previewFeedLoopTask = feedLoop
+                        }
+                        
+                        for await result in processingStream {
+                            if Task.isCancelled { break }
+                            await MainActor.run {
+                                self.previewVideoTexture = result.outputTexture
+                                if let cgImage = result.processedImage {
+                                    self.previewImage = cgImage
+                                }
+                                self.objectWillChange.send()
+                            }
+                        }
+                        
+                        feedLoop.cancel()
+                        await MainActor.run {
+                            if self.previewFeedLoopID == loopID {
+                                self.previewFeedLoopTask = nil
+                                self.previewFeedLoopID = nil
+                            }
                         }
                     }
-                    
-                    feedLoop.cancel()
-                }
+                }, onCancel: { [weak self] in
+                    print("🛑 [PVW] previewProcessingTask cancelled")
+                    Task { @MainActor in
+                        self?.previewFeedLoopTask?.cancel()
+                        self?.previewFeedLoopTask = nil
+                        self?.previewFeedLoopID = nil
+                    }
+                    Task { [weak self] in
+                        await self?.frameProcessor.stopFrameStream(for: "preview_media")
+                    }
+                })
             } catch is CancellationError {
                 print("🎬 Preview media processing cancelled")
             } catch {
@@ -669,6 +757,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     private func loadMediaToProgram(_ file: MediaFile) async {
+        print("📺 [PGM] Preparing media pipeline...")
         programVTPlayback?.stop()
         programVTPlayback = nil
         programAVPlayback?.stop()
@@ -680,23 +769,23 @@ final class PreviewProgramManager: ObservableObject {
             programTimeObserver = nil
         }
         
-        if case .media(let previousFile, _) = programSource {
-            previousFile.url.stopAccessingSecurityScopedResource()
+        if let prevURL = programSecurityScopedURL, prevURL != file.url {
+            prevURL.stopAccessingSecurityScopedResource()
+            programSecurityScopedURL = nil
         }
         
         guard file.url.startAccessingSecurityScopedResource() else {
             print("❌ Failed to start accessing security-scoped resource for PROGRAM: \(file.name)")
             return
         }
+        programSecurityScopedURL = file.url
         
         let asset = AVURLAsset(url: file.url)
         Task {
             do {
                 let duration = try await asset.load(.duration)
-                if duration.isValid {
-                    await MainActor.run {
-                        self.programDuration = CMTimeGetSeconds(duration)
-                    }
+                await MainActor.run {
+                    self.programDuration = (duration.isValid && !duration.isIndefinite) ? CMTimeGetSeconds(duration) : 0
                 }
             } catch {
                 print("Failed to load PROGRAM duration: \(error)")
@@ -718,7 +807,7 @@ final class PreviewProgramManager: ObservableObject {
             
             setupPlayerNotifications(for: player, isPreview: false)
             
-            let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
+            let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
             programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
                 guard let self else { return }
                 let seconds = CMTimeGetSeconds(t)
@@ -734,7 +823,8 @@ final class PreviewProgramManager: ObservableObject {
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-            kCVPixelBufferMetalCompatibilityKey as String: true
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferPoolMinimumBufferCountKey as String: 3
         ]
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         playerItem.add(output)
@@ -744,6 +834,7 @@ final class PreviewProgramManager: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
         player.allowsExternalPlayback = false
+        player.actionAtItemEnd = .pause
         
         self.programAudioTap = PlayerAudioTap(playerItem: playerItem)
         setupPlayerNotifications(for: player, isPreview: false)
@@ -773,17 +864,20 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        player.rate = programRate
-        player.volume = programMuted ? 0.0 : programVolume
-        player.play()
+        Task { @MainActor in
+            player.volume = self.programMuted ? 0.0 : self.programVolume
+            player.playImmediately(atRate: self.programRate)
+            self.isProgramPlaying = true
+        }
 
         let statusObs = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             Task { @MainActor in
                 if item.status == .readyToPlay {
                     self?.isProgramPlaying = true
-                    self?.programPlayer?.rate = self?.programRate ?? 1.0
                     self?.programPlayer?.volume = (self?.programMuted ?? false) ? 0.0 : (self?.programVolume ?? 1.0)
-                    self?.programPlayer?.play()
+                    if let rate = self?.programRate {
+                        self?.programPlayer?.playImmediately(atRate: rate)
+                    }
                 }
             }
         }
@@ -792,7 +886,7 @@ final class PreviewProgramManager: ObservableObject {
         programSource = .media(file, player: player)
         programPlayer = player
         
-        let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
+        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
         programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
             guard let self else { return }
             let seconds = CMTimeGetSeconds(t)
@@ -809,14 +903,20 @@ final class PreviewProgramManager: ObservableObject {
         }
         previewPlayer = nil
         
-        if case .media(let previousFile, _) = previewSource {
-            previousFile.url.stopAccessingSecurityScopedResource()
+        if let url = previewSecurityScopedURL {
+            url.stopAccessingSecurityScopedResource()
+            previewSecurityScopedURL = nil
         }
         
         guard file.url.startAccessingSecurityScopedResource() else { return }
+        previewSecurityScopedURL = file.url
         
         Task {
-            defer { file.url.stopAccessingSecurityScopedResource() }
+            defer {
+                // For static image, we can release immediately after load
+                self.previewSecurityScopedURL?.stopAccessingSecurityScopedResource()
+                self.previewSecurityScopedURL = nil
+            }
             do {
                 let imageData = try Data(contentsOf: file.url)
                 if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
@@ -843,14 +943,19 @@ final class PreviewProgramManager: ObservableObject {
         }
         programPlayer = nil
         
-        if case .media(let previousFile, _) = programSource {
-            previousFile.url.stopAccessingSecurityScopedResource()
+        if let url = programSecurityScopedURL {
+            url.stopAccessingSecurityScopedResource()
+            programSecurityScopedURL = nil
         }
         
         guard file.url.startAccessingSecurityScopedResource() else { return }
+        programSecurityScopedURL = file.url
         
         Task {
-            defer { file.url.stopAccessingSecurityScopedResource() }
+            defer {
+                self.programSecurityScopedURL?.stopAccessingSecurityScopedResource()
+                self.programSecurityScopedURL = nil
+            }
             do {
                 let imageData = try Data(contentsOf: file.url)
                 if let cgImage = NSImage(data: imageData)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
@@ -886,8 +991,9 @@ final class PreviewProgramManager: ObservableObject {
         previewVTPlayback = nil
         previewVideoTexture = nil
         previewAudioPlayer = nil
-        if case .media(let file, _) = previewSource {
-            file.url.stopAccessingSecurityScopedResource()
+        if let url = previewSecurityScopedURL {
+            url.stopAccessingSecurityScopedResource()
+            previewSecurityScopedURL = nil
         }
         previewSource = .none
         previewPlayer = nil
@@ -907,6 +1013,10 @@ final class PreviewProgramManager: ObservableObject {
         programVTPlayback = nil
         programVideoTexture = nil
         programAudioPlayer = nil
+        if let url = programSecurityScopedURL {
+            url.stopAccessingSecurityScopedResource()
+            programSecurityScopedURL = nil
+        }
         programSource = .none
         programPlayer = nil
         programImage = nil
@@ -917,10 +1027,12 @@ final class PreviewProgramManager: ObservableObject {
         programPrimedForPoster = false
         programAudioTap = nil
         removeProgramTimeObserver()
+        detachOutputs(from: programPlayer)
     }
     
     private func removePreviewTimeObserver() {
         if let observer = previewTimeObserver {
+            print("🧹 Removing preview time observer")
             previewPlayer?.removeTimeObserver(observer)
             previewTimeObserver = nil
         }
@@ -928,6 +1040,7 @@ final class PreviewProgramManager: ObservableObject {
     
     private func removeProgramTimeObserver() {
         if let observer = programTimeObserver {
+            print("🧹 Removing program time observer")
             programPlayer?.removeTimeObserver(observer)
             programTimeObserver = nil
         }
@@ -1178,6 +1291,10 @@ extension PreviewProgramManager {
         previewProcessingTask?.cancel()
         previewProcessingTask = nil
         
+        previewFeedLoopTask?.cancel()
+        previewFeedLoopTask = nil
+        previewFeedLoopID = nil
+        
         Task { [weak self] in
             await self?.frameProcessor.stopFrameStream(for: "preview_media")
         }
@@ -1186,5 +1303,15 @@ extension PreviewProgramManager {
             pav.stop()
         }
         previewAVPlayback = nil
+    }
+    
+    private func detachOutputs(from player: AVPlayer?) {
+        guard let item = player?.currentItem else { return }
+        if !item.outputs.isEmpty {
+            print("🧹 Detaching \(item.outputs.count) AVPlayerItemVideoOutput(s) from item")
+        }
+        for out in item.outputs {
+            item.remove(out)
+        }
     }
 }
