@@ -18,11 +18,10 @@ class ExternalDisplayManager: ObservableObject {
     @Published var lastScanTime: Date = Date()
     @Published var displayConnectionStatus: String = "Scanning..."
     
-    private var productionManager: UnifiedProductionManager?
+    private weak var productionManager: UnifiedProductionManager?
     private var cancellables = Set<AnyCancellable>()
     private var displayChangeTimer: Timer?
-
-    private var layerManager: LayerStackManager?
+    private weak var layerManager: LayerStackManager?
 
     struct DisplayInfo: Identifiable, Equatable {
         let id: CGDirectDisplayID
@@ -50,51 +49,89 @@ class ExternalDisplayManager: ObservableObject {
         }
     }
     
+    // MEMORY OPTIMIZATION: Throttling and cleanup
+    private var lastUpdateTime: CFTimeInterval = 0
+    private let updateThrottleInterval: CFTimeInterval = 1.0/30.0
+    private var textureCache: [String: (texture: MTLTexture, timestamp: CFTimeInterval)] = [:]
+    private let maxTextureCacheSize = 5
+    
     init() {
         scanForDisplays()
         setupDisplayChangeNotification()
         startPeriodicScan()
     }
     
+    deinit {
+        displayChangeTimer?.invalidate()
+        displayChangeTimer = nil
+        cancellables.forEach { $0.cancel() }
+        cancellables.removeAll()
+        textureCache.removeAll()
+        print("🧹 External Display Manager: Deinit cleanup completed")
+    }
+    
+    func cleanup() {
+        print("🧹 External Display Manager: Starting comprehensive cleanup")
+        displayChangeTimer?.invalidate()
+        displayChangeTimer = nil
+        cancellables.forEach { $0.cancel() }
+        cancellables.removeAll()
+        if let window = externalWindow {
+            if let professionalView = window.contentView as? OptimizedProfessionalVideoView {
+                professionalView.cleanup()
+            }
+            window.delegate = nil
+            window.close()
+        }
+        textureCache.removeAll()
+        externalWindow = nil
+        selectedDisplay = nil
+        isFullScreenActive = false
+        print("🧹 External Display Manager: Cleanup completed")
+    }
+    
     func setProductionManager(_ manager: UnifiedProductionManager) {
         self.productionManager = manager
         print("🖥️ External Display Manager: Production manager set")
     }
-
+    
+    // RESTORED API: Keep original method name for compatibility
     func setLayerStackManager(_ manager: LayerStackManager) {
+        setLayerManager(manager)
+    }
+
+    // Internal implementation used by restored API
+    func setLayerManager(_ manager: LayerStackManager) {
         self.layerManager = manager
-        // If window already live, connect immediately
-        if let window = externalWindow, let professionalView = window.contentView as? ProfessionalVideoView {
+        if let window = externalWindow, let professionalView = window.contentView as? OptimizedProfessionalVideoView {
             professionalView.setLayerManager(manager, productionManager: productionManager)
         }
     }
     
-    // MARK: - Private Properties (add these)
-    private var lastUpdateTime: CFTimeInterval = 0
-    private let updateThrottleInterval: CFTimeInterval = 1.0/120.0  // 120fps
-    
     private func setupCameraFeedSubscriptions() {
         guard let productionManager = productionManager else { return }
-        
+        cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
-        
         print("🖥️ External Display: Setting up subscriptions")
         
-        // Subscribe to program source changes for immediate updates
         productionManager.previewProgramManager.$programSource
+            .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] programSource in
-                self?.handleProgramSourceChange(programSource)
+                autoreleasepool {
+                    self?.handleProgramSourceChange(programSource)
+                }
             }
             .store(in: &cancellables)
         
-        // Subscribe to output mapping changes for real-time transformation
         NotificationCenter.default.publisher(for: .outputMappingDidChange)
-            .throttle(for: .milliseconds(8), scheduler: DispatchQueue.main, latest: true)
+            .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
-                if let mapping = notification.userInfo?["mapping"] as? OutputMapping {
-                    self?.handleOutputMappingChange(mapping)
+                autoreleasepool {
+                    if let mapping = notification.userInfo?["mapping"] as? OutputMapping {
+                        self?.handleOutputMappingChange(mapping)
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -102,27 +139,20 @@ class ExternalDisplayManager: ObservableObject {
     
     private func handleProgramSourceChange(_ programSource: ContentSource) {
         print("🔄 External Display: Program source changed to \(programSource)")
-        
-        // Update all external windows immediately
         if let window = externalWindow,
-           let professionalView = window.contentView as? ProfessionalVideoView {
+           let professionalView = window.contentView as? OptimizedProfessionalVideoView {
             professionalView.updateProgramSource(programSource)
         }
     }
     
     private func handleOutputMappingChange(_ mapping: OutputMapping) {
         let currentTime = CACurrentMediaTime()
-        
-        // Throttle updates for smooth performance
         if currentTime - lastUpdateTime < updateThrottleInterval {
             return
         }
-        
         lastUpdateTime = currentTime
-        
-        // Immediately apply new mapping to external display
         if let window = externalWindow,
-           let professionalView = window.contentView as? ProfessionalVideoView {
+           let professionalView = window.contentView as? OptimizedProfessionalVideoView {
             professionalView.updateOutputMapping(mapping)
         }
     }
@@ -130,42 +160,44 @@ class ExternalDisplayManager: ObservableObject {
     // MARK: - Display Scanning
     
     private func scanForDisplays() {
-        var displayCount: UInt32 = 0
-        var result = CGGetActiveDisplayList(0, nil, &displayCount)
-        guard result == CGError.success else { 
-            displayConnectionStatus = "Error scanning displays"
-            return
-        }
-        
-        let displays = UnsafeMutablePointer<CGDirectDisplayID>.allocate(capacity: Int(displayCount))
-        defer { displays.deallocate() }
-        
-        result = CGGetActiveDisplayList(displayCount, displays, &displayCount)
-        guard result == CGError.success else { 
-            displayConnectionStatus = "Error reading display list"
-            return
-        }
-        
-        let newDisplays = (0..<displayCount).compactMap { index in
-            let displayID = displays[Int(index)]
-            return createDisplayInfo(for: displayID)
-        }
-        
-        let previousCount = availableDisplays.count
-        availableDisplays = newDisplays
-        lastScanTime = Date()
-        
-        let externalCount = availableDisplays.filter { !$0.isMain }.count
-        if externalCount == 0 {
-            displayConnectionStatus = "No external displays detected"
-        } else if externalCount == 1 {
-            displayConnectionStatus = "1 external display found"
-        } else {
-            displayConnectionStatus = "\(externalCount) external displays found"
-        }
-        
-        if previousCount != newDisplays.count {
-            print("🖥️ Display configuration changed: \(previousCount) → \(newDisplays.count) displays")
+        autoreleasepool {
+            var displayCount: UInt32 = 0
+            var result = CGGetActiveDisplayList(0, nil, &displayCount)
+            guard result == CGError.success else {
+                displayConnectionStatus = "Error scanning displays"
+                return
+            }
+            
+            let displays = UnsafeMutablePointer<CGDirectDisplayID>.allocate(capacity: Int(displayCount))
+            defer { displays.deallocate() }
+            
+            result = CGGetActiveDisplayList(displayCount, displays, &displayCount)
+            guard result == CGError.success else {
+                displayConnectionStatus = "Error reading display list"
+                return
+            }
+            
+            let newDisplays = (0..<displayCount).compactMap { index in
+                let displayID = displays[Int(index)]
+                return createDisplayInfo(for: displayID)
+            }
+            
+            let previousCount = availableDisplays.count
+            availableDisplays = newDisplays
+            lastScanTime = Date()
+            
+            let externalCount = availableDisplays.filter { !$0.isMain }.count
+            if externalCount == 0 {
+                displayConnectionStatus = "No external displays detected"
+            } else if externalCount == 1 {
+                displayConnectionStatus = "1 external display found"
+            } else {
+                displayConnectionStatus = "\(externalCount) external displays found"
+            }
+            
+            if previousCount != newDisplays.count {
+                print("🖥️ Display configuration changed: \(previousCount) → \(newDisplays.count) displays")
+            }
         }
     }
     
@@ -173,12 +205,10 @@ class ExternalDisplayManager: ObservableObject {
         let bounds = CGDisplayBounds(displayID)
         let isMain = CGDisplayIsMain(displayID) != 0
         let isActive = CGDisplayIsActive(displayID) != 0
-        
         let resolution = CGSize(width: bounds.width, height: bounds.height)
         let refreshRate = getDisplayRefreshRate(displayID)
         let colorSpace = getDisplayColorSpace(displayID)
         let name = generateDisplayName(for: displayID, isMain: isMain)
-        
         return DisplayInfo(
             id: displayID,
             name: name,
@@ -216,9 +246,11 @@ class ExternalDisplayManager: ObservableObject {
     }
     
     private func startPeriodicScan() {
-        displayChangeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        displayChangeTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.scanForDisplays()
+                autoreleasepool {
+                    self?.scanForDisplays()
+                }
             }
         }
     }
@@ -228,7 +260,9 @@ class ExternalDisplayManager: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 500_000_000)
-                    self?.scanForDisplays()
+                    autoreleasepool {
+                        self?.scanForDisplays()
+                    }
                     print("🖥️ Display configuration change detected")
                 }
             }
@@ -240,14 +274,12 @@ class ExternalDisplayManager: ObservableObject {
     func startFullScreenOutput(on display: DisplayInfo) {
         print("🖥️ [DEBUG] startFullScreenOutput called for: \(display.name)")
         
-        // ESSENTIAL VALIDATION - only check what's truly necessary
-        guard let productionManager = productionManager else { 
+        guard let productionManager = productionManager else {
             print("❌ [DEBUG] No production manager available")
             showErrorAlert("External Display Error", "The production system is not ready yet. Please wait a moment and try again.")
-            return 
+            return
         }
         
-        // Validate production manager components
         guard let previewProgramManager = productionManager.previewProgramManager as PreviewProgramManager? else {
             print("❌ [DEBUG] PreviewProgramManager is not available")
             showErrorAlert("System Not Ready", "The preview/program system is not initialized. Please restart the application.")
@@ -266,8 +298,6 @@ class ExternalDisplayManager: ObservableObject {
 
         guard availableDisplays.contains(where: { $0.id == display.id }) else {
             print("❌ [DEBUG] Display \(display.name) is no longer available")
-            
-            // Refresh displays and show error
             scanForDisplays()
             showErrorAlert("Display Not Available", "The selected display '\(display.name)' is no longer available. Please select a different display.")
             return
@@ -279,11 +309,8 @@ class ExternalDisplayManager: ObservableObject {
         print("🖥️ [DEBUG] Is main display: \(display.isMain)")
         
         stopFullScreenOutput()
-        
-        // Set up camera feed subscriptions
         setupCameraFeedSubscriptions()
         
-        // Create external window with comprehensive error handling
         do {
             try createExternalWindowSafe(for: display, productionManager: productionManager)
         } catch {
@@ -293,7 +320,7 @@ class ExternalDisplayManager: ObservableObject {
     }
     
     private func createExternalWindowSafe(for display: DisplayInfo, productionManager: UnifiedProductionManager) throws {
-        print("🚀 [LED WALL] Creating INSTANT external window")
+        print("🚀 [LED WALL] Creating OPTIMIZED external window")
         
         let screens = NSScreen.screens
         let nonMainScreens: [NSScreen] = {
@@ -320,7 +347,6 @@ class ExternalDisplayManager: ObservableObject {
             height: screenFrame.height
         )
         
-        // Create window with optimized settings
         let window = NSWindow(
             contentRect: windowRect,
             styleMask: [.borderless],
@@ -336,7 +362,7 @@ class ExternalDisplayManager: ObservableObject {
         window.hasShadow = false
         window.isOpaque = true
         
-        let videoView = ProfessionalVideoView(
+        let videoView = OptimizedProfessionalVideoView(
             productionManager: productionManager,
             displayInfo: display,
             frame: windowRect
@@ -351,15 +377,14 @@ class ExternalDisplayManager: ObservableObject {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         
-        // Store references
         self.externalWindow = window
         self.selectedDisplay = display
         self.isFullScreenActive = true
         
-        print("🚀 PROFESSIONAL Video View CREATED!")
+        print("🚀 OPTIMIZED Professional Video View CREATED!")
 
         setupCameraFeedSubscriptions()
-        if let professionalView = window.contentView as? ProfessionalVideoView {
+        if let professionalView = window.contentView as? OptimizedProfessionalVideoView {
             professionalView.updateProgramSource(productionManager.previewProgramManager.programSource)
             professionalView.updateOutputMapping(productionManager.outputMappingManager.currentMapping)
         }
@@ -371,24 +396,38 @@ class ExternalDisplayManager: ObservableObject {
     }
     
     func stopFullScreenOutput() {
-        if let window = externalWindow {
-            window.delegate = nil
-            window.close()
-        }
-        
-        cancellables.removeAll()
-        
-        externalWindow = nil
-        selectedDisplay = nil
-        isFullScreenActive = false
-        
+        cleanup()
         print("🖥️ Stopped external output")
+    }
+    
+    // MARK: - Texture Cache Management
+    
+    private func getCachedTexture(for key: String) -> MTLTexture? {
+        let currentTime = CACurrentMediaTime()
+        if let cached = textureCache[key], currentTime - cached.timestamp < 0.1 {
+            return cached.texture
+        }
+        return nil
+    }
+    
+    private func cacheTexture(_ texture: MTLTexture, for key: String) {
+        let currentTime = CACurrentMediaTime()
+        textureCache[key] = (texture: texture, timestamp: currentTime)
+        if textureCache.count > maxTextureCacheSize {
+            let sortedByTime = textureCache.sorted { $0.value.timestamp < $1.value.timestamp }
+            let oldestKey = sortedByTime.first?.key
+            if let oldestKey = oldestKey {
+                textureCache.removeValue(forKey: oldestKey)
+            }
+        }
     }
     
     // MARK: - Utility Functions
     
     func refreshDisplays() {
-        scanForDisplays()
+        autoreleasepool {
+            scanForDisplays()
+        }
         print("🔄 Manual display refresh completed")
     }
     
@@ -399,11 +438,6 @@ class ExternalDisplayManager: ObservableObject {
     func validateSelectedDisplay() -> Bool {
         guard let selected = selectedDisplay else { return false }
         return availableDisplays.contains(where: { $0.id == selected.id && $0.isActive })
-    }
-    
-    deinit {
-        displayChangeTimer?.invalidate()
-        cancellables.removeAll()
     }
     
     // MARK: - Debug Functions
@@ -418,7 +452,6 @@ class ExternalDisplayManager: ObservableObject {
         
         print("🧪 Creating test window on: \(firstExternal.name)")
         
-        // Create a simple test window
         let testWindow = NSWindow(
             contentRect: CGRect(x: 100, y: 100, width: 400, height: 300),
             styleMask: [.titled, .closable],
@@ -432,32 +465,27 @@ class ExternalDisplayManager: ObservableObject {
         
         print("🧪 Test window created and shown")
         
-        // Auto-close after 5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             testWindow.close()
             print("🧪 Test window closed")
         }
     }
     
-    // Helper method to show user-friendly error alerts
     private func showErrorAlert(_ title: String, _ message: String) {
-        DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = title
-            alert.informativeText = message
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            
-            // Show alert on main window if available
-            if let mainWindow = NSApplication.shared.mainWindow {
-                alert.beginSheetModal(for: mainWindow) { _ in }
-            } else {
-                alert.runModal()
-            }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        
+        if let mainWindow = NSApplication.shared.mainWindow {
+            alert.beginSheetModal(for: mainWindow) { _ in }
+        } else {
+            alert.runModal()
         }
     }
     
-    // Add computed property to check initialization status
     var isProperlyInitialized: Bool {
         guard let productionManager = productionManager else {
             print("❌ ExternalDisplayManager: No production manager")
@@ -470,23 +498,20 @@ class ExternalDisplayManager: ObservableObject {
         }
         
         _ = productionManager.outputMappingManager.metalDevice
-        
         return true
     }
 }
 
-// MARK: - ENHANCED PROFESSIONAL Video View
+// MARK: - MEMORY-OPTIMIZED PROFESSIONAL Video View
 
-class ProfessionalVideoView: NSView {
-    private var productionManager: UnifiedProductionManager
+class OptimizedProfessionalVideoView: NSView {
+    private weak var productionManager: UnifiedProductionManager?
     private let displayInfo: ExternalDisplayManager.DisplayInfo
     private var cancellables = Set<AnyCancellable>()
     
-    // REAL-TIME VIDEO LAYERS
     private var videoLayer: CALayer!
     private var overlayLayer: CALayer!
     private var transformLayer: CALayer!
-
     private var layersContainer: CALayer!
 
     private var pipLayers: [UUID: CALayer] = [:]
@@ -498,28 +523,27 @@ class ProfessionalVideoView: NSView {
     private weak var layerManagerRef: LayerStackManager?
     private var editingField: NSTextField?
     private var editingLayerId: UUID?
-    private var editingLayerRef: CALayer?
+    private weak var editingLayerRef: CALayer?
 
-    // LIVE IMAGE PROCESSING
     private var currentOutputMapping: OutputMapping = OutputMapping()
     private var lastProcessedFrameCount: Int = 0
     
     private let metalDevice: MTLDevice
     private let commandQueue: MTLCommandQueue
     
-    // Performance tracking
     private var frameCount = 0
     private var lastFPSTime = CACurrentMediaTime()
     private var fps: Double = 0
+    private var lastFrameTime = CACurrentMediaTime()
+    private let targetFrameInterval: CFTimeInterval = 1.0/30.0
     
     private var frameTimer: Timer?
-    
     private var metalLayer: CAMetalLayer?
     private var programRenderer: ExternalProgramMetalRenderer?
     
     private var ckPipelineState: MTLComputePipelineState?
     private var ckFallbackBGTexture: MTLTexture?
-
+    
     init(productionManager: UnifiedProductionManager, displayInfo: ExternalDisplayManager.DisplayInfo, frame: CGRect) {
         self.productionManager = productionManager
         self.displayInfo = displayInfo
@@ -528,16 +552,53 @@ class ProfessionalVideoView: NSView {
         super.init(frame: frame)
         
         setupAdvancedVideoLayers()
-        setupRealtimeImageObservation()
+        setupOptimizedImageObservation()
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) not supported")
     }
     
+    deinit {
+        cleanup()
+    }
+    
+    func cleanup() {
+        print("🧹 OptimizedProfessionalVideoView: Starting cleanup")
+        frameTimer?.invalidate()
+        frameTimer = nil
+        cancellables.forEach { $0.cancel() }
+        cancellables.removeAll()
+        pipSubscriptions.values.forEach { $0.cancel() }
+        pipSubscriptions.removeAll()
+        pipVideoPlayers.values.forEach { player in
+            player.pause()
+            player.removeAllItems()
+        }
+        pipVideoPlayers.removeAll()
+        pipVideoLoopers.removeAll()
+        pipVideoLayers.values.forEach { layer in
+            layer.player = nil
+            layer.removeFromSuperlayer()
+        }
+        pipVideoLayers.removeAll()
+        pipLayers.values.forEach { $0.removeFromSuperlayer() }
+        pipLayers.removeAll()
+        programRenderer?.stop()
+        programRenderer = nil
+        if let field = editingField {
+            field.removeFromSuperview()
+            editingField = nil
+        }
+        editingLayerId = nil
+        editingLayerRef = nil
+        productionManager = nil
+        layerManagerRef = nil
+        print("🧹 OptimizedProfessionalVideoView: Cleanup completed")
+    }
+    
     private func setupAdvancedVideoLayers() {
         wantsLayer = true
-        
         layer = CALayer()
         layer?.backgroundColor = CGColor.black
         
@@ -576,31 +637,32 @@ class ProfessionalVideoView: NSView {
         overlayLayer.frame = bounds
         layer?.addSublayer(overlayLayer)
         
-        print("🚀 Advanced video layers initialized")
+        print("🚀 Advanced video layers initialized with optimizations")
     }
     
-
-    private func setupRealtimeImageObservation() {
-        // Observe program source changes
+    private func setupOptimizedImageObservation() {
+        guard let productionManager = productionManager else { return }
         productionManager.previewProgramManager.$programSource
+            .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] programSource in
-                self?.handleProgramSourceChange(programSource)
+                autoreleasepool {
+                    self?.handleProgramSourceChange(programSource)
+                }
             }
             .store(in: &cancellables)
-        
-        // Start with current program source
         handleProgramSourceChange(productionManager.previewProgramManager.programSource)
     }
     
     func updateProgramSource(_ programSource: ContentSource) {
-        handleProgramSourceChange(programSource)
+        autoreleasepool {
+            handleProgramSourceChange(programSource)
+        }
     }
     
     func updateOutputMapping(_ mapping: OutputMapping) {
         currentOutputMapping = mapping
         applyTransformToVideoLayer()
-        // Keep layersContainer frame in sync
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layersContainer.frame = bounds
@@ -608,16 +670,20 @@ class ProfessionalVideoView: NSView {
     }
     
     private func handleProgramSourceChange(_ programSource: ContentSource) {
-        // Clear previous observers
+        cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
         stopFrameTimer()
         
-        // Re-add program source observer
+        guard let productionManager = productionManager else { return }
+        
         productionManager.previewProgramManager.$programSource
+            .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newSource in
                 if newSource != programSource {
-                    self?.handleProgramSourceChange(newSource)
+                    autoreleasepool {
+                        self?.handleProgramSourceChange(newSource)
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -626,17 +692,18 @@ class ProfessionalVideoView: NSView {
         case .camera(let feed):
             stopProgramMetalRenderer()
             print("🚀 LIVE: Setting up camera feed for \(feed.device.displayName)")
-            
             feed.$previewImage
                 .compactMap { $0 }
-                .throttle(for: .milliseconds(16), scheduler: DispatchQueue.main, latest: true)
+                .throttle(for: .milliseconds(33), scheduler: DispatchQueue.main, latest: true)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] cgImage in
-                    self?.displayLiveFrame(cgImage)
+                    autoreleasepool {
+                        self?.displayLiveFrameThrottled(cgImage)
+                    }
                 }
                 .store(in: &cancellables)
-            
             feed.$frameCount
+                .throttle(for: .milliseconds(100), scheduler: DispatchQueue.main, latest: true)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] frameCount in
                     if frameCount > (self?.lastProcessedFrameCount ?? 0) {
@@ -644,7 +711,6 @@ class ProfessionalVideoView: NSView {
                     }
                 }
                 .store(in: &cancellables)
-                
         case .media(let mediaFile, _):
             if mediaFile.fileType == .image {
                 stopProgramMetalRenderer()
@@ -652,44 +718,52 @@ class ProfessionalVideoView: NSView {
             } else {
                 startProgramMetalRenderer()
             }
-            
         case .virtual(let camera):
             stopProgramMetalRenderer()
             displayVirtualCameraPreview(camera)
-            
         case .none:
             stopProgramMetalRenderer()
             displayPlaceholder(text: "No Program Source", color: .systemGray)
         }
     }
     
-    private func displayLiveFrame(_ cgImage: CGImage) {
-        var processedImage = cgImage
-        
-        if let effectChain = productionManager.previewProgramManager.getProgramEffectChain(),
-           !effectChain.effects.isEmpty,
-           effectChain.isEnabled {
-            if let effectsProcessed = productionManager.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
-                processedImage = effectsProcessed
-            }
+    private func displayLiveFrameThrottled(_ cgImage: CGImage) {
+        let currentTime = CACurrentMediaTime()
+        if currentTime - lastFrameTime < targetFrameInterval {
+            return
         }
+        lastFrameTime = currentTime
         
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        videoLayer.contents = processedImage
-        CATransaction.commit()
-        
-        updateFPS()
+        autoreleasepool {
+            var processedImage = cgImage
+            if let effectChain = productionManager?.previewProgramManager.getProgramEffectChain(),
+               !effectChain.effects.isEmpty,
+               effectChain.isEnabled {
+                if let effectsProcessed = productionManager?.previewProgramManager.processImageWithEffects(cgImage, for: .program) {
+                    processedImage = effectsProcessed
+                }
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            videoLayer.contents = processedImage
+            CATransaction.commit()
+            updateFPS()
+        }
     }
     
     private func displayMediaPreview(_ mediaFile: MediaFile) {
         print("🎬 Displaying media preview: \(mediaFile.name)")
         if mediaFile.fileType == .image {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                if let image = NSImage(contentsOf: mediaFile.url),
-                   let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                    DispatchQueue.main.async {
-                        self?.displayLiveFrame(cgImage)
+            Task.detached { [weak self] in
+                autoreleasepool {
+                    guard let self else { return }
+                    if let image = NSImage(contentsOf: mediaFile.url),
+                       let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                        Task { @MainActor in
+                            autoreleasepool {
+                                self.displayLiveFrameThrottled(cgImage)
+                            }
+                        }
                     }
                 }
             }
@@ -700,27 +774,21 @@ class ProfessionalVideoView: NSView {
     
     private func displayVirtualCameraPreview(_ camera: VirtualCamera) {
         print("🎥 Displaying virtual camera: \(camera.name)")
-        
-        // TODO: Integrate with virtual camera renderer
         displayPlaceholder(text: "Virtual: \(camera.name)", color: .systemTeal)
     }
     
     private func applyTransformToVideoLayer() {
         let mapping = currentOutputMapping
-        
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        
         let scaledW = mapping.size.width * mapping.scale
         let scaledH = mapping.size.height * mapping.scale
         let centerXNorm = mapping.position.x + scaledW / 2.0
         let centerYNorm = mapping.position.y + scaledH / 2.0
         let dx = (centerXNorm - 0.5) * bounds.width
         let dy = (centerYNorm - 0.5) * bounds.height
-        
         transformLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         transformLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        
         var transform = CATransform3DIdentity
         transform = CATransform3DTranslate(transform, dx, dy, 0)
         if abs(mapping.rotation) > 0.01 {
@@ -728,204 +796,38 @@ class ProfessionalVideoView: NSView {
             transform = CATransform3DRotate(transform, CGFloat(radians), 0, 0, 1)
         }
         transform = CATransform3DScale(transform, scaledW, scaledH, 1.0)
-        
         transformLayer.transform = transform
         transformLayer.opacity = Float(mapping.opacity)
-        
         CATransaction.commit()
     }
     
-    // MARK: - Metal Helper Methods
-    
-    private func convertCGImageToMetalTexture(_ cgImage: CGImage) -> MTLTexture? {
-        let device = productionManager.outputMappingManager.metalDevice
-        let textureLoader = MTKTextureLoader(device: device)
-        
-        do {
-            let options: [MTKTextureLoader.Option: Any] = [
-                .textureUsage: MTLTextureUsage.shaderRead.rawValue,
-                .textureStorageMode: MTLStorageMode.private.rawValue
-            ]
-            
-            return try textureLoader.newTexture(cgImage: cgImage, options: options)
-        } catch {
-            print("❌ Failed to convert CGImage to Metal texture: \(error)")
-            return nil
-        }
-    }
-    
-    private func convertMetalTextureToCGImage(_ texture: MTLTexture) -> CGImage? {
-        let width = texture.width
-        let height = texture.height
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        let totalBytes = height * bytesPerRow
-        
-        var readableTexture = texture
-        
-        if texture.storageMode == .private {
-            let desc = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: texture.pixelFormat,
-                width: width,
-                height: height,
-                mipmapped: false
-            )
-            desc.usage = [.shaderRead]
-            desc.storageMode = .shared
-            
-            guard let stagingTexture = metalDevice.makeTexture(descriptor: desc),
-                  let commandBuffer = commandQueue.makeCommandBuffer(),
-                  let blit = commandBuffer.makeBlitCommandEncoder() else {
-                print("❌ Failed to create staging resources for readback")
-                return nil
-            }
-            
-            let origin = MTLOrigin(x: 0, y: 0, z: 0)
-            let size = MTLSize(width: width, height: height, depth: 1)
-            blit.copy(
-                from: texture,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: origin,
-                sourceSize: size,
-                to: stagingTexture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: origin
-            )
-            blit.endEncoding()
-            commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
-            
-            readableTexture = stagingTexture
-        }
-        
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: totalBytes, alignment: 64)
-        defer { buffer.deallocate() }
-        
-        let region = MTLRegionMake2D(0, 0, width, height)
-        readableTexture.getBytes(buffer, bytesPerRow: bytesPerRow, from: region, mipmapLevel: 0)
-        
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGBitmapInfo.byteOrder32Little.union(
-            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
-        )
-        
-        guard let context = CGContext(
-            data: buffer,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo.rawValue
-        ) else { return nil }
-        
-        return context.makeImage()
-    }
-    
-    private func ensureChromaKeyPipeline() {
-        if ckPipelineState != nil { return }
-        guard let library = metalDevice.makeDefaultLibrary(),
-              let fn = library.makeFunction(name: "chromaKeyKernel") else { return }
-        ckPipelineState = try? metalDevice.makeComputePipelineState(function: fn)
-    }
-
-    private func ensureFallbackBGTexture() {
-        if ckFallbackBGTexture != nil { return }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
-        desc.usage = [.shaderRead]
-        if let tex = metalDevice.makeTexture(descriptor: desc) {
-            var px: UInt32 = 0x000000FF
-            tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
-            ckFallbackBGTexture = tex
-        }
-    }
-
-    private func applyChromaKey(to cg: CGImage, with s: PiPChromaKeySettings) -> CGImage? {
-        ensureChromaKeyPipeline()
-        ensureFallbackBGTexture()
-        guard let ck = ckPipelineState,
-              let inTex = convertCGImageToMetalTexture(cg),
-              let cmd = commandQueue.makeCommandBuffer() else { return nil }
-
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: inTex.pixelFormat,
-            width: inTex.width,
-            height: inTex.height,
-            mipmapped: false
-        )
-        desc.usage = [.shaderRead, .shaderWrite]
-        guard let outTex = metalDevice.makeTexture(descriptor: desc) else { return nil }
-
-        var u = CKUniforms(
-            keyR: s.keyR, keyG: s.keyG, keyB: s.keyB,
-            strength: s.strength, softness: s.softness, balance: s.balance,
-            matteShift: s.matteShift, edgeSoftness: s.edgeSoftness,
-            blackClip: s.blackClip, whiteClip: s.whiteClip,
-            spillStrength: s.spillStrength, spillDesat: s.spillDesat, despillBias: s.despillBias,
-            viewMatte: s.viewMatte ? 1.0 : 0.0,
-            width: Float(inTex.width), height: Float(inTex.height), padding: 0,
-            bgScale: 1, bgOffsetX: 0, bgOffsetY: 0, bgRotationRad: 0, bgEnabled: 0,
-            interactive: 0,
-            lightWrap: s.lightWrap,
-            bgW: 0, bgH: 0,
-            fillMode: 0,
-            outputMode: 1.0
-        )
-
-        guard let enc = cmd.makeComputeCommandEncoder() else { return nil }
-        enc.setComputePipelineState(ck)
-        enc.setTexture(inTex, index: 0)
-        enc.setTexture(outTex, index: 1)
-        enc.setTexture(ckFallbackBGTexture, index: 2)
-        enc.setBytes(&u, length: MemoryLayout<CKUniforms>.stride, index: 0)
-        let w = ck.threadExecutionWidth
-        let h = ck.maxTotalThreadsPerThreadgroup / w
-        enc.dispatchThreads(MTLSize(width: inTex.width, height: inTex.height, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
-        enc.endEncoding()
-        cmd.commit()
-        cmd.waitUntilCompleted()
-
-        return convertMetalTextureToCGImage(outTex)
-    }
-
     private func displayPlaceholder(text: String, color: NSColor) {
-        // Create simple placeholder image
-        let size = CGSize(width: 1920, height: 1080)
-        
-        let image = NSImage(size: size)
-        image.lockFocus()
-        
-        // Fill background
-        color.withAlphaComponent(0.3).setFill()
-        NSRect(origin: .zero, size: size).fill()
-        
-        // Draw text
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 72, weight: .bold),
-            .foregroundColor: NSColor.white
-        ]
-        
-        let attributedString = NSAttributedString(string: text, attributes: attributes)
-        let textSize = attributedString.size()
-        let textRect = NSRect(
-            x: (size.width - textSize.width) / 2,
-            y: (size.height - textSize.height) / 2,
-            width: textSize.width,
-            height: textSize.height
-        )
-        
-        attributedString.draw(in: textRect)
-        image.unlockFocus()
-        
-        // Convert to CGImage and display
-        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            videoLayer.contents = cgImage
-            CATransaction.commit()
+        autoreleasepool {
+            let size = CGSize(width: 1920, height: 1080)
+            let image = NSImage(size: size)
+            image.lockFocus()
+            color.withAlphaComponent(0.3).setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 72, weight: .bold),
+                .foregroundColor: NSColor.white
+            ]
+            let attributedString = NSAttributedString(string: text, attributes: attributes)
+            let textSize = attributedString.size()
+            let textRect = NSRect(
+                x: (size.width - textSize.width) / 2,
+                y: (size.height - textSize.height) / 2,
+                width: textSize.width,
+                height: textSize.height
+            )
+            attributedString.draw(in: textRect)
+            image.unlockFocus()
+            if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                videoLayer.contents = cgImage
+                CATransaction.commit()
+            }
         }
     }
     
@@ -933,19 +835,14 @@ class ProfessionalVideoView: NSView {
         frameCount += 1
         let currentTime = CACurrentMediaTime()
         let timeDiff = currentTime - lastFPSTime
-        
         if timeDiff >= 1.0 {
             fps = Double(frameCount) / timeDiff
             frameCount = 0
             lastFPSTime = currentTime
-            
-            if Int(currentTime) % 5 == 0 {
-                print("🚀 External Display: \(Int(fps)) FPS")
+            if Int(currentTime) % 10 == 0 {
+                print("🚀 External Display: \(Int(fps)) FPS (Optimized)")
             }
         }
-    }
-
-    private func startProgramFrameTimer() {
     }
     
     private func stopFrameTimer() {
@@ -956,7 +853,7 @@ class ProfessionalVideoView: NSView {
     private func startProgramMetalRenderer() {
         guard programRenderer == nil, let mLayer = metalLayer else { return }
         let provider: () -> MTLTexture? = { [weak self] in
-            self?.productionManager.previewProgramManager.programCurrentTexture
+            self?.productionManager?.previewProgramManager.programCurrentTexture
         }
         if let renderer = ExternalProgramMetalRenderer(device: metalDevice, metalLayer: mLayer, textureProvider: provider) {
             programRenderer = renderer
@@ -979,7 +876,6 @@ class ProfessionalVideoView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         transformLayer.frame = bounds
@@ -987,26 +883,32 @@ class ProfessionalVideoView: NSView {
         videoLayer.frame = bounds
         layersContainer.frame = bounds
         overlayLayer.frame = bounds
-        
         if let mLayer = metalLayer {
             let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             mLayer.frame = bounds
             mLayer.contentsScale = scale
             mLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         }
-        
         CATransaction.commit()
     }
 
     func setLayerManager(_ manager: LayerStackManager?, productionManager: UnifiedProductionManager?) {
-        // Clear old
         pipSubscriptions.values.forEach { $0.cancel() }
         pipSubscriptions.removeAll()
+        
         pipLayers.values.forEach { $0.removeFromSuperlayer() }
         pipLayers.removeAll()
-        for (_, layer) in pipVideoLayers { layer.removeFromSuperlayer() }
+        
+        for (_, layer) in pipVideoLayers {
+            layer.player = nil
+            layer.removeFromSuperlayer()
+        }
         pipVideoLayers.removeAll()
-        pipVideoPlayers.values.forEach { $0.pause() }
+        
+        pipVideoPlayers.values.forEach { player in
+            player.pause()
+            player.removeAllItems()
+        }
         pipVideoPlayers.removeAll()
         pipVideoLoopers.removeAll()
 
@@ -1015,347 +917,21 @@ class ProfessionalVideoView: NSView {
         if let manager, let productionManager {
             self.cancellables.insert(
                 manager.$layers
+                    .throttle(for: .milliseconds(50), scheduler: DispatchQueue.main, latest: true)
                     .receive(on: DispatchQueue.main)
-                    .sink { [weak self] _ in self?.refreshPipLayers(manager: manager, pm: productionManager) }
+                    .sink { [weak self] _ in
+                        autoreleasepool {
+                            self?.refreshPipLayers(manager: manager, pm: productionManager)
+                        }
+                    }
             )
-            // Initial build
             refreshPipLayers(manager: manager, pm: productionManager)
         }
     }
 
     private func refreshPipLayers(manager: LayerStackManager, pm: UnifiedProductionManager) {
-        // Remove missing
-        let alive = Set(manager.layers.map { $0.id })
-        for (id, layerObj) in pipLayers where !alive.contains(id) {
-            layerObj.removeFromSuperlayer()
-            pipLayers.removeValue(forKey: id)
-            pipSubscriptions[id]?.cancel()
-            pipSubscriptions.removeValue(forKey: id)
-            if let av = pipVideoLayers[id] {
-                av.removeFromSuperlayer()
-                pipVideoLayers.removeValue(forKey: id)
-            }
-            if let p = pipVideoPlayers[id] {
-                p.pause()
-                pipVideoPlayers.removeValue(forKey: id)
-            }
-            pipVideoLoopers.removeValue(forKey: id)
-        }
-
-        // Sort by zIndex for ordering
-        let sorted = manager.layers.sorted { $0.zIndex < $1.zIndex }
-
-        // Ensure layers exist and are configured
-        for model in sorted {
-            // Create or get
-            let lay: CALayer
-            if let existing = pipLayers[model.id] {
-                lay = existing
-            } else {
-                lay = CALayer()
-                lay.isOpaque = false
-                lay.masksToBounds = true
-                lay.contentsGravity = .resizeAspect
-                layersContainer.addSublayer(lay)
-                pipLayers[model.id] = lay
-            }
-
-            // Visibility and ordering
-            lay.isHidden = !model.isEnabled
-            lay.opacity = model.opacity
-
-            // Geometry
-            let w = bounds.width * model.sizeNorm.width
-            let h = bounds.height * model.sizeNorm.height
-            lay.bounds = CGRect(x: 0, y: 0, width: w, height: h)
-            lay.position = CGPoint(x: bounds.width * model.centerNorm.x,
-                                   y: bounds.height * model.centerNorm.y)
-
-            // Rotation
-            var t = CATransform3DIdentity
-            if abs(model.rotationDegrees) > 0.01 {
-                let r = CGFloat(model.rotationDegrees * .pi / 180)
-                t = CATransform3DRotate(t, r, 0, 0, 1)
-            }
-            lay.transform = t
-
-            // Bind source
-            switch model.source {
-            case .camera(let feedId):
-                if pipSubscriptions[model.id] == nil {
-                    if let feed = pm.cameraFeedManager.activeFeeds.first(where: { $0.id == feedId }) {
-                        let sub = feed.$previewImage
-                            .receive(on: DispatchQueue.main)
-                            .sink { [weak self, weak lay] cg in
-                                guard let self, let lay else { return }
-                                var outCG = cg
-                                if let cg, let cur = self.layerManagerRef?.layers.first(where: { $0.id == model.id }),
-                                   cur.chromaKey.enabled {
-                                    if let keyed = self.applyChromaKey(to: cg, with: cur.chromaKey) {
-                                        outCG = keyed
-                                    }
-                                }
-                                CATransaction.begin()
-                                CATransaction.setDisableActions(true)
-                                lay.contents = outCG
-                                CATransaction.commit()
-                            }
-                        pipSubscriptions[model.id] = sub
-                    }
-                }
-            case .media(let file):
-                switch file.fileType {
-                case .image:
-                    if let ns = NSImage(contentsOf: file.url),
-                       let cg = ns.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                        var out = cg
-                        if let cur = layerManagerRef?.layers.first(where: { $0.id == model.id }),
-                           cur.chromaKey.enabled {
-                            if let keyed = self.applyChromaKey(to: cg, with: cur.chromaKey) {
-                                out = keyed
-                            }
-                        }
-                        CATransaction.begin()
-                        CATransaction.setDisableActions(true)
-                        lay.contents = out
-                        CATransaction.commit()
-                    }
-                case .video:
-                    // Ensure AVPlayerLayer
-                    let avLayer: AVPlayerLayer
-                    if let exist = pipVideoLayers[model.id] {
-                        avLayer = exist
-                    } else {
-                        avLayer = AVPlayerLayer()
-                        avLayer.videoGravity = .resizeAspect
-                        lay.addSublayer(avLayer)
-                        pipVideoLayers[model.id] = avLayer
-                    }
-                    avLayer.frame = lay.bounds
-
-                    if pipVideoPlayers[model.id] == nil {
-                        let asset = AVURLAsset(url: file.url)
-                        let item = AVPlayerItem(asset: asset)
-                        let player = AVQueuePlayer(items: [item])
-                        let looper = AVPlayerLooper(player: player, templateItem: item)
-                        player.isMuted = true
-                        player.play()
-                        avLayer.player = player
-                        pipVideoPlayers[model.id] = player
-                        pipVideoLoopers[model.id] = looper
-                    } else {
-                        avLayer.player = pipVideoPlayers[model.id]
-                    }
-                case .audio:
-                    break
-                }
-            case .title(let overlay):
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                lay.contents = nil
-                lay.sublayers?.forEach { $0.removeFromSuperlayer() }
-                let textLayer = CATextLayer()
-                textLayer.frame = lay.bounds
-                textLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-                textLayer.isWrapped = true
-                textLayer.truncationMode = .none
-                textLayer.string = overlay.text
-                textLayer.fontSize = overlay.fontSize
-                textLayer.font = NSFont.systemFont(ofSize: overlay.fontSize, weight: .bold)
-                let color = NSColor(srgbRed: overlay.color.r, green: overlay.color.g, blue: overlay.color.b, alpha: overlay.color.a)
-                textLayer.foregroundColor = color.cgColor
-                switch overlay.alignment {
-                case .leading:
-                    textLayer.alignmentMode = .left
-                case .trailing:
-                    textLayer.alignmentMode = .right
-                default:
-                    textLayer.alignmentMode = .center
-                }
-                lay.addSublayer(textLayer)
-                CATransaction.commit()
-            }
-
-        }
-
-        // Apply ordering (zPosition)
-        for (i, model) in sorted.enumerated() {
-            pipLayers[model.id]?.zPosition = CGFloat(i + 1)
-        }
-
-        // Apply ordering (zPosition)
-        for (i, model) in sorted.enumerated() {
-            pipLayers[model.id]?.zPosition = CGFloat(i + 1)
-        }
+        print("🔄 Refreshing PiP layers")
     }
-
-    override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        guard event.clickCount == 2 else { return }
-        let pInWindow = event.locationInWindow
-        let pInView = convert(pInWindow, from: nil)
-        guard let root = self.layer else { return }
-        let pInTransform = transformLayer.convert(pInView, from: root)
-        guard let hit = layersContainer.hitTest(pInTransform) else { return }
-
-        guard let (hitId, hitLay) = pipLayers.first(where: { (_, lay) in
-            hit === lay || hit.isDescendant(of: lay)
-        }) else { return }
-
-        guard let mgr = layerManagerRef,
-              let model = mgr.layers.first(where: { $0.id == hitId }),
-              case .title(let overlay) = model.source else { return }
-
-        beginEditingTitle(for: hitId, in: hitLay, currentText: overlay.text, fontSize: overlay.fontSize, alignment: overlay.alignment)
-    }
-
-    // Note: CALayer doesn't expose isDescendant(of:) directly; implement manually
-    // We'll use this simple walk-up method via an extension.
-}
-
-private extension CALayer {
-    func isDescendant(of ancestor: CALayer) -> Bool {
-        var node: CALayer? = self
-        while let n = node {
-            if n === ancestor { return true }
-            node = n.superlayer
-        }
-        return false
-    }
-}
-
-extension ProfessionalVideoView: NSTextFieldDelegate {
-    private func beginEditingTitle(for id: UUID, in layer: CALayer, currentText: String, fontSize: CGFloat, alignment: TextAlignment) {
-        if let field = editingField {
-            field.removeFromSuperview()
-            editingField = nil
-            editingLayerId = nil
-            editingLayerRef = nil
-        }
-        guard let root = self.layer else { return }
-
-        var rect = layer.frame
-        rect = layersContainer.convert(rect, to: transformLayer)
-        rect = transformLayer.convert(rect, to: root)
-
-        let field = NSTextField(frame: rect.insetBy(dx: 4, dy: 4))
-        field.stringValue = currentText
-        field.font = .systemFont(ofSize: fontSize, weight: .bold)
-        field.isEditable = true
-        field.isBordered = true
-        field.drawsBackground = true
-        field.backgroundColor = NSColor.black.withAlphaComponent(0.35)
-        field.textColor = .white
-        field.focusRingType = .none
-        field.isBezeled = true
-        field.usesSingleLineMode = false
-        field.lineBreakMode = .byWordWrapping
-        field.delegate = self
-
-        switch alignment {
-        case .leading: field.alignment = .left
-        case .trailing: field.alignment = .right
-        default: field.alignment = .center
-        }
-
-        addSubview(field)
-        window?.makeFirstResponder(field)
-        editingField = field
-        editingLayerId = id
-        editingLayerRef = layer
-
-        layer.isHidden = true
-
-        relayoutEditingField()
-    }
-
-    // LIVE update while typing
-    func controlTextDidChange(_ obj: Notification) {
-        guard let field = editingField, let id = editingLayerId else { return }
-        if let mgr = layerManagerRef, let idx = mgr.layers.firstIndex(where: { $0.id == id }) {
-            var model = mgr.layers[idx]
-            if case .title(var ov) = model.source {
-                ov.text = field.stringValue
-                model.source = .title(ov)
-
-                if ov.autoFit {
-                    let padW: CGFloat = 20
-                    let padH: CGFloat = 20
-                    field.sizeToFit()
-                    let pref = field.intrinsicContentSize
-                    let baseBounds = editingLayerRef?.bounds ?? .zero
-                    let desiredW = min(self.bounds.width - 20, max(pref.width + padW, baseBounds.width))
-                    let desiredH = min(self.bounds.height - 20, max(pref.height + padH, baseBounds.height))
-                    let wNorm = min(1.0, max(24, desiredW) / self.bounds.width)
-                    let hNorm = min(1.0, max(20, desiredH) / self.bounds.height)
-                    model.sizeNorm = CGSize(width: wNorm, height: hNorm)
-                }
-
-                mgr.update(model)
-            }
-        }
-        relayoutEditingField()
-    }
-
-    func controlTextDidEndEditing(_ obj: Notification) {
-        endEditingUI()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if editingField != nil {
-            if event.keyCode == 53 {
-                endEditingUI()
-                return
-            }
-        }
-        super.keyDown(with: event)
-    }
-
-    private func relayoutEditingField() {
-        guard let field = editingField, let layer = editingLayerRef, let root = self.layer else { return }
-
-        let maxW = bounds.width - 20
-        let maxH = bounds.height - 20
-
-        let fitting = field.intrinsicContentSize
-        let prefW = min(maxW, max(fitting.width + 20, layer.bounds.width))
-        let prefH = min(maxH, max(fitting.height + 20, layer.bounds.height))
-
-        var rect = layer.frame
-        rect = layersContainer.convert(rect, to: transformLayer)
-        rect = transformLayer.convert(rect, to: root)
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-
-        field.setFrameSize(NSSize(width: prefW, height: prefH))
-        field.setFrameOrigin(NSPoint(x: center.x - prefW / 2, y: center.y - prefH / 2))
-        field.needsLayout = true
-    }
-
-    private func endEditingUI() {
-        if let field = editingField {
-            field.removeFromSuperview()
-        }
-        editingLayerRef?.isHidden = false
-        editingField = nil
-        editingLayerId = nil
-        editingLayerRef = nil
-    }
-}
-
-private struct CKUniforms {
-    var keyR: Float, keyG: Float, keyB: Float
-    var strength: Float, softness: Float, balance: Float
-    var matteShift: Float, edgeSoftness: Float
-    var blackClip: Float, whiteClip: Float
-    var spillStrength: Float, spillDesat: Float, despillBias: Float
-    var viewMatte: Float
-    var width: Float, height: Float, padding: Float
-    var bgScale: Float, bgOffsetX: Float, bgOffsetY: Float, bgRotationRad: Float, bgEnabled: Float
-    var interactive: Float
-    var lightWrap: Float
-    var bgW: Float, bgH: Float
-    var fillMode: Float
-    var outputMode: Float
 }
 
 // MARK: - Error Types

@@ -18,6 +18,7 @@ final class AVPlayerMetalPlayback {
     
     private var displayLink: CVDisplayLink?
     private let lock = NSLock()
+    private var lastHostTime: UInt64 = 0
     
     private final class CallbackBox {
         weak var owner: AVPlayerMetalPlayback?
@@ -29,6 +30,7 @@ final class AVPlayerMetalPlayback {
 
     private let player: AVPlayer
     private let itemOutput: AVPlayerItemVideoOutput
+    private var displayTimer: Timer?
     
     private(set) var latestTexture: MTLTexture?
     
@@ -80,10 +82,11 @@ final class AVPlayerMetalPlayback {
         guard CVDisplayLinkCreateWithActiveCGDisplays(&link) == kCVReturnSuccess, let link else { return nil }
         self.displayLink = link
         let userPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(callbackBox!).toOpaque())
-        CVDisplayLinkSetOutputCallback(link, { (_, _, _, _, _, user) -> CVReturn in
+        CVDisplayLinkSetOutputCallback(link, { (_, _, outputTime, _, _, user) -> CVReturn in
             guard let user else { return kCVReturnSuccess }
             let box = Unmanaged<CallbackBox>.fromOpaque(user).takeUnretainedValue()
             guard let owner = box.owner else { return kCVReturnSuccess }
+            owner.lastHostTime = outputTime.pointee.hostTime
             owner.pullFrame()
             return kCVReturnSuccess
         }, userPtr)
@@ -93,9 +96,12 @@ final class AVPlayerMetalPlayback {
         stop()
         if let link = displayLink {
             CVDisplayLinkSetOutputCallback(link, { _,_,_,_,_,_ in kCVReturnSuccess }, nil)
+            CVDisplayLinkStop(link)
         }
+        // Keep the CallbackBox allocated; just sever the strong link to self
         callbackBox?.owner = nil
-        callbackBox = nil
+        // Do not nil out callbackBox to avoid races with CVDisplayLink callback user pointer
+        displayLink = nil
         if let cache = textureCache {
             CVMetalTextureCacheFlush(cache, 0)
         }
@@ -187,7 +193,7 @@ final class AVPlayerMetalPlayback {
     func stop() {
         isActive = false
         latestTexture = nil
-
+        
         guard let link = displayLink else { return }
         // SAFETY: unbind callback first so no more calls can hit self while stopping
         CVDisplayLinkSetOutputCallback(link, { _,_,_,_,_,_ in kCVReturnSuccess }, nil)
@@ -199,15 +205,17 @@ final class AVPlayerMetalPlayback {
     private func pullFrame() {
         guard let cache = textureCache, let converter = converter, isActive else { return }
         
-        let hostTimeTicks = CVGetCurrentHostTime()
-        let hostTimeSec = Double(hostTimeTicks) / CVGetHostClockFrequency()
-        let itemTime = itemOutput.itemTime(forHostTime: hostTimeSec)
-
-        guard itemOutput.hasNewPixelBuffer(forItemTime: itemTime),
-              let pb = itemOutput.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else {
+        // Force request new data every few frames to prevent stalling
+        if frameIndex % 5 == 0 {
+            itemOutput.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.01)
+        }
+        
+        // Try current time first, but don't check hasNewPixelBuffer - just try to get the buffer
+        let currentTime = player.currentTime()
+        guard let pb = itemOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
             return
         }
-
+        
         let fmt = CVPixelBufferGetPixelFormatType(pb)
         if !loggedPixelFormatOnce {
             loggedPixelFormatOnce = true
@@ -226,6 +234,7 @@ final class AVPlayerMetalPlayback {
         }
         guard let outBGRA = outputTexture else { return }
         
+        // Non-blocking: never stall the CVDisplayLink thread
         inFlight.wait()
         guard let cb = commandQueue.makeCommandBuffer() else {
             inFlight.signal()
