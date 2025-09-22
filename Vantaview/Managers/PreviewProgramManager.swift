@@ -227,6 +227,7 @@ final class PreviewProgramManager: ObservableObject {
         switch source {
         case .camera(let feed):
             print("🎬 PreviewProgramManager: Loading camera feed to preview: \(feed.device.displayName)")
+            unifiedProductionManager.selectedPreviewCameraID = feed.device.deviceID
             previewSource = source
             Task {
                 updatePreviewFromCamera(feed)

@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import MetalKit
+import AppKit
 
 // MARK: - Simple Preview Monitor View (unchanged data path)
 
@@ -298,9 +299,20 @@ struct CameraDeviceButton: View {
     var body: some View {
         Button(action: {
             Task {
-                // Convert LegacyCameraDevice to CameraDeviceInfo for the new API
-                let deviceInfo = device.asCameraDeviceInfo
-                _ = await productionManager.cameraFeedManager.startFeed(for: deviceInfo)
+                // Start feed (or reuse if running) and then load to Preview on single click
+                let info = device.asCameraDeviceInfo
+                if let feed = await productionManager.cameraFeedManager.startFeed(for: info) {
+                    await MainActor.run {
+                        productionManager.previewProgramManager.loadToPreview(.camera(feed))
+                    }
+                } else {
+                    // If feed already running, find it and load to Preview
+                    if let running = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == device.deviceID }) {
+                        await MainActor.run {
+                            productionManager.previewProgramManager.loadToPreview(.camera(running))
+                        }
+                    }
+                }
             }
         }) {
             VStack(spacing: 8) {
@@ -308,7 +320,6 @@ struct CameraDeviceButton: View {
                     .fill(Color.blue.opacity(0.1))
                     .frame(height: 60)
                     .overlay(
-                        // Use a generic camera icon since device.icon doesn't exist
                         Image(systemName: "video.circle.fill")
                             .font(.largeTitle)
                             .foregroundColor(.blue)
@@ -335,6 +346,7 @@ struct LiveCameraFeedButton: View {
     
     var body: some View {
         Button(action: {
+            // Single click: load to Preview
             productionManager.previewProgramManager.loadToPreview(.camera(feed))
         }) {
             VStack(spacing: 8) {
@@ -343,8 +355,13 @@ struct LiveCameraFeedButton: View {
                     .frame(height: 60)
                     .overlay(
                         Group {
-                            if let previewImage = feed.previewImage {
-                                Image(nsImage: NSImage(cgImage: previewImage, size: NSSize(width: previewImage.width, height: previewImage.height)))
+                            if let nsImage = feed.previewNSImage {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                            } else if let previewImage = feed.previewImage {
+                                Image(previewImage, scale: 1.0, label: Text("Camera"))
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()

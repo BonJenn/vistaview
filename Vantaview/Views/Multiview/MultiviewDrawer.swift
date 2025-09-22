@@ -54,47 +54,37 @@ struct MultiviewDrawer: View {
                 let cols = Int(max(1, floor(geo.size.width / 200)))
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: cols), spacing: 8) {
                     ForEach(viewModel.tiles) { tile in
-                        if let feed = viewModel.feed(for: tile) {
-                            MultiviewTileLive(
-                                tile: tile,
-                                feed: feed,
-                                isProgram: viewModel.isProgram(tile),
-                                isPreview: viewModel.isPreview(tile)
-                            )
-                            .onTapGesture(count: 2) {
-                                Task { await viewModel.doubleClick(tile) }
-                            }
-                            .onTapGesture {
-                                Task { await viewModel.click(tile) }
-                            }
-                            .simultaneousGesture(
-                                TapGesture()
-                                    .modifiers(.option)
-                                    .onEnded {
-                                        Task { await viewModel.optionClick(tile) }
-                                    }
-                            )
-                        } else {
-                            MultiviewTile(
-                                tile: tile,
-                                image: viewModel.imageForTile(tile),
-                                isProgram: viewModel.isProgram(tile),
-                                isPreview: viewModel.isPreview(tile)
-                            )
-                            .onTapGesture(count: 2) {
-                                Task { await viewModel.doubleClick(tile) }
-                            }
-                            .onTapGesture {
-                                Task { await viewModel.click(tile) }
-                            }
-                            .simultaneousGesture(
-                                TapGesture()
-                                    .modifiers(.option)
-                                    .onEnded {
-                                        Task { await viewModel.optionClick(tile) }
-                                    }
-                            )
+                        let singleTap = TapGesture(count: 1).onEnded {
+                            Task { await viewModel.click(tile) }
                         }
+                        let doubleTap = TapGesture(count: 2).onEnded {
+                            Task { await viewModel.doubleClick(tile) }
+                        }
+                        
+                        Group {
+                            if let feed = viewModel.feed(for: tile) {
+                                MultiviewTileLive(
+                                    tile: tile,
+                                    feed: feed,
+                                    isProgram: viewModel.isProgram(tile),
+                                    isPreview: viewModel.isPreview(tile)
+                                )
+                            } else {
+                                MultiviewTile(
+                                    tile: tile,
+                                    image: viewModel.imageForTile(tile),
+                                    isProgram: viewModel.isProgram(tile),
+                                    isPreview: viewModel.isPreview(tile)
+                                )
+                            }
+                        }
+                        .highPriorityGesture(doubleTap)
+                        .simultaneousGesture(singleTap)
+                        .simultaneousGesture(
+                            TapGesture().modifiers(.option).onEnded {
+                                Task { await viewModel.optionClick(tile) }
+                            }
+                        )
                     }
                 }
                 .padding(8)
