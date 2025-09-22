@@ -294,6 +294,7 @@ final class CameraFeedManager: ObservableObject {
     @Published var selectedFeedForLiveProduction: CameraFeed?
     @Published var isDiscovering = false
     @Published var lastDiscoveryError: String?
+    @Published private(set) var discoveredCameraDevices: [CameraDevice] = []
     
     private let deviceManager: DeviceManager
     weak var streamingViewModel: StreamingViewModel?
@@ -343,6 +344,7 @@ final class CameraFeedManager: ObservableObject {
     
     private func performInitialDeviceDiscovery() async {
         await refreshDevices()
+        await ensureAllFeedsRunning()
     }
     
     func setStreamingViewModel(_ viewModel: StreamingViewModel) {
@@ -437,6 +439,7 @@ final class CameraFeedManager: ObservableObject {
     
     func forceRefreshDevices() async {
         await refreshDevices(forceRefresh: true)
+        await ensureAllFeedsRunning()
     }
     
     private func refreshDevices(forceRefresh: Bool = false) async {
@@ -446,7 +449,11 @@ final class CameraFeedManager: ObservableObject {
         }
         
         do {
-            _ = try await deviceManager.discoverDevices(forceRefresh: forceRefresh)
+            let (cameras, _) = try await deviceManager.discoverDevices(forceRefresh: forceRefresh)
+            let snapshot = cameras.map { CameraDevice(from: $0) }
+            await MainActor.run {
+                self.discoveredCameraDevices = snapshot
+            }
         } catch {
             await MainActor.run {
                 self.lastDiscoveryError = error.localizedDescription
@@ -460,7 +467,7 @@ final class CameraFeedManager: ObservableObject {
     }
     
     var availableDevices: [CameraDevice] {
-        return []
+        return discoveredCameraDevices
     }
     
     func stopAllFeeds() async {
@@ -498,6 +505,7 @@ final class CameraFeedManager: ObservableObject {
         switch change.changeType {
         case .added(let deviceInfo):
             print("CameraFeedManager: Device added: \(deviceInfo.displayName)")
+            _ = await self.startFeed(for: deviceInfo)
         case .removed(let deviceID):
             print("CameraFeedManager: Device removed: \(deviceID)")
             if let feed = self.activeFeeds.first(where: { $0.deviceInfo.deviceID == deviceID }) {
@@ -520,6 +528,21 @@ final class CameraFeedManager: ObservableObject {
             if self.selectedFeedForLiveProduction?.id == feed.id {
                 self.selectedFeedForLiveProduction = nil
             }
+            self.triggerManagerUIUpdate()
+        }
+    }
+    
+    private func ensureAllFeedsRunning() async {
+        let cameras = await deviceManager.getCameraDevices()
+        await withTaskGroup(of: Void.self) { group in
+            for cam in cameras {
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    _ = await self.startFeed(for: cam)
+                }
+            }
+        }
+        await MainActor.run {
             self.triggerManagerUIUpdate()
         }
     }

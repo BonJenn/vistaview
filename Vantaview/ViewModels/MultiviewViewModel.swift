@@ -14,9 +14,9 @@ final class MultiviewViewModel: ObservableObject {
     @Published var isPoppedOut: Bool = false
     @Published var drawerHeight: CGFloat = 180.0
     @Published var tiles: [Tile] = []
+    @Published private var feeds: [String: CameraFeed] = [:]
     
     private(set) weak var productionManager: UnifiedProductionManager?
-    private var feeds: [String: CameraFeed] = [:]
     
     private var deviceChangeTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
@@ -84,6 +84,10 @@ final class MultiviewViewModel: ObservableObject {
             return feed.previewNSImage
         }
         return nil
+    }
+    
+    func feed(for tile: Tile) -> CameraFeed? {
+        return feeds[tile.deviceID]
     }
     
     func isProgram(_ tile: Tile) -> Bool {
@@ -162,13 +166,12 @@ final class MultiviewViewModel: ObservableObject {
     
     private func startThumbnailFeedsIfNeeded() async {
         guard let pm = productionManager else { return }
-        let programID = pm.selectedProgramCameraID
-        let previewID = pm.selectedPreviewCameraID
         for tile in tiles {
-            if tile.deviceID == programID || tile.deviceID == previewID {
-                continue
-            }
             if feeds[tile.deviceID] != nil {
+                if feeds[tile.deviceID] == nil,
+                   let f = pm.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == tile.deviceID }) {
+                    feeds[tile.deviceID] = f
+                }
                 continue
             }
             if let info = await pm.deviceManager.getCameraDevice(by: tile.deviceID) {
