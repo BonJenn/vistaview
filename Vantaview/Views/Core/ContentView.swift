@@ -405,6 +405,28 @@ struct FinalCutProStyleView: View {
     @State private var showOutputMappingSection = true
     @State private var showOutputControlsSection = true
     @State private var showScenesSection = true
+    @StateObject private var multiviewModel: MultiviewViewModel
+
+    init(
+        productionManager: UnifiedProductionManager,
+        rtmpURL: Binding<String>,
+        streamKey: Binding<String>,
+        selectedTab: Binding<Int>,
+        showingFilePicker: Binding<Bool>,
+        mediaFiles: Binding<[MediaFile]>,
+        selectedPlatform: Binding<String>,
+        scenesManager: ScenesManager
+    ) {
+        self._rtmpURL = rtmpURL
+        self._streamKey = streamKey
+        self._selectedTab = selectedTab
+        self._showingFilePicker = showingFilePicker
+        self._mediaFiles = mediaFiles
+        self._selectedPlatform = selectedPlatform
+        self.productionManager = productionManager
+        self.scenesManager = scenesManager
+        self._multiviewModel = StateObject(wrappedValue: MultiviewViewModel(productionManager: productionManager))
+    }
 
     var body: some View {
         HSplitView {
@@ -421,7 +443,8 @@ struct FinalCutProStyleView: View {
             // Center Panel - Preview/Program
             PreviewProgramCenterView(
                 productionManager: productionManager,
-                mediaFiles: $mediaFiles
+                mediaFiles: $mediaFiles,
+                multiviewModel: multiviewModel
             )
             
             // Right Panel - Output & Streaming Controls
@@ -542,6 +565,7 @@ struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Binding var mediaFiles: [MediaFile]
     @EnvironmentObject var layerManager: LayerStackManager
+    @ObservedObject var multiviewModel: MultiviewViewModel
     
     var body: some View {
         GeometryReader { geo in
@@ -560,7 +584,21 @@ struct PreviewProgramCenterView: View {
                         }
                     }
                 }
+                if multiviewModel.isOpen {
+                    MultiviewDrawer(viewModel: multiviewModel, productionManager: productionManager)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 HStack(spacing: TahoeDesign.Spacing.xl) {
+                    Button {
+                        Task { await multiviewModel.toggleOpen() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "rectangle.grid.3x2")
+                            Text("Multiview \(multiviewModel.isOpen ? "▾" : "▸")")
+                        }
+                    }
+                    .buttonStyle(LiquidGlassButton(accentColor: TahoeDesign.Colors.virtual, size: .large))
+                    
                     Spacer()
                     Button("TAKE") {
                         if productionManager.previewProgramManager.previewSource == .none {
@@ -573,12 +611,9 @@ struct PreviewProgramCenterView: View {
                             withAnimation(TahoeAnimations.standardEasing) {
                                 productionManager.previewProgramManager.take()
                             }
-                            // Push Preview overlay layers to Program so edits are independent until TAKE
                             layerManager.pushPreviewToProgram(overwrite: true)
-                            DispatchQueue.main.async {
-                                productionManager.previewProgramManager.objectWillChange.send()
-                                productionManager.objectWillChange.send()
-                            }
+                            productionManager.previewProgramManager.objectWillChange.send()
+                            productionManager.objectWillChange.send()
                         }
                     }
                     .buttonStyle(LiquidGlassButton(

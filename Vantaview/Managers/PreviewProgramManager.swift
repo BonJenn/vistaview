@@ -13,6 +13,7 @@ import Metal
 import MetalKit
 import CoreImage
 import AVKit
+import os
 
 enum ContentSource: Identifiable, Equatable {
     case camera(CameraFeed)
@@ -40,6 +41,8 @@ enum ContentSource: Identifiable, Equatable {
 
 @MainActor
 final class PreviewProgramManager: ObservableObject {
+    private static let log = OSLog(subsystem: "com.vantaview", category: "PreviewProgram")
+
     @Published var previewSource: ContentSource = .none
     @Published var programSource: ContentSource = .none
     
@@ -341,7 +344,6 @@ final class PreviewProgramManager: ObservableObject {
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
         programEffectRunner?.setChain(getProgramEffectChain())
         
-        // Rebind a single program time observer; prevent stale events
         if let transferredPlayer = programPlayer {
             if let prevObs = previewTimeObserver {
                 transferredPlayer.removeTimeObserver(prevObs)
@@ -690,6 +692,7 @@ final class PreviewProgramManager: ObservableObject {
                     )
                     
                     let playerItem = AVPlayerItem(url: file.url)
+                    playerItem.preferredForwardBufferDuration = 0.2
                     let player = AVPlayer(playerItem: playerItem)
                     player.automaticallyWaitsToMinimizeStalling = false
                     player.allowsExternalPlayback = false
@@ -720,6 +723,21 @@ final class PreviewProgramManager: ObservableObject {
                             self.previewAVPlayback = playback
                         }
                         playback.setEffectRunner(self.previewEffectRunner)
+                        playback.toneMapEnabled = self.hdrToneMapEnabled
+                        playback.targetFPS = self.targetFPS
+                        playback.onSizeChange = { [weak self] (w: Int, h: Int) in
+                            Task { @MainActor in
+                                if h > 0 { self?.previewAspect = CGFloat(w) / CGFloat(h) }
+                            }
+                        }
+                        playback.onFPSUpdate = { [weak self] fps in
+                            Task { @MainActor in
+                                self?.previewFPS = fps
+                            }
+                        }
+                        playback.onWatchdog = { [weak self] in
+                            self?.captureNextPreviewFrame()
+                        }
                         playback.start()
                         
                         await MainActor.run {
@@ -815,6 +833,7 @@ final class PreviewProgramManager: ObservableObject {
         let hasVideoTrack = !asset.tracks(withMediaType: .video).isEmpty
         if file.fileType == .audio || !hasVideoTrack {
             let player = createAudioOnlyPlayer(for: asset) ?? AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            player.currentItem?.preferredForwardBufferDuration = 0.2
             programAudioPlayer = player
             programPlayer = player
             programSource = .media(file, player: player)
@@ -833,6 +852,7 @@ final class PreviewProgramManager: ObservableObject {
         }
         
         let playerItem = AVPlayerItem(url: file.url)
+        playerItem.preferredForwardBufferDuration = 0.2
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:],
@@ -1201,6 +1221,7 @@ final class PreviewProgramManager: ObservableObject {
                 try compTrack?.insertTimeRange(timeRange, of: track, at: .zero)
             }
             let item = AVPlayerItem(asset: composition)
+            item.preferredForwardBufferDuration = 0.2
             let player = AVPlayer(playerItem: item)
             player.automaticallyWaitsToMinimizeStalling = false
             player.allowsExternalPlayback = false
