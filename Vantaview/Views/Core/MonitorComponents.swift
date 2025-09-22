@@ -335,9 +335,7 @@ struct LiveCameraFeedButton: View {
     
     var body: some View {
         Button(action: {
-            Task {
-                await productionManager.switchProgram(to: feed.device.deviceID)
-            }
+            productionManager.previewProgramManager.loadToPreview(.camera(feed))
         }) {
             VStack(spacing: 8) {
                 Rectangle()
@@ -351,7 +349,6 @@ struct LiveCameraFeedButton: View {
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                             } else {
-                                // Use a generic camera icon
                                 Image(systemName: "video.fill")
                                     .font(.largeTitle)
                                     .foregroundColor(.green)

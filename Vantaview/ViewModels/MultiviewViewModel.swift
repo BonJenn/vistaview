@@ -60,7 +60,7 @@ final class MultiviewViewModel: ObservableObject {
         if open {
             await startThumbnailFeedsIfNeeded()
         } else {
-            await stopAllThumbnailFeeds()
+            // Previously called stopAllThumbnailFeeds()
         }
     }
     
@@ -167,28 +167,16 @@ final class MultiviewViewModel: ObservableObject {
     private func startThumbnailFeedsIfNeeded() async {
         guard let pm = productionManager else { return }
         for tile in tiles {
-            if feeds[tile.deviceID] != nil {
-                if feeds[tile.deviceID] == nil,
-                   let f = pm.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == tile.deviceID }) {
-                    feeds[tile.deviceID] = f
-                }
-                continue
-            }
-            if let info = await pm.deviceManager.getCameraDevice(by: tile.deviceID) {
-                _ = await pm.cameraFeedManager.startFeed(for: info)
-                if let f = pm.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == tile.deviceID }) {
-                    feeds[tile.deviceID] = f
+            if feeds[tile.deviceID] == nil {
+                if let existing = pm.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == tile.deviceID }) {
+                    feeds[tile.deviceID] = existing
+                } else if let info = await pm.deviceManager.getCameraDevice(by: tile.deviceID) {
+                    _ = await pm.cameraFeedManager.startFeed(for: info)
+                    if let f = pm.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == tile.deviceID }) {
+                        feeds[tile.deviceID] = f
+                    }
                 }
             }
         }
-    }
-    
-    private func stopAllThumbnailFeeds() async {
-        guard let pm = productionManager else { return }
-        let toStop = feeds.values
-        for feed in toStop {
-            await pm.cameraFeedManager.stopFeed(feed)
-        }
-        feeds.removeAll()
     }
 }
