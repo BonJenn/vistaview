@@ -137,6 +137,12 @@ final class PreviewProgramManager: ObservableObject {
     private var previewSecurityScopedURL: URL?
     private var programSecurityScopedURL: URL?
     
+    // Time smoothing / seek state
+    private var previewIsSeeking = false
+    private var programIsSeeking = false
+    private var lastPreviewTime: Double = 0
+    private var lastProgramTime: Double = 0
+    
     init(cameraFeedManager: CameraFeedManager,
          unifiedProductionManager: UnifiedProductionManager,
          effectManager: EffectManager,
@@ -287,7 +293,6 @@ final class PreviewProgramManager: ObservableObject {
             }
         }
         
-        // Release any existing program security scope (old program)
         if let url = programSecurityScopedURL {
             url.stopAccessingSecurityScopedResource()
             programSecurityScopedURL = nil
@@ -311,7 +316,6 @@ final class PreviewProgramManager: ObservableObject {
         programPlayer = previewPlayer
         programAVPlayback = previewAVPlayback
         programAudioTap = previewAudioTap
-        programTimeObserver = previewTimeObserver
         programImage = previewImage
         programDuration = previewDuration
         programCurrentTime = previewCurrentTime
@@ -329,39 +333,32 @@ final class PreviewProgramManager: ObservableObject {
         }
         
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
-        
-        if let prevChain = effectManager.getPreviewEffectChain(),
-           let progChain = effectManager.getProgramEffectChain() {
-            let prevKeys = prevChain.effects.compactMap { $0 as? ChromaKeyEffect }
-            let progKeys = progChain.effects.compactMap { $0 as? ChromaKeyEffect }
-            for (idx, srcCK) in prevKeys.enumerated() where idx < progKeys.count {
-                let dstCK = progKeys[idx]
-                if let url = srcCK.backgroundURL {
-                    dstCK.setBackground(from: url, device: effectManager.metalDevice)
-                    if srcCK.bgIsPlaying { dstCK.playBackgroundVideo() } else { dstCK.pauseBackgroundVideo() }
-                    dstCK.parameters["bgScale"]?.value = srcCK.parameters["bgScale"]?.value ?? 1.0
-                    dstCK.parameters["bgOffsetX"]?.value = srcCK.parameters["bgOffsetX"]?.value ?? 0.0
-                    dstCK.parameters["bgOffsetY"]?.value = srcCK.parameters["bgOffsetY"]?.value ?? 0.0
-                    dstCK.parameters["bgRotation"]?.value = srcCK.parameters["bgRotation"]?.value ?? 0.0
-                    dstCK.parameters["bgFillMode"]?.value = srcCK.parameters["bgFillMode"]?.value ?? 0.0
-                }
-            }
-        }
-        
         programEffectRunner?.setChain(getProgramEffectChain())
         
-        // Reset preview state but keep the program playing
+        // Ensure we rebind the time observer to update PROGRAM time, not PREVIEW time
+        if let transferredPlayer = programPlayer {
+            if let prevObs = previewTimeObserver {
+                transferredPlayer.removeTimeObserver(prevObs)
+            }
+            previewTimeObserver = nil
+            attachProgramTimeObserver(to: transferredPlayer)
+        } else {
+            removeProgramTimeObserver()
+        }
+        
+        // Reset preview state
         previewSource = .none
         previewPlayer = nil
         previewAVPlayback = nil
         previewAudioTap = nil
-        previewTimeObserver = nil
         previewImage = nil
         isPreviewPlaying = false
         previewCurrentTime = 0
         previewDuration = 0
         previewVTReady = false
         previewPrimedForPoster = false
+        lastPreviewTime = 0
+        previewIsSeeking = false
         
         stopPreviewMediaPipeline()
         
@@ -432,6 +429,7 @@ final class PreviewProgramManager: ObservableObject {
             previewVTPlayback?.stop()
             isPreviewPlaying = false
             previewCurrentTime = 0.0
+            lastPreviewTime = 0
             previewVideoTexture = nil
             removePreviewTimeObserver()
             stopPreviewMediaPipeline()
@@ -445,6 +443,7 @@ final class PreviewProgramManager: ObservableObject {
             actualPlayer.seek(to: CMTime.zero)
             isPreviewPlaying = false
             previewCurrentTime = 0.0
+            lastPreviewTime = 0
         }
         removePreviewTimeObserver()
         stopPreviewMediaPipeline()
@@ -489,6 +488,7 @@ final class PreviewProgramManager: ObservableObject {
             programVTPlayback?.stop()
             isProgramPlaying = false
             programCurrentTime = 0.0
+            lastProgramTime = 0
             programVideoTexture = nil
             removeProgramTimeObserver()
             if programAVPlayback != nil {
@@ -501,6 +501,7 @@ final class PreviewProgramManager: ObservableObject {
             actualPlayer.seek(to: CMTime.zero)
             isProgramPlaying = false
             programCurrentTime = 0.0
+            lastProgramTime = 0
         }
         removeProgramTimeObserver()
         if programAVPlayback != nil {
@@ -511,23 +512,28 @@ final class PreviewProgramManager: ObservableObject {
     func seekPreview(to time: TimeInterval) {
         if preferVTDecode, let vt = previewVTPlayback {
             let cm = CMTime(seconds: time, preferredTimescale: 600)
+            previewIsSeeking = true
             previewAudioPlayer?.seek(to: cm)
             vt.seek(to: time)
+            previewIsSeeking = false
             return
         }
         guard case .media = previewSource, let actualPlayer = previewPlayer else { return }
         let shouldResume = actualPlayer.rate > 0.0 || isPreviewPlaying
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+        previewIsSeeking = true
         actualPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
-            guard let self = self, completed else { return }
+            guard let self = self, completed else { self?.previewIsSeeking = false; return }
             Task { @MainActor in
                 self.previewCurrentTime = time
+                self.lastPreviewTime = time
                 if shouldResume {
                     actualPlayer.rate = self.previewRate
                     actualPlayer.volume = self.previewMuted ? 0.0 : self.previewVolume
                     actualPlayer.play()
                     self.isPreviewPlaying = true
                 }
+                self.previewIsSeeking = false
             }
         }
     }
@@ -535,23 +541,28 @@ final class PreviewProgramManager: ObservableObject {
     func seekProgram(to time: TimeInterval) {
         if preferVTDecode, let vt = programVTPlayback {
             let cm = CMTime(seconds: time, preferredTimescale: 600)
+            programIsSeeking = true
             programAudioPlayer?.seek(to: cm)
             vt.seek(to: time)
+            programIsSeeking = false
             return
         }
         guard case .media = programSource, let actualPlayer = programPlayer else { return }
         let shouldResume = actualPlayer.rate > 0.0 || isProgramPlaying
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
+        programIsSeeking = true
         actualPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
-            guard let self = self, completed else { return }
+            guard let self = self, completed else { self?.programIsSeeking = false; return }
             Task { @MainActor in
                 self.programCurrentTime = time
+                self.lastProgramTime = time
                 if shouldResume {
                     actualPlayer.rate = self.programRate
                     actualPlayer.volume = self.programMuted ? 0.0 : self.programVolume
                     actualPlayer.play()
                     self.isProgramPlaying = true
                 }
+                self.programIsSeeking = false
             }
         }
     }
@@ -594,6 +605,8 @@ final class PreviewProgramManager: ObservableObject {
         previewFeedLoopTask?.cancel()
         previewFeedLoopTask = nil
         previewFeedLoopID = nil
+        lastPreviewTime = 0
+        previewIsSeeking = false
         
         if let observer = self.previewTimeObserver {
             self.previewPlayer?.removeTimeObserver(observer)
@@ -673,12 +686,12 @@ final class PreviewProgramManager: ObservableObject {
                             self.isPreviewPlaying = true
                         }
                         
-                        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+                        let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
                         let obs = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
                             guard let self else { return }
                             let seconds = CMTimeGetSeconds(t)
                             Task { @MainActor in
-                                self.previewCurrentTime = seconds
+                                self.updatePreviewTime(seconds: seconds)
                             }
                         }
                         await MainActor.run {
@@ -699,51 +712,12 @@ final class PreviewProgramManager: ObservableObject {
                             self.previewKVO.append(statusObs)
                         }
                         
-                        let playbackRef = playback
-                        let processor = self.frameProcessor
-                        let sourceID = "preview_media"
-                        let loopID = UUID()
-                        let feedLoop = Task.detached(priority: .userInitiated) {
-                            while !Task.isCancelled {
-                                try? Task.checkCancellation()
-                                if let texture = playbackRef.latestTexture {
-                                    let timestamp = CMClockGetTime(CMClockGetHostTimeClock())
-                                    try? await processor.submitTexture(texture, for: sourceID, timestamp: timestamp)
-                                }
-                                try? await Task.sleep(nanoseconds: 33_333_333)
-                            }
-                        }
-                        await MainActor.run {
-                            self.previewFeedLoopID = loopID
-                            self.previewFeedLoopTask = feedLoop
-                        }
-                        
-                        for await result in processingStream {
+                        for await _ in processingStream {
                             if Task.isCancelled { break }
-                            await MainActor.run {
-                                self.previewVideoTexture = result.outputTexture
-                                if let cgImage = result.processedImage {
-                                    self.previewImage = cgImage
-                                }
-                                self.objectWillChange.send()
-                            }
-                        }
-                        
-                        feedLoop.cancel()
-                        await MainActor.run {
-                            if self.previewFeedLoopID == loopID {
-                                self.previewFeedLoopTask = nil
-                                self.previewFeedLoopID = nil
-                            }
                         }
                     }
                 }, onCancel: { [weak self] in
                     print("🛑 [PVW] previewProcessingTask cancelled")
-                    Task { @MainActor in
-                        self?.previewFeedLoopTask?.cancel()
-                        self?.previewFeedLoopTask = nil
-                        self?.previewFeedLoopID = nil
-                    }
                     Task { [weak self] in
                         await self?.frameProcessor.stopFrameStream(for: "preview_media")
                     }
@@ -763,6 +737,8 @@ final class PreviewProgramManager: ObservableObject {
         programAVPlayback?.stop()
         programAVPlayback = nil
         programVideoTexture = nil
+        lastProgramTime = 0
+        programIsSeeking = false
         
         if let observer = programTimeObserver {
             programPlayer?.removeTimeObserver(observer)
@@ -807,14 +783,7 @@ final class PreviewProgramManager: ObservableObject {
             
             setupPlayerNotifications(for: player, isPreview: false)
             
-            let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
-            programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
-                guard let self else { return }
-                let seconds = CMTimeGetSeconds(t)
-                Task { @MainActor in
-                    self.programCurrentTime = seconds
-                }
-            }
+            attachProgramTimeObserver(to: player)
             isProgramPlaying = false
             return
         }
@@ -886,14 +855,7 @@ final class PreviewProgramManager: ObservableObject {
         programSource = .media(file, player: player)
         programPlayer = player
         
-        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
-        programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
-            guard let self else { return }
-            let seconds = CMTimeGetSeconds(t)
-            Task { @MainActor in
-                self.programCurrentTime = seconds
-            }
-        }
+        attachProgramTimeObserver(to: player)
     }
     
     private func loadImageToPreview(_ file: MediaFile) {
@@ -913,7 +875,6 @@ final class PreviewProgramManager: ObservableObject {
         
         Task {
             defer {
-                // For static image, we can release immediately after load
                 self.previewSecurityScopedURL?.stopAccessingSecurityScopedResource()
                 self.previewSecurityScopedURL = nil
             }
@@ -1001,6 +962,7 @@ final class PreviewProgramManager: ObservableObject {
         isPreviewPlaying = false
         previewCurrentTime = 0
         previewDuration = 0
+        lastPreviewTime = 0
         previewVTReady = false
         previewPrimedForPoster = false
         previewAudioTap = nil
@@ -1023,11 +985,11 @@ final class PreviewProgramManager: ObservableObject {
         isProgramPlaying = false
         programCurrentTime = 0
         programDuration = 0
+        lastProgramTime = 0
         programVTReady = false
         programPrimedForPoster = false
         programAudioTap = nil
         removeProgramTimeObserver()
-        detachOutputs(from: programPlayer)
     }
     
     private func removePreviewTimeObserver() {
@@ -1312,6 +1274,38 @@ extension PreviewProgramManager {
         }
         for out in item.outputs {
             item.remove(out)
+        }
+    }
+    
+    private func updatePreviewTime(seconds: Double) {
+        if previewIsSeeking { return }
+        let delta = seconds - lastPreviewTime
+        if isPreviewPlaying && delta < -0.25 {
+            return
+        }
+        lastPreviewTime = seconds
+        previewCurrentTime = seconds
+    }
+    
+    private func updateProgramTime(seconds: Double) {
+        if programIsSeeking { return }
+        let delta = seconds - lastProgramTime
+        if isProgramPlaying && delta < -0.25 {
+            return
+        }
+        lastProgramTime = seconds
+        programCurrentTime = seconds
+    }
+    
+    private func attachProgramTimeObserver(to player: AVPlayer) {
+        removeProgramTimeObserver()
+        let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
+        programTimeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] t in
+            guard let self else { return }
+            let seconds = CMTimeGetSeconds(t)
+            Task { @MainActor in
+                self.updateProgramTime(seconds: seconds)
+            }
         }
     }
 }
