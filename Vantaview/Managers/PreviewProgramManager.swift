@@ -143,6 +143,12 @@ final class PreviewProgramManager: ObservableObject {
     private var lastPreviewTime: Double = 0
     private var lastProgramTime: Double = 0
     
+    // Seek debouncing to avoid playhead bounce
+    private var previewSeekTarget: Double?
+    private var programSeekTarget: Double?
+    private var previewSuppressObserverUntil: CFTimeInterval = 0
+    private var programSuppressObserverUntil: CFTimeInterval = 0
+    
     init(cameraFeedManager: CameraFeedManager,
          unifiedProductionManager: UnifiedProductionManager,
          effectManager: EffectManager,
@@ -335,7 +341,7 @@ final class PreviewProgramManager: ObservableObject {
         effectManager.copyPreviewEffectsToProgram(overwrite: true)
         programEffectRunner?.setChain(getProgramEffectChain())
         
-        // Ensure we rebind the time observer to update PROGRAM time, not PREVIEW time
+        // Rebind a single program time observer; prevent stale events
         if let transferredPlayer = programPlayer {
             if let prevObs = previewTimeObserver {
                 transferredPlayer.removeTimeObserver(prevObs)
@@ -359,6 +365,8 @@ final class PreviewProgramManager: ObservableObject {
         previewPrimedForPoster = false
         lastPreviewTime = 0
         previewIsSeeking = false
+        previewSeekTarget = nil
+        previewSuppressObserverUntil = 0
         
         stopPreviewMediaPipeline()
         
@@ -431,6 +439,8 @@ final class PreviewProgramManager: ObservableObject {
             previewCurrentTime = 0.0
             lastPreviewTime = 0
             previewVideoTexture = nil
+            previewSeekTarget = nil
+            previewSuppressObserverUntil = 0
             removePreviewTimeObserver()
             stopPreviewMediaPipeline()
             if let pav = previewAVPlayback, pav !== programAVPlayback {
@@ -445,6 +455,8 @@ final class PreviewProgramManager: ObservableObject {
             previewCurrentTime = 0.0
             lastPreviewTime = 0
         }
+        previewSeekTarget = nil
+        previewSuppressObserverUntil = 0
         removePreviewTimeObserver()
         stopPreviewMediaPipeline()
         if let pav = previewAVPlayback, pav !== programAVPlayback {
@@ -490,6 +502,8 @@ final class PreviewProgramManager: ObservableObject {
             programCurrentTime = 0.0
             lastProgramTime = 0
             programVideoTexture = nil
+            programSeekTarget = nil
+            programSuppressObserverUntil = 0
             removeProgramTimeObserver()
             if programAVPlayback != nil {
                 detachOutputs(from: programPlayer)
@@ -503,6 +517,8 @@ final class PreviewProgramManager: ObservableObject {
             programCurrentTime = 0.0
             lastProgramTime = 0
         }
+        programSeekTarget = nil
+        programSuppressObserverUntil = 0
         removeProgramTimeObserver()
         if programAVPlayback != nil {
             detachOutputs(from: programPlayer)
@@ -513,27 +529,39 @@ final class PreviewProgramManager: ObservableObject {
         if preferVTDecode, let vt = previewVTPlayback {
             let cm = CMTime(seconds: time, preferredTimescale: 600)
             previewIsSeeking = true
-            previewAudioPlayer?.seek(to: cm)
+            previewSeekTarget = time
+            previewCurrentTime = time
+            lastPreviewTime = time
+            previewAudioPlayer?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.previewIsSeeking = false
+                    self.previewSuppressObserverUntil = CACurrentMediaTime() + 0.2
+                }
+            })
             vt.seek(to: time)
-            previewIsSeeking = false
             return
         }
         guard case .media = previewSource, let actualPlayer = previewPlayer else { return }
         let shouldResume = actualPlayer.rate > 0.0 || isPreviewPlaying
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
         previewIsSeeking = true
+        previewSeekTarget = time
+        previewCurrentTime = time
+        lastPreviewTime = time
         actualPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
-            guard let self = self, completed else { self?.previewIsSeeking = false; return }
             Task { @MainActor in
-                self.previewCurrentTime = time
-                self.lastPreviewTime = time
-                if shouldResume {
-                    actualPlayer.rate = self.previewRate
-                    actualPlayer.volume = self.previewMuted ? 0.0 : self.previewVolume
-                    actualPlayer.play()
-                    self.isPreviewPlaying = true
-                }
+                guard let self else { return }
                 self.previewIsSeeking = false
+                self.previewSuppressObserverUntil = CACurrentMediaTime() + 0.2
+                if completed {
+                    if shouldResume {
+                        actualPlayer.rate = self.previewRate
+                        actualPlayer.volume = self.previewMuted ? 0.0 : self.previewVolume
+                        actualPlayer.play()
+                        self.isPreviewPlaying = true
+                    }
+                }
             }
         }
     }
@@ -542,27 +570,39 @@ final class PreviewProgramManager: ObservableObject {
         if preferVTDecode, let vt = programVTPlayback {
             let cm = CMTime(seconds: time, preferredTimescale: 600)
             programIsSeeking = true
-            programAudioPlayer?.seek(to: cm)
+            programSeekTarget = time
+            programCurrentTime = time
+            lastProgramTime = time
+            programAudioPlayer?.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.programIsSeeking = false
+                    self.programSuppressObserverUntil = CACurrentMediaTime() + 0.2
+                }
+            })
             vt.seek(to: time)
-            programIsSeeking = false
             return
         }
         guard case .media = programSource, let actualPlayer = programPlayer else { return }
         let shouldResume = actualPlayer.rate > 0.0 || isProgramPlaying
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
         programIsSeeking = true
+        programSeekTarget = time
+        programCurrentTime = time
+        lastProgramTime = time
         actualPlayer.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] completed in
-            guard let self = self, completed else { self?.programIsSeeking = false; return }
             Task { @MainActor in
-                self.programCurrentTime = time
-                self.lastProgramTime = time
-                if shouldResume {
-                    actualPlayer.rate = self.programRate
-                    actualPlayer.volume = self.programMuted ? 0.0 : self.programVolume
-                    actualPlayer.play()
-                    self.isProgramPlaying = true
-                }
+                guard let self else { return }
                 self.programIsSeeking = false
+                self.programSuppressObserverUntil = CACurrentMediaTime() + 0.2
+                if completed {
+                    if shouldResume {
+                        actualPlayer.rate = self.programRate
+                        actualPlayer.volume = self.programMuted ? 0.0 : self.programVolume
+                        actualPlayer.play()
+                        self.isProgramPlaying = true
+                    }
+                }
             }
         }
     }
@@ -607,6 +647,8 @@ final class PreviewProgramManager: ObservableObject {
         previewFeedLoopID = nil
         lastPreviewTime = 0
         previewIsSeeking = false
+        previewSeekTarget = nil
+        previewSuppressObserverUntil = 0
         
         if let observer = self.previewTimeObserver {
             self.previewPlayer?.removeTimeObserver(observer)
@@ -739,6 +781,8 @@ final class PreviewProgramManager: ObservableObject {
         programVideoTexture = nil
         lastProgramTime = 0
         programIsSeeking = false
+        programSeekTarget = nil
+        programSuppressObserverUntil = 0
         
         if let observer = programTimeObserver {
             programPlayer?.removeTimeObserver(observer)
@@ -966,6 +1010,8 @@ final class PreviewProgramManager: ObservableObject {
         previewVTReady = false
         previewPrimedForPoster = false
         previewAudioTap = nil
+        previewSeekTarget = nil
+        previewSuppressObserverUntil = 0
         removePreviewTimeObserver()
         stopPreviewMediaPipeline()
     }
@@ -989,6 +1035,8 @@ final class PreviewProgramManager: ObservableObject {
         programVTReady = false
         programPrimedForPoster = false
         programAudioTap = nil
+        programSeekTarget = nil
+        programSuppressObserverUntil = 0
         removeProgramTimeObserver()
     }
     
@@ -1279,6 +1327,15 @@ extension PreviewProgramManager {
     
     private func updatePreviewTime(seconds: Double) {
         if previewIsSeeking { return }
+        let now = CACurrentMediaTime()
+        if now < previewSuppressObserverUntil { return }
+        if let target = previewSeekTarget {
+            if seconds + 0.05 < target {
+                return
+            } else {
+                previewSeekTarget = nil
+            }
+        }
         let delta = seconds - lastPreviewTime
         if isPreviewPlaying && delta < -0.25 {
             return
@@ -1289,6 +1346,15 @@ extension PreviewProgramManager {
     
     private func updateProgramTime(seconds: Double) {
         if programIsSeeking { return }
+        let now = CACurrentMediaTime()
+        if now < programSuppressObserverUntil { return }
+        if let target = programSeekTarget {
+            if seconds + 0.05 < target {
+                return
+            } else {
+                programSeekTarget = nil
+            }
+        }
         let delta = seconds - lastProgramTime
         if isProgramPlaying && delta < -0.25 {
             return
