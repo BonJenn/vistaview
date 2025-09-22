@@ -15,13 +15,23 @@ struct MultiviewDrawer: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Button {
-                    viewModel.popOut()
-                } label: {
-                    Label("Pop Out", systemImage: "rectangle.badge.plus")
-                        .font(.caption)
+                if viewModel.isPoppedOut {
+                    Button {
+                        viewModel.closePopOut()
+                    } label: {
+                        Label("Pop In", systemImage: "rectangle.badge.minus")
+                            .font(.caption)
+                    }
+                    .buttonStyle(LiquidGlassButton(accentColor: TahoeDesign.Colors.virtual, size: .small))
+                } else {
+                    Button {
+                        viewModel.popOut()
+                    } label: {
+                        Label("Pop Out", systemImage: "rectangle.badge.plus")
+                            .font(.caption)
+                    }
+                    .buttonStyle(LiquidGlassButton(accentColor: TahoeDesign.Colors.virtual, size: .small))
                 }
-                .buttonStyle(LiquidGlassButton(accentColor: TahoeDesign.Colors.virtual, size: .small))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)

@@ -584,7 +584,7 @@ struct PreviewProgramCenterView: View {
                         }
                     }
                 }
-                if multiviewModel.isOpen {
+                if multiviewModel.isOpen && !multiviewModel.isPoppedOut {
                     MultiviewDrawer(viewModel: multiviewModel, productionManager: productionManager)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }

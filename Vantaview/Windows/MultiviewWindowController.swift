@@ -6,8 +6,10 @@ final class MultiviewWindowController: NSWindowController {
     static let shared = MultiviewWindowController()
     
     private var hosting: NSHostingView<AnyView>?
+    private weak var viewModelRef: MultiviewViewModel?
     
     func show(with productionManager: UnifiedProductionManager, viewModel: MultiviewViewModel) {
+        self.viewModelRef = viewModel
         if window == nil {
             let content = MultiviewDrawer(viewModel: viewModel, productionManager: productionManager)
                 .padding()
@@ -20,8 +22,18 @@ final class MultiviewWindowController: NSWindowController {
             )
             win.title = "Multiview"
             win.contentView = hosting
+            win.delegate = self
             self.hosting = hosting
             self.window = win
+        } else {
+            // UPDATE existing content to new VM if needed
+            if let hosting = self.hosting {
+                hosting.rootView = AnyView(
+                    MultiviewDrawer(viewModel: viewModel, productionManager: productionManager).padding()
+                )
+            }
+            // Ensure delegate and ref are up to date
+            self.window?.delegate = self
         }
         self.showWindow(nil)
         self.window?.makeKeyAndOrderFront(nil)
@@ -30,5 +42,15 @@ final class MultiviewWindowController: NSWindowController {
     override func close() {
         super.close()
         hosting = nil
+    }
+}
+
+extension MultiviewWindowController: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        // When user closes the window via X, restore inline multiview
+        if let vm = viewModelRef {
+            vm.isPoppedOut = false
+        }
+        viewModelRef = nil
     }
 }
