@@ -15,6 +15,7 @@ enum ProductionMode {
     case live, virtual
 }
 
+@MainActor
 struct ContentView: View {
     @State private var productionManager: UnifiedProductionManager?
     @State private var productionMode: ProductionMode = .live
@@ -22,6 +23,9 @@ struct ContentView: View {
     @State private var showingVirtualCameraDemo = false
     @EnvironmentObject var licenseManager: LicenseManager
     @EnvironmentObject var projectCoordinator: ProjectCoordinator
+    
+    @StateObject private var appServices = AppServices.shared
+    @Environment(\.scenePhase) private var scenePhase
     
     // Live Production States
     @State private var rtmpURL = "rtmp://live.twitch.tv/app"
@@ -50,6 +54,7 @@ struct ContentView: View {
                     showingVirtualCameraDemo: $showingVirtualCameraDemo,
                     projectCoordinator: projectCoordinator
                 )
+                .environmentObject(appServices.recordingService)
                 
                 Divider()
                 
@@ -72,12 +77,14 @@ struct ContentView: View {
                             scenesManager: scenesManager
                         )
                         .environmentObject(layerManager)
+                        .environmentObject(appServices.recordingService)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .sheet(isPresented: $showingStudioSelector) {
                 StudioSelectorSheet(productionManager: productionManager)
+                    .environmentObject(appServices.recordingService)
             }
             .sheet(isPresented: $showingVirtualCameraDemo) {
                 VirtualCameraDemoView()
@@ -99,6 +106,29 @@ struct ContentView: View {
                 if let projectState = projectCoordinator.currentProjectState {
                     await applyProjectTemplate(projectState)
                 }
+            }
+            .onChange(of: productionManager.previewProgramManager.programSource) { _, newValue in
+                let isActive = {
+                    switch newValue {
+                    case .none:
+                        return false
+                    default:
+                        return true
+                    }
+                }()
+                appServices.recordingService.updateAvailability(isProgramActive: isActive)
+            }
+            .onAppear {
+                let isActive = {
+                    switch productionManager.previewProgramManager.programSource {
+                    case .none:
+                        return false
+                    default:
+                        return true
+                    }
+                }()
+                appServices.recordingService.updateAvailability(isProgramActive: isActive)
+                appServices.recordingService.isEnabledByLicense = true
             }
         } else {
             ProgressView("Initializing Production Manager...")
@@ -147,7 +177,8 @@ struct ContentView: View {
                 manager.streamingViewModel.bindToProductionManager(manager)
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 700_000_000)
                 suppressInitialAnimations = false
             }
             
@@ -203,6 +234,7 @@ struct TopToolbarView: View {
     @Binding var showingStudioSelector: Bool
     @Binding var showingVirtualCameraDemo: Bool
     @EnvironmentObject var licenseManager: LicenseManager
+    @EnvironmentObject var recordingService: RecordingService
     let projectCoordinator: ProjectCoordinator
     
     @State private var projectHasUnsavedChanges = false
@@ -320,7 +352,6 @@ struct TopToolbarView: View {
                     }
                 }
                 
-                // Studio Mode toggle (Preview opt-in)
                 Menu {
                     Toggle(
                         "Studio Mode (Preview)",
@@ -380,10 +411,36 @@ struct TopToolbarView: View {
                 }
                 .help("Virtual Camera Demo")
                 .gated(.virtualSet3D, licenseManager: licenseManager)
+                
+                Button {
+                    recordingService.startOrStop()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: recordingService.isRecording ? "stop.circle.fill" : "record.circle")
+                        Text(recordingService.isRecording ? "Stop" : "Record")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(recordingService.isRecording ? Color.red : Color.gray.opacity(0.2))
+                    .foregroundColor(recordingService.isRecording ? .white : .primary)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(recordingService.outputURL?.lastPathComponent ?? "Start/Stop Recording")
+                .disabled(!recordingService.isRecordActionAvailable)
             }
         }
         .padding()
         .background(TahoeDesign.Colors.surfaceLight)
+        .onAppear {
+            let isActive: Bool = {
+                switch productionManager.previewProgramManager.programSource {
+                case .none: return false
+                default: return true
+                }
+            }()
+            recordingService.updateAvailability(isProgramActive: isActive)
+        }
     }
 }
 
@@ -399,6 +456,7 @@ struct FinalCutProStyleView: View {
     @Binding var selectedPlatform: String
     @EnvironmentObject var layerManager: LayerStackManager
     @EnvironmentObject var licenseManager: LicenseManager
+    @EnvironmentObject var recordingService: RecordingService
 
     @ObservedObject var scenesManager: ScenesManager
 
@@ -448,6 +506,7 @@ struct FinalCutProStyleView: View {
                 mediaFiles: $mediaFiles,
                 multiviewModel: multiviewModel
             )
+            .environmentObject(recordingService)
             
             // Right Panel
             ZStack {
@@ -567,6 +626,7 @@ struct PreviewProgramCenterView: View {
     @Binding var mediaFiles: [MediaFile]
     @EnvironmentObject var layerManager: LayerStackManager
     @ObservedObject var multiviewModel: MultiviewViewModel
+    @EnvironmentObject var recordingService: RecordingService
     
     var body: some View {
         GeometryReader { geo in
@@ -684,25 +744,46 @@ struct PreviewProgramCenterView: View {
                 }
             }
             
-            if isPreview {
-                SimplePreviewMonitorView(productionManager: productionManager)
-                    .aspectRatio(safeAspect, contentMode: .fit)
-                    .liquidGlassMonitor(
-                        borderColor: TahoeDesign.Colors.preview,
-                        cornerRadius: TahoeDesign.CornerRadius.lg,
-                        glowIntensity: 0.4,
-                        isActive: true
-                    )
-            } else {
-                SimpleProgramMonitorView(productionManager: productionManager)
-                    .aspectRatio(safeAspect, contentMode: .fit)
-                    .liquidGlassMonitor(
-                        borderColor: TahoeDesign.Colors.program,
-                        cornerRadius: TahoeDesign.CornerRadius.lg,
-                        glowIntensity: 0.4,
-                        isActive: true
-                    )
+            ZStack(alignment: .topTrailing) {
+                if isPreview {
+                    SimplePreviewMonitorView(productionManager: productionManager)
+                        .aspectRatio(safeAspect, contentMode: .fit)
+                        .liquidGlassMonitor(
+                            borderColor: TahoeDesign.Colors.preview,
+                            cornerRadius: TahoeDesign.CornerRadius.lg,
+                            glowIntensity: 0.4,
+                            isActive: true
+                        )
+                } else {
+                    SimpleProgramMonitorView(productionManager: productionManager)
+                        .aspectRatio(safeAspect, contentMode: .fit)
+                        .liquidGlassMonitor(
+                            borderColor: TahoeDesign.Colors.program,
+                            cornerRadius: TahoeDesign.CornerRadius.lg,
+                            glowIntensity: 0.4,
+                            isActive: true
+                        )
+                }
+                
+                if !isPreview, recordingService.isRecording {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                        Text("REC \(formatElapsed(recordingService.elapsed))")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.85))
+                    .cornerRadius(6)
+                    .padding(8)
+                    .help(recordingService.outputURL?.lastPathComponent ?? "Recording")
+                }
             }
+            
             if case .media(let mediaFile, _) = sourceCase {
                 if mediaFile.fileType == .video || mediaFile.fileType == .audio {
                     ComprehensiveMediaControls(
@@ -725,6 +806,18 @@ struct PreviewProgramCenterView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+    
+    private func formatElapsed(_ t: TimeInterval) -> String {
+        let total = Int(t.rounded())
+        let s = total % 60
+        let m = (total / 60) % 60
+        let h = total / 3600
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        } else {
+            return String(format: "%02d:%02d", m, s)
+        }
     }
 }
 
@@ -826,7 +919,8 @@ struct MediaSourceView: View {
                                 onMediaSelected: { selectedFile in
                                     let mediaSource = selectedFile.asContentSource()
                                     productionManager.previewProgramManager.loadToPreview(mediaSource)
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    Task { @MainActor in
+                                        try? await Task.sleep(nanoseconds: 100_000_000)
                                         productionManager.previewProgramManager.objectWillChange.send()
                                         productionManager.objectWillChange.send()
                                     }
