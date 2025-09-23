@@ -121,6 +121,9 @@ final class PreviewProgramManager: ObservableObject {
     
     @Published var previewAspect: CGFloat = 16.0/9.0
     @Published var programAspect: CGFloat = 16.0/9.0
+
+    // CHANGE: Studio Mode toggle (Preview UI/pipeline opt-in). Default off to match Gaming template behavior.
+    @Published var studioModeEnabled: Bool = false
     
     var previewSourceDisplayName: String {
         return getDisplayName(for: previewSource)
@@ -202,6 +205,21 @@ final class PreviewProgramManager: ObservableObject {
         programPlayer = nil
     }
     
+    // ADD: Studio Mode API
+    func setStudioModeEnabled(_ enabled: Bool) {
+        guard studioModeEnabled != enabled else { return }
+        studioModeEnabled = enabled
+        if !enabled {
+            stopPreview()
+            clearPreview()
+        }
+        objectWillChange.send()
+    }
+    
+    func toggleStudioMode() {
+        setStudioModeEnabled(!studioModeEnabled)
+    }
+    
     func getDisplayName(for source: ContentSource) -> String {
         switch source {
         case .camera(let feed):
@@ -216,6 +234,12 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func loadToPreview(_ source: ContentSource) {
+        // ADD: In non-Studio mode, route preview requests directly to Program to keep the pipeline lean.
+        if !studioModeEnabled {
+            loadToProgram(source)
+            return
+        }
+        
         let displayName = getDisplayName(for: source)
         print("🎬 PreviewProgramManager.loadToPreview() called with: \(displayName)")
         print("🎬 Source type: \(source)")
@@ -405,6 +429,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func playPreview() {
+        if !studioModeEnabled { return }
         if preferVTDecode, let vt = previewVTPlayback {
             previewPrimedForPoster = false
             previewAudioPlayer?.rate = previewRate
@@ -422,6 +447,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func pausePreview() {
+        if !studioModeEnabled { return }
         if preferVTDecode, previewVTPlayback != nil {
             previewAudioPlayer?.pause()
             previewVTPlayback?.stop()
@@ -529,6 +555,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func seekPreview(to time: TimeInterval) {
+        if !studioModeEnabled { return }
         if preferVTDecode, let vt = previewVTPlayback {
             let cm = CMTime(seconds: time, preferredTimescale: 600)
             previewIsSeeking = true
@@ -611,6 +638,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func stepPreviewForward() {
+        if !studioModeEnabled { return }
         guard case .media(_, _) = previewSource, let player = previewPlayer else { return }
         let currentTime = CMTimeGetSeconds(player.currentTime())
         let frameRate: Double = 30.0
@@ -619,6 +647,7 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func stepPreviewBackward() {
+        if !studioModeEnabled { return }
         guard case .media(_, _) = previewSource, let player = previewPlayer else { return }
         let currentTime = CMTimeGetSeconds(player.currentTime())
         let frameRate: Double = 30.0

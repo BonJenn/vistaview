@@ -60,7 +60,7 @@ final class MultiviewViewModel: ObservableObject {
         if open {
             await startThumbnailFeedsIfNeeded()
         } else {
-            // KEEP FEEDS RUNNING so left panel remains live
+            // keep feeds running
         }
     }
     
@@ -107,16 +107,30 @@ final class MultiviewViewModel: ObservableObject {
     func click(_ tile: Tile) async {
         guard let pm = productionManager else { return }
         if let feed = await ensureFeed(for: tile.deviceID) {
-            await MainActor.run {
-                pm.previewProgramManager.loadToPreview(.camera(feed))
+            if pm.currentTemplate == .gaming {
+                await MainActor.run {
+                    pm.previewProgramManager.loadToProgram(.camera(feed))
+                }
+                await pm.switchProgram(to: tile.deviceID)
+            } else {
+                await MainActor.run {
+                    pm.previewProgramManager.loadToPreview(.camera(feed))
+                }
             }
             return
         }
         do {
             _ = try await pm.deviceManager.discoverDevices(forceRefresh: true)
             if let feed = await ensureFeed(for: tile.deviceID) {
-                await MainActor.run {
-                    pm.previewProgramManager.loadToPreview(.camera(feed))
+                if pm.currentTemplate == .gaming {
+                    await MainActor.run {
+                        pm.previewProgramManager.loadToProgram(.camera(feed))
+                    }
+                    await pm.switchProgram(to: tile.deviceID)
+                } else {
+                    await MainActor.run {
+                        pm.previewProgramManager.loadToPreview(.camera(feed))
+                    }
                 }
             }
         } catch {

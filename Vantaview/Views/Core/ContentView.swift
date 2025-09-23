@@ -96,7 +96,6 @@ struct ContentView: View {
                 }
             }
             .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
-                // Apply project template when project changes
                 if let projectState = projectCoordinator.currentProjectState {
                     await applyProjectTemplate(projectState)
                 }
@@ -112,11 +111,7 @@ struct ContentView: View {
     
     private func applyProjectTemplate(_ projectState: ProjectState) async {
         guard let productionManager = productionManager else { return }
-        
-        // Determine template from project
         let template = determineProjectTemplate(from: projectState)
-        
-        // Apply template configuration
         await TemplateConfiguration.applyTemplate(
             template,
             to: productionManager,
@@ -126,7 +121,6 @@ struct ContentView: View {
     
     private func determineProjectTemplate(from projectState: ProjectState) -> ProjectTemplate {
         let title = projectState.manifest.title.lowercased()
-        
         if title.contains("news") { return .news }
         if title.contains("talk show") { return .talkShow }
         if title.contains("podcast") { return .podcast }
@@ -135,7 +129,6 @@ struct ContentView: View {
         if title.contains("product demo") { return .productDemo }
         if title.contains("webinar") { return .webinar }
         if title.contains("interview") { return .interview }
-        
         return .blank
     }
 
@@ -149,7 +142,6 @@ struct ContentView: View {
             await MainActor.run {
                 layerManager.setProductionManager(manager)
                 manager.externalDisplayManager.setLayerStackManager(layerManager)
-
                 manager.streamingViewModel.bindToProgramManager(manager.previewProgramManager)
                 manager.streamingViewModel.bindToLayerManager(layerManager)
                 manager.streamingViewModel.bindToProductionManager(manager)
@@ -160,7 +152,6 @@ struct ContentView: View {
             }
             
             self.productionManager = manager
-            
         } catch {
             print("Failed to initialize production manager: \(error)")
         }
@@ -205,8 +196,6 @@ struct ContentView: View {
         }
     }
 }
-
-// MARK: - Top Toolbar
 
 struct TopToolbarView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -253,7 +242,6 @@ struct TopToolbarView: View {
             .background(Color.gray.opacity(0.1))
             .liquidGlassMonitor(borderColor: TahoeDesign.Colors.preview, cornerRadius: TahoeDesign.CornerRadius.lg, glowIntensity: 0.4, isActive: true)
             .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
-                // Update unsaved changes status
                 if let currentProject = projectCoordinator.currentProjectState {
                     projectHasUnsavedChanges = await currentProject.hasUnsavedChanges
                 }
@@ -331,6 +319,20 @@ struct TopToolbarView: View {
                             .foregroundColor(productionManager.streamingViewModel.isPublishing ? .red : .secondary)
                     }
                 }
+                
+                // Studio Mode toggle (Preview opt-in)
+                Menu {
+                    Toggle(
+                        "Studio Mode (Preview)",
+                        isOn: Binding(
+                            get: { productionManager.previewProgramManager.studioModeEnabled },
+                            set: { productionManager.previewProgramManager.setStudioModeEnabled($0) }
+                        )
+                    )
+                } label: {
+                    Image(systemName: "rectangle.on.rectangle")
+                }
+                .help("Toggle Preview monitor and pipeline")
                 
                 Menu {
                     Button("Capture Preview Frame") {
@@ -430,7 +432,6 @@ struct FinalCutProStyleView: View {
 
     var body: some View {
         HSplitView {
-            // Left Panel - Sources
             SourcesPanel(
                 productionManager: productionManager,
                 selectedTab: $selectedTab,
@@ -443,11 +444,12 @@ struct FinalCutProStyleView: View {
             // Center Panel - Preview/Program
             PreviewProgramCenterView(
                 productionManager: productionManager,
+                previewProgramManager: productionManager.previewProgramManager,
                 mediaFiles: $mediaFiles,
                 multiviewModel: multiviewModel
             )
             
-            // Right Panel - Output & Streaming Controls
+            // Right Panel
             ZStack {
                 ScrollView {
                     VStack(spacing: 0) {
@@ -493,9 +495,9 @@ struct FinalCutProStyleView: View {
                     .padding(.vertical, 8)
                 }
             }
-            .frame(width: 360)  
-            .layoutPriority(1)  
-            .clipped()          
+            .frame(width: 360)
+            .layoutPriority(1)
+            .clipped()
             .background(
                 RoundedRectangle(cornerRadius: TahoeDesign.CornerRadius.lg, style: .continuous)
                     .fill(.regularMaterial)
@@ -508,8 +510,6 @@ struct FinalCutProStyleView: View {
         }
     }
 }
-
-// MARK: - CollapsibleSection
 
 struct CollapsibleSection<Content: View>: View {
     let title: String
@@ -563,6 +563,7 @@ struct CollapsibleSection<Content: View>: View {
 
 struct PreviewProgramCenterView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
+    @ObservedObject var previewProgramManager: PreviewProgramManager
     @Binding var mediaFiles: [MediaFile]
     @EnvironmentObject var layerManager: LayerStackManager
     @ObservedObject var multiviewModel: MultiviewViewModel
@@ -572,14 +573,19 @@ struct PreviewProgramCenterView: View {
             let shouldStackVertically = (geo.size.width > 0) ? (geo.size.width < 900) : false
             VStack(spacing: TahoeDesign.Spacing.md) {
                 Group {
+                    let studioOn = previewProgramManager.studioModeEnabled
                     if shouldStackVertically {
                         VStack(spacing: TahoeDesign.Spacing.md) {
-                            monitorView(isPreview: true)
+                            if studioOn {
+                                monitorView(isPreview: true)
+                            }
                             monitorView(isPreview: false)
                         }
                     } else {
                         HStack(spacing: TahoeDesign.Spacing.md) {
-                            monitorView(isPreview: true)
+                            if studioOn {
+                                monitorView(isPreview: true)
+                            }
                             monitorView(isPreview: false)
                         }
                     }
@@ -655,14 +661,10 @@ struct PreviewProgramCenterView: View {
     private func monitorView(isPreview: Bool) -> some View {
         let monitorLabel = isPreview ? "PREVIEW" : "PROGRAM"
         let color = isPreview ? TahoeDesign.Colors.preview : TahoeDesign.Colors.program
-        let sourceCase = isPreview
-            ? productionManager.previewProgramManager.previewSource
-            : productionManager.previewProgramManager.programSource
+        let sourceCase = isPreview ? previewProgramManager.previewSource : previewProgramManager.programSource
 
         let safeAspect: CGFloat = {
-            let v = isPreview
-                ? productionManager.previewProgramManager.previewAspect
-                : productionManager.previewProgramManager.programAspect
+            let v = isPreview ? previewProgramManager.previewAspect : previewProgramManager.programAspect
             return (v.isFinite && v > 0) ? v : 16.0/9.0
         }()
 
@@ -1079,15 +1081,12 @@ struct OutputControlsPanel: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 32) {
-                // Audio Levels Section
                 AudioLevelPanel(productionManager: productionManager)
                     .frame(height: 200)
-                    .padding(.bottom, 28) // extra gap so meters don't overlap Live Streaming
+                    .padding(.bottom, 28)
                 
-                // Live Streaming Section
                 GroupBox("Live Streaming") {
                     VStack(alignment: .leading, spacing: 10) {
-                        // Platform Selection
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Platform")
                                 .font(.caption)
@@ -1101,7 +1100,6 @@ struct OutputControlsPanel: View {
                             .pickerStyle(MenuPickerStyle())
                         }
                         
-                        // RTMP Server URL
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Server")
                                 .font(.caption)
@@ -1111,7 +1109,6 @@ struct OutputControlsPanel: View {
                                 .font(.caption2)
                         }
                         
-                        // Stream Key
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Stream Key")
                                 .font(.caption)
@@ -1123,7 +1120,6 @@ struct OutputControlsPanel: View {
                         
                         Divider()
                         
-                        // Audio Source (compact, no label)
                         VStack(alignment: .leading, spacing: 2) {
                             Picker(
                                 selection:
@@ -1174,7 +1170,6 @@ struct OutputControlsPanel: View {
                         }
                         .padding(.vertical, 2)
                         
-                        // Start/Stop Streaming Button
                         Button(action: {
                             Task {
                                 await toggleStreaming()
@@ -1228,8 +1223,6 @@ struct OutputControlsPanel: View {
     }
 }
 
-// MARK: - Studio Selector Sheet
-
 struct StudioSelectorSheet: View {
     @ObservedObject var productionManager: UnifiedProductionManager
     @Environment(\.dismiss) private var dismiss
@@ -1279,7 +1272,6 @@ struct StudioSelectorSheet: View {
     }
 }
 
-// MARK: - Preview 
 #Preview {
     ContentView()
 }

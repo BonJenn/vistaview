@@ -10,7 +10,7 @@ import AVFoundation
 import MetalKit
 import AppKit
 
-// MARK: - Simple Preview Monitor View (unchanged data path)
+// MARK: - Simple Preview Monitor View
 
 struct SimplePreviewMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -29,7 +29,6 @@ struct SimplePreviewMonitorView: View {
             switch productionManager.previewProgramManager.previewSource {
             case .camera(let feed):
                 CameraFeedLivePreview(feed: feed)
-                
             case .media(let file, _):
                 if file.fileType == .image, let previewImage = productionManager.previewProgramManager.previewImage {
                     Image(previewImage, scale: 1.0, label: Text("Preview"))
@@ -42,7 +41,6 @@ struct SimplePreviewMonitorView: View {
                         device: productionManager.effectManager.metalDevice
                     )
                 }
-                
             case .virtual(_):
                 VStack(spacing: 8) {
                     Image(systemName: "video.3d")
@@ -52,7 +50,6 @@ struct SimplePreviewMonitorView: View {
                         .font(.caption)
                         .foregroundColor(.gray.opacity(0.5))
                 }
-                
             case .none:
                 VStack(spacing: 8) {
                     Image(systemName: "tv")
@@ -64,11 +61,8 @@ struct SimplePreviewMonitorView: View {
                 }
             }
             
-            // Render composited PiP layers (non-interactive surface)
             CompositedLayersContent(productionManager: productionManager, isPreview: true)
                 .allowsHitTesting(false)
-            
-            // Interactive overlay for selecting/moving/scaling/editing titles & PiPs
             LayersInteractiveOverlay(isPreview: true)
                 .allowsHitTesting(true)
             
@@ -118,7 +112,6 @@ struct SimplePreviewMonitorView: View {
                 Button("Clear Effects") {
                     productionManager.previewProgramManager.clearPreviewEffects()
                 }
-                
                 Button("View Effects") {
                     if let chain = productionManager.previewProgramManager.getPreviewEffectChain() {
                         productionManager.effectManager.selectedChain = chain
@@ -168,7 +161,7 @@ private struct CameraFeedLivePreview: View {
     }
 }
 
-// MARK: - Simple Program Monitor View (NOW backed by ProgramFeedView renderer)
+// MARK: - Program Monitor
 
 struct SimpleProgramMonitorView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -186,7 +179,6 @@ struct SimpleProgramMonitorView: View {
             switch productionManager.previewProgramManager.programSource {
             case .camera(let feed):
                 CameraFeedLivePreview(feed: feed)
-                
             case .media(let file, _):
                 if file.fileType == .image, let programImage = productionManager.previewProgramManager.programImage {
                     Image(programImage, scale: 1.0, label: Text("Program"))
@@ -199,7 +191,6 @@ struct SimpleProgramMonitorView: View {
                         device: productionManager.effectManager.metalDevice
                     )
                 }
-                
             case .virtual(_):
                 VStack(spacing: 8) {
                     Image(systemName: "video.3d")
@@ -209,16 +200,12 @@ struct SimpleProgramMonitorView: View {
                         .font(.caption)
                         .foregroundColor(.gray.opacity(0.5))
                 }
-                
             case .none:
                 ProgramFeedView(productionManager: productionManager)
             }
             
-            // Render composited PiP layers (non-interactive surface)
             CompositedLayersContent(productionManager: productionManager, isPreview: false)
                 .allowsHitTesting(false)
-            
-            // Interactive overlay for selecting/moving/scaling/editing titles & PiPs
             LayersInteractiveOverlay(isPreview: false)
                 .allowsHitTesting(true)
             
@@ -268,7 +255,6 @@ struct SimpleProgramMonitorView: View {
                 Button("Clear Effects") {
                     productionManager.previewProgramManager.clearProgramEffects()
                 }
-                
                 Button("View Effects") {
                     if let chain = productionManager.previewProgramManager.getProgramEffectChain() {
                         productionManager.effectManager.selectedChain = chain
@@ -290,7 +276,7 @@ struct SimpleProgramMonitorView: View {
     }
 }
 
-// MARK: - Camera Device Button (selecting starts feed AND switches program immediately)
+// MARK: - Camera Buttons (template-aware behavior)
 
 struct CameraDeviceButton: View {
     let device: LegacyCameraDevice
@@ -299,17 +285,29 @@ struct CameraDeviceButton: View {
     var body: some View {
         Button(action: {
             Task {
-                // Start feed (or reuse if running) and then load to Preview on single click
                 let info = device.asCameraDeviceInfo
                 if let feed = await productionManager.cameraFeedManager.startFeed(for: info) {
                     await MainActor.run {
-                        productionManager.previewProgramManager.loadToPreview(.camera(feed))
+                        if productionManager.currentTemplate == .gaming {
+                            productionManager.previewProgramManager.loadToProgram(.camera(feed))
+                        } else {
+                            productionManager.previewProgramManager.loadToPreview(.camera(feed))
+                        }
+                    }
+                    if productionManager.currentTemplate == .gaming {
+                        await productionManager.switchProgram(to: device.deviceID)
                     }
                 } else {
-                    // If feed already running, find it and load to Preview
                     if let running = productionManager.cameraFeedManager.activeFeeds.first(where: { $0.deviceInfo.deviceID == device.deviceID }) {
                         await MainActor.run {
-                            productionManager.previewProgramManager.loadToPreview(.camera(running))
+                            if productionManager.currentTemplate == .gaming {
+                                productionManager.previewProgramManager.loadToProgram(.camera(running))
+                            } else {
+                                productionManager.previewProgramManager.loadToPreview(.camera(running))
+                            }
+                        }
+                        if productionManager.currentTemplate == .gaming {
+                            await productionManager.switchProgram(to: device.deviceID)
                         }
                     }
                 }
@@ -346,8 +344,12 @@ struct LiveCameraFeedButton: View {
     
     var body: some View {
         Button(action: {
-            // Single click: load to Preview
-            productionManager.previewProgramManager.loadToPreview(.camera(feed))
+            if productionManager.currentTemplate == .gaming {
+                productionManager.previewProgramManager.loadToProgram(.camera(feed))
+                Task { await productionManager.switchProgram(to: feed.device.deviceID) }
+            } else {
+                productionManager.previewProgramManager.loadToPreview(.camera(feed))
+            }
         }) {
             VStack(spacing: 8) {
                 Rectangle()

@@ -1,46 +1,35 @@
 import SwiftUI
 import Foundation
 
-// MARK: - Template Configuration Bridge
-
 @MainActor
 class TemplateConfiguration {
-    
-    /// Apply project template configuration to existing production system
     static func applyTemplate(
         _ template: ProjectTemplate,
         to productionManager: UnifiedProductionManager,
         with projectState: ProjectState
     ) async {
-        
+        // Apply Studio Mode default per template (Gaming: OFF, others: ON)
+        productionManager.previewProgramManager.setStudioModeEnabled(template.studioModeDefault)
+
         // Apply template-specific studio configuration
         switch template {
         case .news:
             await configureNewsTemplate(productionManager, projectState)
-            
         case .talkShow:
             await configureTalkShowTemplate(productionManager, projectState)
-            
         case .podcast:
             await configurePodcastTemplate(productionManager, projectState)
-            
         case .gaming:
             await configureGamingTemplate(productionManager, projectState)
-            
         case .concert:
             await configureConcertTemplate(productionManager, projectState)
-            
         case .productDemo:
             await configureProductDemoTemplate(productionManager, projectState)
-            
         case .webinar:
             await configureWebinarTemplate(productionManager, projectState)
-            
         case .interview:
             await configureInterviewTemplate(productionManager, projectState)
-            
         case .blank:
-            // Minimal configuration
             break
         }
         
@@ -51,18 +40,12 @@ class TemplateConfiguration {
         productionManager.hasUnsavedChanges = false
     }
     
-    // MARK: - Template Implementations
-    
     private static func configureNewsTemplate(
         _ productionManager: UnifiedProductionManager,
         _ projectState: ProjectState
     ) async {
         productionManager.currentStudioName = "News Studio - \(projectState.manifest.title)"
-        
-        // Load news studio template in virtual studio manager
         productionManager.loadTemplate(.news)
-        
-        // Switch to virtual studio mode to show the news setup
         productionManager.switchToVirtualMode()
     }
     
@@ -81,8 +64,6 @@ class TemplateConfiguration {
     ) async {
         productionManager.currentStudioName = "Podcast Studio - \(projectState.manifest.title)"
         productionManager.loadTemplate(.podcast)
-        
-        // Podcasts might prefer live mode for audio focus
         productionManager.switchToLiveMode()
     }
     
@@ -92,8 +73,6 @@ class TemplateConfiguration {
     ) async {
         productionManager.currentStudioName = "Gaming Setup - \(projectState.manifest.title)"
         productionManager.loadTemplate(.gaming)
-        
-        // Gaming setups typically use live mode with overlays
         productionManager.switchToLiveMode()
     }
     

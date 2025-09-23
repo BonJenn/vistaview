@@ -13,23 +13,15 @@ import Metal
 
 struct VJPreviewProgramPane: View {
     @ObservedObject var productionManager: UnifiedProductionManager
-    @StateObject private var previewProgramManager: PreviewProgramManager
+    @ObservedObject private var previewProgramManager: PreviewProgramManager
     
     init(productionManager: UnifiedProductionManager) {
         self.productionManager = productionManager
-        // Initialize with the production manager's components
-        self._previewProgramManager = StateObject(wrappedValue: PreviewProgramManager(
-            cameraFeedManager: productionManager.cameraFeedManager,
-            unifiedProductionManager: productionManager,
-            effectManager: productionManager.effectManager,
-            frameProcessor: productionManager.frameProcessor,
-            audioEngine: productionManager.audioEngine
-        ))
+        self.previewProgramManager = productionManager.previewProgramManager
     }
     
     var body: some View {
         VStack(spacing: 8) {
-            // Header with controls
             HStack {
                 Text("Preview/Program")
                     .font(.headline)
@@ -37,7 +29,6 @@ struct VJPreviewProgramPane: View {
                 
                 Spacer()
                 
-                // Take button
                 Button("TAKE") {
                     previewProgramManager.take()
                 }
@@ -49,7 +40,6 @@ struct VJPreviewProgramPane: View {
                 .foregroundColor(.white)
                 .cornerRadius(4)
                 
-                // Auto transition button
                 Button("AUTO") {
                     previewProgramManager.transition(duration: 2.0)
                 }
@@ -63,40 +53,40 @@ struct VJPreviewProgramPane: View {
                 .disabled(previewProgramManager.previewSource == .none)
             }
             
-            // Preview monitor (top)
-            VStack(spacing: 4) {
-                HStack {
-                    Text("PREVIEW")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.yellow)
+            if previewProgramManager.studioModeEnabled {
+                VStack(spacing: 4) {
+                    HStack {
+                        Text("PREVIEW")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.yellow)
+                        
+                        Spacer()
+                        
+                        Text(previewProgramManager.previewSourceDisplayName)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
                     
-                    Spacer()
-                    
-                    Text(previewProgramManager.previewSourceDisplayName)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    VJPreviewMonitor(
+                        source: previewProgramManager.previewSource,
+                        image: previewProgramManager.previewImage,
+                        cameraFeedManager: productionManager.cameraFeedManager,
+                        effectManager: productionManager.effectManager,
+                        previewProgramManager: previewProgramManager,
+                        isPreview: true
+                    )
+                    .frame(height: 80)
+                    .background(Color.black)
+                    .cornerRadius(6)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.yellow, lineWidth: 2)
+                    )
                 }
-                
-                VJPreviewMonitor(
-                    source: previewProgramManager.previewSource,
-                    image: previewProgramManager.previewImage,
-                    cameraFeedManager: productionManager.cameraFeedManager,
-                    effectManager: productionManager.effectManager,
-                    previewProgramManager: previewProgramManager,
-                    isPreview: true
-                )
-                .frame(height: 80)
-                .background(Color.black)
-                .cornerRadius(6)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.yellow, lineWidth: 2)
-                )
             }
             
-            // Program monitor (bottom)
             VStack(spacing: 4) {
                 HStack {
                     Text("PROGRAM")
@@ -129,45 +119,44 @@ struct VJPreviewProgramPane: View {
                 )
             }
             
-            // Crossfader
-            VStack(spacing: 4) {
-                HStack {
-                    Text("CROSSFADE")
-                        .font(.caption2)
-                        .fontWeight(.bold)
+            if previewProgramManager.studioModeEnabled {
+                VStack(spacing: 4) {
+                    HStack {
+                        Text("CROSSFADE")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                        
+                        Spacer()
+                        
+                        Text("\(Int(previewProgramManager.crossfaderValue * 100))%")
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                    }
                     
-                    Spacer()
-                    
-                    Text("\(Int(previewProgramManager.crossfaderValue * 100))%")
-                        .font(.caption2)
-                        .foregroundColor(.blue)
+                    Slider(
+                        value: $previewProgramManager.crossfaderValue,
+                        in: 0...1
+                    ) {
+                        Text("Crossfader")
+                    } minimumValueLabel: {
+                        Text("PGM")
+                            .font(.caption2)
+                            .foregroundColor(.red)
+                    } maximumValueLabel: {
+                        Text("PVW")
+                            .font(.caption2)
+                            .foregroundColor(.yellow)
+                    }
+                    .accentColor(.blue)
                 }
-                
-                Slider(
-                    value: $previewProgramManager.crossfaderValue,
-                    in: 0...1
-                ) {
-                    Text("Crossfader")
-                } minimumValueLabel: {
-                    Text("PGM")
-                        .font(.caption2)
-                        .foregroundColor(.red)
-                } maximumValueLabel: {
-                    Text("PVW")
-                        .font(.caption2)
-                        .foregroundColor(.yellow)
-                }
-                .accentColor(.blue)
             }
             
-            // Source selection buttons
             VStack(spacing: 6) {
                 Text("Sources")
                     .font(.caption2)
                     .fontWeight(.bold)
                     .foregroundColor(.secondary)
                 
-                // Camera sources
                 if !productionManager.cameraFeedManager.activeFeeds.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) {
@@ -179,7 +168,6 @@ struct VJPreviewProgramPane: View {
                     }
                 }
                 
-                // Show media items if available
                 VStack(spacing: 8) {
                     Text("Media Library")
                         .font(.caption)
@@ -191,7 +179,6 @@ struct VJPreviewProgramPane: View {
                         .foregroundColor(.secondary)
                 }
                 
-                // Virtual sources
                 if !productionManager.availableVirtualCameras.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) {
@@ -204,7 +191,6 @@ struct VJPreviewProgramPane: View {
                 }
             }
             
-            // Media playback controls (only show if media is selected)
             if case .media(_, _) = previewProgramManager.previewSource {
                 VJMediaPlaybackControls(
                     previewProgramManager: previewProgramManager,
@@ -268,29 +254,21 @@ struct VJPreviewMonitor: View {
     
     var body: some View {
         ZStack {
-            // Background
-            Rectangle()
-                .fill(Color.black)
-            
-            // Content based on source type
+            Rectangle().fill(Color.black)
             switch source {
             case .camera(let feed):
-                // FIXED: Use efficient NSView wrapper instead of SwiftUI Image
                 EfficientCameraMonitorView(
                     feed: feed,
                     previewProgramManager: previewProgramManager,
                     isPreview: isPreview
                 )
-                
             case .media(let file, _):
-                // Use the GPU texture from the AVPlayerMetalPlayback path to avoid duplicate outputs
                 MetalVideoView(
                     textureSupplier: isPreview ? previewProgramManager.makePreviewTextureSupplier()
                                                : previewProgramManager.makeProgramTextureSupplier(),
                     preferredFPS: Int(previewProgramManager.targetFPS),
                     device: effectManager.metalDevice
                 )
-                
             case .virtual(let camera):
                 VStack {
                     Image(systemName: "video.3d")
@@ -301,7 +279,6 @@ struct VJPreviewMonitor: View {
                         .foregroundColor(.blue.opacity(0.7))
                         .lineLimit(1)
                 }
-                
             case .none:
                 VStack {
                     Image(systemName: isPreview ? "tv" : "dot.radiowaves.left.and.right")
@@ -312,8 +289,6 @@ struct VJPreviewMonitor: View {
                         .foregroundColor(.gray.opacity(0.5))
                 }
             }
-            
-            // Drop target overlay
             if isTargeted {
                 Rectangle()
                     .fill(Color.blue.opacity(0.3))
@@ -329,8 +304,6 @@ struct VJPreviewMonitor: View {
                         }
                     )
             }
-            
-            // Effect count indicator
             if effectCount > 0 {
                 VStack {
                     Spacer()
@@ -365,7 +338,6 @@ struct VJPreviewMonitor: View {
                         previewProgramManager.clearProgramEffects()
                     }
                 }
-                
                 Button("View Effects") {
                     let chain = isPreview ? 
                         previewProgramManager.getPreviewEffectChain() :
@@ -378,22 +350,16 @@ struct VJPreviewMonitor: View {
     
     private func handleEffectDrop(_ items: [EffectDragItem]) -> Bool {
         guard let item = items.first else { return false }
-        
         if isPreview {
             previewProgramManager.addEffectToPreview(item.effectType)
         } else {
             previewProgramManager.addEffectToProgram(item.effectType)
         }
-        
-        // Visual feedback
         let feedbackGenerator = NSHapticFeedbackManager.defaultPerformer
         feedbackGenerator.perform(.generic, performanceTime: .now)
-        
         return true
     }
 }
-
-// MARK: - EFFICIENT Camera Monitor (CPU Optimized)
 
 struct EfficientCameraMonitorView: NSViewRepresentable {
     let feed: CameraFeed
@@ -401,17 +367,13 @@ struct EfficientCameraMonitorView: NSViewRepresentable {
     let isPreview: Bool
     
     func makeNSView(context: Context) -> EfficientCameraView {
-        let view = EfficientCameraView(
+        EfficientCameraView(
             feed: feed,
             previewProgramManager: previewProgramManager,
             isPreview: isPreview
         )
-        return view
     }
-    
-    func updateNSView(_ nsView: EfficientCameraView, context: Context) {
-        // No updates needed - view handles its own observation
-    }
+    func updateNSView(_ nsView: EfficientCameraView, context: Context) { }
 }
 
 class EfficientCameraView: NSView {
@@ -420,8 +382,6 @@ class EfficientCameraView: NSView {
     private let isPreview: Bool
     private var imageLayer: CALayer!
     private var lastProcessedFrameCount: Int = 0
-    
-    // Use simple observation instead of Combine
     private var frameObservationTimer: Timer?
     
     init(feed: CameraFeed, previewProgramManager: PreviewProgramManager, isPreview: Bool) {
@@ -429,37 +389,27 @@ class EfficientCameraView: NSView {
         self.previewProgramManager = previewProgramManager
         self.isPreview = isPreview
         super.init(frame: .zero)
-        
         setupEfficientLayer()
         setupSimpleObservation()
     }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) not supported")
-    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     
     private func setupEfficientLayer() {
-        // Simple, efficient CALayer for video display
         imageLayer = CALayer()
         imageLayer.frame = bounds
         imageLayer.backgroundColor = CGColor.black
         imageLayer.contentsGravity = .resizeAspectFill
-        
-        // Optimize for video
         imageLayer.isOpaque = true
         imageLayer.drawsAsynchronously = true
-        
         wantsLayer = true
         layer = imageLayer
     }
     
     private func setupSimpleObservation() {
-        // EFFICIENT: Use simple timer that only processes when frame count changes
         frameObservationTimer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak self] _ in
             guard let self = self,
                   self.feed.frameCount != self.lastProcessedFrameCount,
                   self.feed.connectionStatus == .connected else { return }
-            
             self.lastProcessedFrameCount = self.feed.frameCount
             self.updateImageContent()
         }
@@ -467,29 +417,22 @@ class EfficientCameraView: NSView {
     
     private func updateImageContent() {
         guard let cgImage = feed.previewImage else {
-            // Show loading state
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             imageLayer.contents = nil
             CATransaction.commit()
             return
         }
-        
-        // Apply effects if they exist
         var processedImage = cgImage
-        
         if let effectChain = isPreview ? 
             previewProgramManager.getPreviewEffectChain() :
             previewProgramManager.getProgramEffectChain(),
            !effectChain.effects.isEmpty {
-            
             let outputType: PreviewProgramManager.OutputType = isPreview ? .preview : .program
             if let effectsProcessed = previewProgramManager.processImageWithEffects(cgImage, for: outputType) {
                 processedImage = effectsProcessed
             }
         }
-        
-        // EFFICIENT: Direct layer content update
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.contents = processedImage
@@ -498,7 +441,6 @@ class EfficientCameraView: NSView {
     
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.frame = bounds
@@ -529,12 +471,9 @@ struct VJMediaPlaybackControls: View {
     
     var body: some View {
         VStack(spacing: 4) {
-            // Progress bar
             ProgressView(value: duration > 0 ? currentTime / duration : 0.0)
                 .progressViewStyle(LinearProgressViewStyle(tint: isPreview ? .yellow : .red))
                 .frame(height: 4)
-            
-            // Time display and controls
             HStack {
                 Text(formatTime(currentTime))
                     .font(.caption2)
@@ -542,7 +481,6 @@ struct VJMediaPlaybackControls: View {
                 
                 Spacer()
                 
-                // Play/Pause button
                 Button(action: {
                     if isPreview {
                         if isPlaying {
