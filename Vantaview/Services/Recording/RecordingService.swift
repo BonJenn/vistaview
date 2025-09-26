@@ -25,8 +25,13 @@ final class RecordingService: ObservableObject {
     private var tickerTask: Task<Void, Never>?
     private var diagTask: Task<Void, Never>?
     private var startedAt: Date?
+    private var productionManager: UnifiedProductionManager?
     
     func sink() -> RecordingSink { tap }
+    
+    func setProductionManager(_ manager: UnifiedProductionManager) {
+        self.productionManager = manager
+    }
     
     func startOrStop(container: ProgramRecorder.Container = .mov) {
         if isRecording {
@@ -54,6 +59,16 @@ final class RecordingService: ObservableObject {
             return
         }
         
+        print("🎬 RecordingService: Starting recording...")
+        
+        if let productionManager = productionManager {
+            print("🎬 RecordingService: Reconnecting recording sink to production manager")
+            await productionManager.connectRecordingSink(self.sink())
+        } else {
+            print("🎬 RecordingService: ERROR - No production manager available")
+            throw NSError(domain: "RecordingService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No production manager available"])
+        }
+        
         let defaultName = defaultFileName(container: container)
         #if os(macOS)
         let saveURL = try await chooseOutputURL(defaultName: defaultName, allowedTypes: [container.utType])
@@ -61,16 +76,26 @@ final class RecordingService: ObservableObject {
         let saveURL = FileManager.default.temporaryDirectory.appendingPathComponent(defaultName)
         #endif
         
+        print("🎬 RecordingService: Recording to URL: \(saveURL)")
+        
         try await recorder.start(url: saveURL, container: container)
         self.outputURL = saveURL
         self.isRecording = true
         self.startedAt = Date()
         startTickers()
+        
+        print("🎬 RecordingService: Recording started successfully")
     }
     
     func stopRecording() async -> URL? {
         guard isRecording else { return outputURL }
         stopTickers()
+        
+        if let productionManager = productionManager {
+            print("🎬 RecordingService: Disconnecting recording sink")
+            await productionManager.disconnectRecordingSink()
+        }
+        
         do {
             let url = try await recorder.stopAndFinalize()
             self.isRecording = false

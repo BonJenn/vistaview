@@ -58,6 +58,8 @@ actor ProgramRecorder {
     private(set) var lastError: Error?
     private(set) var startedAtCMTime: CMTime?
     
+    private var isFinalizingWriter = false
+    
     private(set) var droppedVideoFrames = 0
     private(set) var droppedAudioFrames = 0
     private(set) var averageWriteLatencyMs: Double = 0
@@ -78,6 +80,9 @@ actor ProgramRecorder {
         try Task.checkCancellation()
         guard !isRecording else { return }
         
+        // Reset finalization state
+        isFinalizingWriter = false
+        
         self.lastError = nil
         self.outputURL = url
         self.pendingContainer = container
@@ -93,10 +98,23 @@ actor ProgramRecorder {
         self.startedAtCMTime = nil
         
         isRecording = true
+        
+        print("🎬 ProgramRecorder: Started recording to \(url.lastPathComponent)")
     }
     
     func stopAndFinalize() async throws -> URL {
         try Task.checkCancellation()
+        
+        // Prevent multiple finalization attempts
+        guard !isFinalizingWriter else {
+            print("🎬 ProgramRecorder: Already finalizing, waiting...")
+            // Return existing URL if available
+            if let url = outputURL {
+                return url
+            }
+            throw RecordingError.finalizeFailed
+        }
+        
         guard isRecording else {
             if let url = outputURL {
                 return url
@@ -104,29 +122,42 @@ actor ProgramRecorder {
             throw RecordingError.notRecording
         }
         
+        isFinalizingWriter = true
         isRecording = false
+        
+        print("🎬 ProgramRecorder: Stopping and finalizing recording...")
         
         guard let writer = writer else {
             guard let url = outputURL else { throw RecordingError.noWriter }
             return url
         }
         
+        // Mark inputs as finished
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
+        
+        print("🎬 ProgramRecorder: Inputs marked as finished, finalizing writer...")
         
         return try await withCheckedThrowingContinuation { [writer] (cont: CheckedContinuation<URL, Error>) in
             writer.finishWriting {
                 if writer.status == .completed {
+                    print("🎬 ProgramRecorder: Writer finalized successfully")
                     cont.resume(returning: writer.outputURL)
                 } else {
-                    cont.resume(throwing: writer.error ?? RecordingError.finalizeFailed)
+                    print("🎬 ProgramRecorder: Writer finalization failed - status: \(writer.status.rawValue)")
+                    if let error = writer.error {
+                        print("🎬 ProgramRecorder: Writer error: \(error)")
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume(throwing: RecordingError.finalizeFailed)
+                    }
                 }
             }
         }
     }
     
     func appendVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer) async {
-        guard isRecording else { return }
+        guard isRecording && !isFinalizingWriter else { return }
         do {
             try Task.checkCancellation()
             if writer == nil {
@@ -139,18 +170,21 @@ actor ProgramRecorder {
                     updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
                 } else {
                     droppedVideoFrames += 1
+                    print("🎬 ProgramRecorder: Dropped video frame - input not ready")
                 }
             } else {
                 droppedVideoFrames += 1
+                print("🎬 ProgramRecorder: Dropped video frame - input not ready for more data")
             }
         } catch {
             lastError = error
+            print("🎬 ProgramRecorder: Video append error: \(error)")
             await stopSilentlyOnError()
         }
     }
     
     func appendAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) async {
-        guard isRecording else { return }
+        guard isRecording && !isFinalizingWriter else { return }
         do {
             try Task.checkCancellation()
             if writer == nil {
@@ -163,12 +197,15 @@ actor ProgramRecorder {
                     updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
                 } else {
                     droppedAudioFrames += 1
+                    print("🎬 ProgramRecorder: Dropped audio frame - append failed")
                 }
             } else {
                 droppedAudioFrames += 1
+                print("🎬 ProgramRecorder: Dropped audio frame - input not ready for more data")
             }
         } catch {
             lastError = error
+            print("🎬 ProgramRecorder: Audio append error: \(error)")
             await stopSilentlyOnError()
         }
     }
@@ -179,6 +216,8 @@ actor ProgramRecorder {
         let dimsOptional = formatDesc.map { CMVideoFormatDescriptionGetDimensions($0) }
         let width = Int(dimsOptional?.width ?? Int32(requestedVideoConfig.width))
         let height = Int(dimsOptional?.height ?? Int32(requestedVideoConfig.height))
+        
+        print("🎬 ProgramRecorder: Configuring writer for video - \(width)x\(height)")
         
         let writer = try AVAssetWriter(outputURL: url, fileType: pendingContainer.avFileType)
         writer.shouldOptimizeForNetworkUse = (pendingContainer == .mp4)
@@ -218,10 +257,15 @@ actor ProgramRecorder {
         
         self.writer = writer
         self.videoInput = vInput
+        
+        print("🎬 ProgramRecorder: Writer configured and started for video")
     }
     
     private func configureWriterForFirstAudioBuffer(_ sb: CMSampleBuffer) throws {
         guard let url = outputURL else { throw RecordingError.missingURL }
+        
+        print("🎬 ProgramRecorder: Configuring writer for audio")
+        
         let writer = try AVAssetWriter(outputURL: url, fileType: pendingContainer.avFileType)
         writer.shouldOptimizeForNetworkUse = (pendingContainer == .mp4)
         
@@ -239,6 +283,8 @@ actor ProgramRecorder {
         writer.startWriting()
         writer.startSession(atSourceTime: pts)
         self.startedAtCMTime = pts
+        
+        print("🎬 ProgramRecorder: Writer configured and started for audio")
     }
     
     private func maybeAddDefaultAudioInput(to writer: AVAssetWriter) throws {
@@ -246,6 +292,7 @@ actor ProgramRecorder {
         if writer.canAdd(aInput) {
             writer.add(aInput)
             self.audioInput = aInput
+            print("🎬 ProgramRecorder: Added default audio input")
         }
     }
     
@@ -285,10 +332,15 @@ actor ProgramRecorder {
     }
     
     private func stopSilentlyOnError() async {
+        guard !isFinalizingWriter else { return }
+        
+        isFinalizingWriter = true
         isRecording = false
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
         writer?.cancelWriting()
+        
+        print("🎬 ProgramRecorder: Stopped silently due to error")
     }
     
     enum RecordingError: Error {

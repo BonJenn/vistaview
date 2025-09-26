@@ -169,6 +169,12 @@ struct ContentView: View {
             await manager.initialize()
             validateProductionManagerInitialization()
 
+            await manager.connectRecordingSink(appServices.recordingService.sink())
+            
+            await MainActor.run {
+                appServices.setProductionManager(manager)
+            }
+
             await MainActor.run {
                 layerManager.setProductionManager(manager)
                 manager.externalDisplayManager.setLayerStackManager(layerManager)
