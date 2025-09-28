@@ -74,39 +74,57 @@ actor TextureToSampleBufferConverter {
     func convertTexture(_ texture: MTLTexture, timestamp: CMTime, duration: CMTime = CMTime(value: 1, timescale: 30)) async throws -> CMSampleBuffer {
         try Task.checkCancellation()
         
-        print("🎬 TextureConverter: Converting texture \(texture.width)x\(texture.height) at timestamp \(timestamp.seconds)")
+        // Use the actual texture dimensions instead of fixed target dimensions
+        let textureWidth = texture.width
+        let textureHeight = texture.height
         
-        // Get pixel buffer from pool
-        var pixelBuffer: CVPixelBuffer?
-        let pixelBufferResult = CVPixelBufferPoolCreatePixelBuffer(
-            kCFAllocatorDefault,
-            pixelBufferPool,
-            &pixelBuffer
-        )
-        
-        guard pixelBufferResult == kCVReturnSuccess, let outputPixelBuffer = pixelBuffer else {
-            throw ConversionError.pixelBufferCreationFailed
-        }
+        // Create pixel buffer with the same dimensions as the source texture
+        let pixelBuffer = try createPixelBuffer(width: textureWidth, height: textureHeight)
         
         // Lock pixel buffer for GPU access
-        CVPixelBufferLockBaseAddress(outputPixelBuffer, CVPixelBufferLockFlags(rawValue: 0))
-        defer { CVPixelBufferUnlockBaseAddress(outputPixelBuffer, CVPixelBufferLockFlags(rawValue: 0)) }
+        CVPixelBufferLockBaseAddress(pixelBuffer, CVPixelBufferLockFlags(rawValue: 0))
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, CVPixelBufferLockFlags(rawValue: 0)) }
         
         // Copy texture data directly to pixel buffer
         try await copyTextureToBGRAPixelBuffer(
             sourceTexture: texture,
-            destinationPixelBuffer: outputPixelBuffer
+            destinationPixelBuffer: pixelBuffer
         )
         
         // Create sample buffer from pixel buffer
         let sampleBuffer = try createSampleBuffer(
-            from: outputPixelBuffer,
+            from: pixelBuffer,
             timestamp: timestamp,
             duration: duration
         )
         
-        print("🎬 TextureConverter: Successfully converted texture to sample buffer")
         return sampleBuffer
+    }
+    
+    private func createPixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
+        let pixelBufferAttributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ]
+        
+        var pixelBuffer: CVPixelBuffer?
+        let result = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            pixelFormat,
+            pixelBufferAttributes as CFDictionary,
+            &pixelBuffer
+        )
+        
+        guard result == kCVReturnSuccess, let buffer = pixelBuffer else {
+            throw ConversionError.pixelBufferCreationFailed
+        }
+        
+        return buffer
     }
     
     private func copyTextureToBGRAPixelBuffer(sourceTexture: MTLTexture, destinationPixelBuffer: CVPixelBuffer) async throws {
@@ -131,8 +149,6 @@ actor TextureToSampleBufferConverter {
         let copyWidth = min(sourceTexture.width, destinationTexture.width)
         let copyHeight = min(sourceTexture.height, destinationTexture.height)
         
-        print("🎬 TextureConverter: Copying \(copyWidth)x\(copyHeight) from \(sourceTexture.width)x\(sourceTexture.height) to \(destinationTexture.width)x\(destinationTexture.height)")
-        
         // Copy texture data
         blitEncoder.copy(
             from: sourceTexture,
@@ -155,8 +171,6 @@ actor TextureToSampleBufferConverter {
         if let error = commandBuffer.error {
             throw ConversionError.metalComputeError(error.localizedDescription)
         }
-        
-        print("🎬 TextureConverter: Texture copy completed successfully")
     }
     
     private func createMetalTexture(from pixelBuffer: CVPixelBuffer, planeIndex: Int, pixelFormat: MTLPixelFormat) throws -> MTLTexture {

@@ -170,15 +170,12 @@ actor ProgramRecorder {
                     updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
                 } else {
                     droppedVideoFrames += 1
-                    print("🎬 ProgramRecorder: Dropped video frame - input not ready")
                 }
             } else {
                 droppedVideoFrames += 1
-                print("🎬 ProgramRecorder: Dropped video frame - input not ready for more data")
             }
         } catch {
             lastError = error
-            print("🎬 ProgramRecorder: Video append error: \(error)")
             await stopSilentlyOnError()
         }
     }
@@ -197,15 +194,12 @@ actor ProgramRecorder {
                     updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
                 } else {
                     droppedAudioFrames += 1
-                    print("🎬 ProgramRecorder: Dropped audio frame - append failed")
                 }
             } else {
                 droppedAudioFrames += 1
-                print("🎬 ProgramRecorder: Dropped audio frame - input not ready for more data")
             }
         } catch {
             lastError = error
-            print("🎬 ProgramRecorder: Audio append error: \(error)")
             await stopSilentlyOnError()
         }
     }

@@ -28,9 +28,12 @@ final class UnifiedProductionManager: ObservableObject {
     let deviceManager: DeviceManager
     let streamingEngine: StreamingEngine
     
-    private var recordingSink: RecordingSink?
-    private var programRecordingTask: Task<Void, Never>?
-    private var textureConverter: TextureToSampleBufferConverter?
+    private var simpleRecordingSink: SimpleRecordingSink?
+    private var microphoneAudioStream: AsyncStream<AudioProcessingResult>?
+    
+    // private var recordingSink: RecordingSink?
+    // private var programRecordingTask: Task<Void, Never>?
+    // private var textureConverter: TextureToSampleBufferConverter?
     
     // Preview/Program Manager - lazy initialized to avoid circular dependencies
     private var _previewProgramManager: PreviewProgramManager?
@@ -118,174 +121,55 @@ final class UnifiedProductionManager: ObservableObject {
         externalDisplayManager.setProductionManager(self)
     }
     
+    // SIMPLIFIED: Connect recording sink
     func connectRecordingSink(_ sink: RecordingSink) async {
-        os_log(.info, log: Self.log, "🎬 Connecting recording sink...")
-        os_log(.info, log: Self.log, "🎬 Current program state - isProgramActive: %{public}@, selectedProgramCameraID: %{public}@", 
-               isProgramActive ? "YES" : "NO", 
-               selectedProgramCameraID ?? "NONE")
+        os_log(.info, log: Self.log, "🎬 Connecting SIMPLE recording sink...")
         
-        await stopProgramRecording()  // Stop any existing recording pipeline
-        
-        self.recordingSink = sink
-        
-        // Initialize texture converter
-        do {
-            self.textureConverter = try TextureToSampleBufferConverter(device: effectManager.metalDevice)
-            os_log(.info, log: Self.log, "🎬 Texture converter initialized successfully")
-        } catch {
-            os_log(.error, log: Self.log, "🎬 Failed to initialize texture converter: %{public}@", error.localizedDescription)
-            return // Don't continue if converter fails
+        // Create simple recording sink that wraps the complex one
+        if let programFrameTap = sink as? ProgramFrameTap {
+            // Access the underlying recorder
+            let recorder = programFrameTap.recorder
+            self.simpleRecordingSink = SimpleRecordingSink(recorder: recorder)
         }
         
-        // Start program recording pipeline if program is active
-        if isProgramActive {
-            os_log(.info, log: Self.log, "🎬 Program is active, starting recording pipeline")
-            await startProgramRecording()
-        } else {
-            os_log(.info, log: Self.log, "🎬 Program is not active, recording pipeline will start when program becomes active")
+        // Start microphone capture for audio - background work
+        if microphoneAudioStream == nil {
+            do {
+                microphoneAudioStream = try await audioEngine.startMicrophoneCapture()
+                os_log(.info, log: Self.log, "🎬 Microphone capture started for recording")
+                
+                // Process microphone audio in background - detached to avoid retain cycles
+                Task.detached(priority: .userInitiated) { [audioStream = microphoneAudioStream!, simpleRecordingSink] in
+                    for await result in audioStream {
+                        if Task.isCancelled { break }
+                        
+                        if let audioBuffer = result.outputBuffer,
+                           let sink = simpleRecordingSink {
+                            // Process audio on background thread
+                            sink.appendAudio(audioBuffer)
+                        }
+                    }
+                }
+            } catch {
+                os_log(.error, log: Self.log, "🎬 Failed to start microphone capture: %{public}@", error.localizedDescription)
+            }
         }
         
-        os_log(.info, log: Self.log, "🎬 Recording sink connected successfully")
+        os_log(.info, log: Self.log, "🎬 Simple recording sink connected")
     }
     
+    // SIMPLIFIED: Disconnect recording sink
     func disconnectRecordingSink() async {
-        os_log(.info, log: Self.log, "🎬 Disconnecting recording sink...")
-        await stopProgramRecording()
-        self.recordingSink = nil
-        os_log(.info, log: Self.log, "🎬 Recording sink disconnected")
-    }
-    
-    private func startProgramRecording() async {
-        guard let sink = recordingSink else {
-            os_log(.default, log: Self.log, "🎬 Cannot start recording - missing sink")
-            return
-        }
+        os_log(.info, log: Self.log, "🎬 Disconnecting simple recording sink...")
         
-        guard let converter = textureConverter else {
-            os_log(.error, log: Self.log, "🎬 Cannot start recording - missing texture converter")
-            return
-        }
+        simpleRecordingSink?.setActive(false)
+        simpleRecordingSink = nil
         
-        await stopProgramRecording()  // Stop any existing task
+        // Stop microphone capture
+        try? await audioEngine.stopMicrophoneCapture()
+        microphoneAudioStream = nil
         
-        os_log(.info, log: Self.log, "🎬 Creating recording streams...")
-        
-        programRecordingTask = Task(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            
-            os_log(.info, log: Self.log, "🎬 Started program recording pipeline task")
-            
-            // Create a processing stream for recording
-            let recordingStream = await self.frameProcessor.createFrameStream(
-                for: "program_recording",
-                effectChain: self.effectManager.getProgramEffectChain()
-            )
-            
-            // Audio recording stream for program
-            let audioRecordingStream = await self.audioEngine.createAudioStream(for: "program_recording")
-            
-            os_log(.info, log: Self.log, "🎬 Recording streams created, starting processing...")
-            
-            // Process video frames
-            Task {
-                var videoFrameCount: Int64 = 0
-                var startTime: CMTime?
-                
-                os_log(.info, log: Self.log, "🎬 Starting video frame processing loop")
-                
-                for await result in recordingStream {
-                    if Task.isCancelled { 
-                        os_log(.info, log: Self.log, "🎬 Video processing task cancelled")
-                        break 
-                    }
-                    
-                    guard let texture = result.outputTexture else { 
-                        os_log(.debug, log: Self.log, "🎬 Recording: Received nil texture (frame %lld)", videoFrameCount)
-                        continue 
-                    }
-                    
-                    if videoFrameCount == 0 {
-                        os_log(.info, log: Self.log, "🎬 Recording: First video frame received - %dx%d", texture.width, texture.height)
-                    }
-                    
-                    do {
-                        // Use a more consistent timestamp approach
-                        let frameTimestamp: CMTime
-                        if startTime == nil {
-                            startTime = CMClockGetTime(CMClockGetHostTimeClock())
-                            os_log(.info, log: Self.log, "🎬 Recording: Started video timestamp tracking")
-                        }
-                        // Generate sequential timestamps at 30fps
-                        let frameTime = CMTime(value: videoFrameCount, timescale: 30)
-                        frameTimestamp = CMTimeAdd(startTime!, frameTime)
-                        
-                        // Convert texture to sample buffer with proper timing
-                        let sampleBuffer = try await converter.convertTexture(
-                            texture,
-                            timestamp: frameTimestamp,
-                            duration: CMTime(value: 1, timescale: 30)
-                        )
-                        
-                        // Send to recording sink
-                        sink.appendVideo(sampleBuffer)
-                        
-                        videoFrameCount += 1
-                        if videoFrameCount % 30 == 0 {  // Log every 30 frames (1 second at 30fps)
-                            let elapsed = frameTimestamp.seconds - (startTime?.seconds ?? 0)
-                            os_log(.info, log: Self.log, "🎬 Recording: %lld video frames processed (%.1fs elapsed)", videoFrameCount, elapsed)
-                        }
-                        
-                    } catch {
-                        os_log(.error, log: Self.log, "🎬 Video recording conversion error: %{public}@", error.localizedDescription)
-                    }
-                }
-                os_log(.info, log: Self.log, "🎬 Video recording processing ended after %lld frames", videoFrameCount)
-            }
-            
-            // Process audio buffers
-            Task {
-                var audioFrameCount: Int64 = 0
-                os_log(.info, log: Self.log, "🎬 Starting audio frame processing loop")
-                
-                for await result in audioRecordingStream {
-                    if Task.isCancelled { 
-                        os_log(.info, log: Self.log, "🎬 Audio processing task cancelled")
-                        break 
-                    }
-                    
-                    guard let audioBuffer = result.outputBuffer else { 
-                        os_log(.debug, log: Self.log, "🎬 Recording: Received nil audio buffer (frame %lld)", audioFrameCount)
-                        continue 
-                    }
-                    
-                    if audioFrameCount == 0 {
-                        os_log(.info, log: Self.log, "🎬 Recording: First audio frame received")
-                    }
-                    
-                    // Send audio to recording sink
-                    sink.appendAudio(audioBuffer)
-                    
-                    audioFrameCount += 1
-                    if audioFrameCount % 100 == 0 {  // Log every 100 audio frames
-                        os_log(.info, log: Self.log, "🎬 Recording: %lld audio frames processed", audioFrameCount)
-                    }
-                }
-                os_log(.info, log: Self.log, "🎬 Audio recording processing ended after %lld frames", audioFrameCount)
-            }
-            
-            os_log(.info, log: Self.log, "🎬 Program recording pipeline ended")
-        }
-        
-        os_log(.info, log: Self.log, "🎬 Program recording pipeline task created")
-    }
-    
-    private func stopProgramRecording() async {
-        programRecordingTask?.cancel()
-        programRecordingTask = nil
-        
-        // Stop the recording processing stream
-        await frameProcessor.stopFrameStream(for: "program_recording")
-        await audioEngine.stopAudioStream(for: "program_recording")
+        os_log(.info, log: Self.log, "🎬 Simple recording sink disconnected")
     }
     
     // MARK: - Program switching and binding - now async
@@ -314,7 +198,7 @@ final class UnifiedProductionManager: ObservableObject {
         
         // CRITICAL FIX: Don't cancel if we're just switching cameras during recording
         // Only cancel if we're actually stopping the program entirely
-        if recordingSink != nil {
+        if simpleRecordingSink != nil {
             os_log(.info, log: Self.log, "🎬 Recording active - gracefully switching camera without cancelling")
         } else {
             // Cancel any existing processing task only if not recording
@@ -325,12 +209,10 @@ final class UnifiedProductionManager: ObservableObject {
         
         // Start video processing task
         programProcessingTask = Task(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
+            guard let self = self else { return }
             
             do {
                 try Task.checkCancellation()
-                
-                os_log(.info, log: Self.log, "🎥 CREATING camera capture session for program")
                 
                 // Create camera capture session through device manager
                 let captureSession = try await self.deviceManager.createCameraCaptureSession(for: cameraID)
@@ -341,80 +223,78 @@ final class UnifiedProductionManager: ObservableObject {
                     effectChain: self.effectManager.getProgramEffectChain()
                 )
                 
-                os_log(.info, log: Self.log, "🎥 PROGRAM PROCESSING STREAMS CREATED SUCCESSFULLY")
-                
-                // Process frames from camera
+                // Process frames from camera - background work
                 let sampleBufferStream = await captureSession.sampleBuffers()
                 
-                // Submit frames to processor
-                Task {
+                // Submit frames to processor on background
+                Task.detached(priority: .userInitiated) { [weak self, frameProcessor = self.frameProcessor, simpleRecordingSink = self.simpleRecordingSink] in
                     var frameCount: Int64 = 0
-                    os_log(.info, log: Self.log, "🎥 STARTING program video processing loop")
                     for await sampleBuffer in sampleBufferStream {
-                        if Task.isCancelled {
-                            os_log(.info, log: Self.log, "🎥 Program video processing CANCELLED after %lld frames", frameCount)
-                            break
-                        }
+                        if Task.isCancelled { break }
                         
                         // Extract pixel buffer and submit for processing
                         if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
                             let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                            try? await self.frameProcessor.submitFrame(pixelBuffer, for: "program", timestamp: timestamp)
-                            
-                            // ALSO: Submit to recording processing stream if recording
-                            if self.recordingSink != nil {
-                                try? await self.frameProcessor.submitFrame(pixelBuffer, for: "program_recording", timestamp: timestamp)
-                                if frameCount % 30 == 0 {
-                                    os_log(.info, log: Self.log, "🎬 MAIN PROGRAM: Submitted frame %lld to recording stream (recordingSink connected)", frameCount)
-                                }
-                            }
-                            
+                            try? await frameProcessor.submitFrame(pixelBuffer, for: "program", timestamp: timestamp)
                             frameCount += 1
-                            if frameCount % 30 == 0 {  // Log every 30 frames
-                                os_log(.info, log: Self.log, "🎥 Processed %lld program video frames (recordingSink: %{public}@)", frameCount, self.recordingSink != nil ? "connected" : "nil")
-                            }
                         }
                     }
-                    os_log(.info, log: Self.log, "🎥 PROGRAM VIDEO processing ended after %lld frames", frameCount)
                 }
                 
-                // Update UI with processed frames
-                var uiFrameCount: Int64 = 0
-                os_log(.info, log: Self.log, "🎥 STARTING program UI update loop")
-                for await result in processingStream {
-                    if Task.isCancelled {
-                        os_log(.info, log: Self.log, "🎥 Program UI update processing CANCELLED after %lld frames", uiFrameCount)
-                        break
-                    }
+                // UI updates on MainActor - separate task
+                Task { [weak self] in
+                    guard let self = self else { return }
+                    var uiFrameCount: Int64 = 0
                     
-                    await MainActor.run {
-                        self.programCurrentTexture = result.outputTexture
-                        self.objectWillChange.send()
-                    }
-                    
-                    uiFrameCount += 1
-                    if uiFrameCount % 30 == 0 {  // Log every 30 UI updates
-                        let hasTexture = result.outputTexture != nil
-                        os_log(.debug, log: Self.log, "🎥 UI updated %lld times, has texture: %{public}@", uiFrameCount, hasTexture ? "YES" : "NO")
+                    for await result in processingStream {
+                        if Task.isCancelled { break }
+                        
+                        // FIXED: Proper MainActor isolation and weak self
+                        if let texture = result.outputTexture {
+                            await MainActor.run { [weak self] in
+                                guard let self = self else { return }
+                                
+                                // Release previous texture before assigning new one
+                                self.programCurrentTexture = nil
+                                self.programCurrentTexture = texture
+                                self.objectWillChange.send()
+                            }
+                            
+                            // FIXED: Send to recording on background thread with proper memory management
+                            if let sink = self.simpleRecordingSink {
+                                let timestamp = CMTime(value: Int64(uiFrameCount), timescale: 30)
+                                // Capture texture locally to avoid retaining self
+                                Task.detached { [sink, texture, timestamp] in
+                                    sink.appendVideoTexture(texture, timestamp: timestamp)
+                                }
+                            }
+                        } else {
+                            // Clear texture when nil
+                            await MainActor.run { [weak self] in
+                                self?.programCurrentTexture = nil
+                                self?.objectWillChange.send()
+                            }
+                        }
+                        
+                        uiFrameCount += 1
                     }
                 }
-                
-                os_log(.info, log: Self.log, "🎥 PROGRAM UI processing ended after %lld frames", uiFrameCount)
                 
             } catch is CancellationError {
-                os_log(.info, log: Self.log, "🎥 PROGRAM PROCESSING WAS CANCELLED")
-                // Don't set program inactive during cancellation since we might be switching cameras
+                // Clean up on cancellation
+                await MainActor.run { [weak self] in
+                    self?.programCurrentTexture = nil
+                }
             } catch {
-                os_log(.error, log: Self.log, "🎥 PROGRAM PROCESSING FAILED: %{public}@", error.localizedDescription)
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    self.programCurrentTexture = nil
                     self.log("Program capture failed: \(error.localizedDescription)")
                 }
-                // Use Task to handle async call
-                Task { await self.setProgramActive(false) }
             }
         }
         
-        // Start separate audio processing task for program audio
+        // MAKE SURE: Start separate audio processing task for program audio
         await startProgramAudioProcessing()
     }
     
@@ -428,8 +308,6 @@ final class UnifiedProductionManager: ObservableObject {
             guard let self else { return }
             
             do {
-                os_log(.info, log: Self.log, "🎤 Starting program audio processing")
-                
                 // Start microphone capture for program audio
                 let micStream = try await self.audioEngine.startMicrophoneCapture()
                 
@@ -437,13 +315,9 @@ final class UnifiedProductionManager: ObservableObject {
                 let programAudioStream = await self.audioEngine.createAudioStream(for: "program")
                 
                 var audioFrameCount: Int64 = 0
-                os_log(.info, log: Self.log, "🎤 STARTING program audio processing loop")
                 
                 for await result in micStream {
-                    if Task.isCancelled {
-                        os_log(.info, log: Self.log, "🎤 Program audio processing CANCELLED after %lld frames", audioFrameCount)
-                        break
-                    }
+                    if Task.isCancelled { break }
                     
                     guard let audioBuffer = result.outputBuffer else { continue }
                     
@@ -451,64 +325,34 @@ final class UnifiedProductionManager: ObservableObject {
                         // Submit to main program audio processing
                         try await self.audioEngine.submitAudioBuffer(audioBuffer, for: "program")
                         
-                        // ALSO: Submit to recording audio processing if recording
-                        if self.recordingSink != nil {
-                            try await self.audioEngine.submitAudioBuffer(audioBuffer, for: "program_recording")
-                        }
-                        
                         audioFrameCount += 1
-                        if audioFrameCount % 100 == 0 {  // Log every 100 audio frames
-                            os_log(.debug, log: Self.log, "🎤 Processed %lld program audio frames", audioFrameCount)
-                        }
                     } catch {
+                        // Keep only error logs
                         os_log(.error, log: Self.log, "🎤 Failed to process program audio: %{public}@", error.localizedDescription)
                     }
                 }
                 
-                os_log(.info, log: Self.log, "🎤 PROGRAM AUDIO processing ended after %lld frames", audioFrameCount)
-                
             } catch is CancellationError {
-                os_log(.info, log: Self.log, "🎤 PROGRAM AUDIO PROCESSING WAS CANCELLED")
+                // Silence - no logging for cancellation
             } catch {
                 os_log(.error, log: Self.log, "🎤 PROGRAM AUDIO PROCESSING FAILED: %{public}@", error.localizedDescription)
             }
         }
     }
     
-    private func stopProgramAudioProcessing() async {
-        programAudioTask?.cancel()
-        programAudioTask = nil
-        
-        // Stop microphone capture
-        try? await audioEngine.stopMicrophoneCapture()
-        
-        // Stop program audio stream
-        await audioEngine.stopAudioStream(for: "program")
-    }
-    
+    // SIMPLIFIED: Set program active state
     private func setProgramActive(_ active: Bool) async {
         await MainActor.run {
             if self.isProgramActive != active {
                 self.isProgramActive = active
                 os_log(.info, log: Self.log, "🎥 PROGRAM ACTIVE STATE CHANGED: %{public}@", active ? "ACTIVE" : "INACTIVE")
-                os_log(.info, log: Self.log, "🎬 Recording sink connected: %{public}@", self.recordingSink != nil ? "YES" : "NO")
                 
-                // Notify recording service of availability change
+                // Notify recording service
                 AppServices.shared.recordingService.updateAvailability(isProgramActive: active)
                 
-                if active {
-                    // Start recording pipeline if sink is connected
-                    if self.recordingSink != nil {
-                        os_log(.info, log: Self.log, "🎬 Program became active - starting recording pipeline")
-                        Task { await self.startProgramRecording() }
-                    }
-                } else {
-                    // Stop recording pipeline
-                    os_log(.info, log: Self.log, "🎬 Program became inactive - stopping recording pipeline")
-                    Task { 
-                        await self.stopProgramRecording()
-                        await self.stopProgramAudioProcessing()
-                    }
+                // Control recording sink
+                if let sink = self.simpleRecordingSink {
+                    sink.setActive(active)
                 }
             }
         }
@@ -671,17 +515,39 @@ final class UnifiedProductionManager: ObservableObject {
     // MARK: - Cleanup
     
     func cleanup() async {
-        await stopProgramRecording()
-        await stopProgramAudioProcessing()
+        // Stop recording first
         await disconnectRecordingSink()
         
+        // Cancel all tasks with proper cleanup
         programProcessingTask?.cancel()
         previewProcessingTask?.cancel()
         programAudioTask?.cancel()
         
+        // Wait for tasks to complete and release resources
+        if let task = programProcessingTask {
+            _ = await task.result
+        }
+        if let task = previewProcessingTask {
+            _ = await task.result
+        }
+        if let task = programAudioTask {
+            _ = await task.result
+        }
+        
         programProcessingTask = nil
         previewProcessingTask = nil
         programAudioTask = nil
+        
+        // Clear all textures on MainActor to free GPU memory
+        await MainActor.run {
+            self.programCurrentTexture = nil
+            self.previewCurrentTexture = nil
+            self.objectWillChange.send()
+        }
+        
+        // Force memory cleanup
+        simpleRecordingSink = nil
+        microphoneAudioStream = nil
     }
     
     // MARK: - Studio Management (unchanged)
