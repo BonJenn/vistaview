@@ -122,7 +122,6 @@ final class PreviewProgramManager: ObservableObject {
     @Published var previewAspect: CGFloat = 16.0/9.0
     @Published var programAspect: CGFloat = 16.0/9.0
 
-    // CHANGE: Studio Mode toggle (Preview UI/pipeline opt-in). Default off to match Gaming template behavior.
     @Published var studioModeEnabled: Bool = false
     
     var previewSourceDisplayName: String {
@@ -154,7 +153,9 @@ final class PreviewProgramManager: ObservableObject {
     private var programSeekTarget: Double?
     private var previewSuppressObserverUntil: CFTimeInterval = 0
     private var programSuppressObserverUntil: CFTimeInterval = 0
-    
+
+    @Published var programItemVideoOutput: AVPlayerItemVideoOutput?
+
     init(cameraFeedManager: CameraFeedManager,
          unifiedProductionManager: UnifiedProductionManager,
          effectManager: EffectManager,
@@ -205,7 +206,6 @@ final class PreviewProgramManager: ObservableObject {
         programPlayer = nil
     }
     
-    // ADD: Studio Mode API
     func setStudioModeEnabled(_ enabled: Bool) {
         guard studioModeEnabled != enabled else { return }
         studioModeEnabled = enabled
@@ -234,7 +234,6 @@ final class PreviewProgramManager: ObservableObject {
     }
     
     func loadToPreview(_ source: ContentSource) {
-        // ADD: In non-Studio mode, route preview requests directly to Program to keep the pipeline lean.
         if !studioModeEnabled {
             loadToProgram(source)
             return
@@ -893,6 +892,7 @@ final class PreviewProgramManager: ObservableObject {
         playerItem.add(output)
         output.suppressesPlayerRendering = true
         output.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.03)
+        self.programItemVideoOutput = output
 
         let player = AVPlayer(playerItem: playerItem)
         player.automaticallyWaitsToMinimizeStalling = false
@@ -1088,6 +1088,7 @@ final class PreviewProgramManager: ObservableObject {
         programSeekTarget = nil
         programSuppressObserverUntil = 0
         removeProgramTimeObserver()
+        programItemVideoOutput = nil
     }
     
     private func removePreviewTimeObserver() {

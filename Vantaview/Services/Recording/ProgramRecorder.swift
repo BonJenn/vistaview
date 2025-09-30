@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CoreMedia
+import CoreVideo
 import UniformTypeIdentifiers
 
 actor ProgramRecorder {
@@ -53,13 +54,21 @@ actor ProgramRecorder {
         }
     }
     
+    // State
     private(set) var isRecording = false
     private(set) var outputURL: URL?
     private(set) var lastError: Error?
     private(set) var startedAtCMTime: CMTime?
     
     private var isFinalizingWriter = false
+    private var sessionStarted = false
+    private var hasReceivedFrames = false
     
+    // Diagnostics
+    private(set) var totalVideoFramesReceived: Int64 = 0
+    private(set) var totalAudioFramesReceived: Int64 = 0
+    private(set) var totalVideoFramesWritten: Int64 = 0
+    private(set) var totalAudioFramesWritten: Int64 = 0
     private(set) var droppedVideoFrames = 0
     private(set) var droppedAudioFrames = 0
     private(set) var averageWriteLatencyMs: Double = 0
@@ -68,150 +77,343 @@ actor ProgramRecorder {
     private var lastBitrateSampleTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
     private(set) var estimatedBitrateBps: Double = 0
     
+    // Writer
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
     private var audioInput: AVAssetWriterInput?
+    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     
+    // Configuration
     private var pendingContainer: Container = .mov
     private var requestedVideoConfig: VideoConfig = .default()
     private var requestedAudioConfig: AudioConfig = .default()
+    
+    // Internal queues (actor-protected)
+    private var videoQueue: [(CVPixelBuffer, CMTime)] = []
+    private var audioQueue: [CMSampleBuffer] = []
+    private var drainingVideoTask: Task<Void, Never>?
+    private var drainingAudioTask: Task<Void, Never>?
+    private var drainingVideo = false
+    private var drainingAudio = false
+    
+    // MARK: - Lifecycle
     
     func start(url: URL, container: Container = .mov, requestedVideo: VideoConfig = .default(), requestedAudio: AudioConfig = .default()) async throws {
         try Task.checkCancellation()
         guard !isRecording else { return }
         
-        // Reset finalization state
-        isFinalizingWriter = false
+        let preparedURL = try await prepareOutputURL(url)
+        print("🎬 ProgramRecorder: STARTING RECORDING SESSION")
+        print("🎬 ProgramRecorder: Output path: \(preparedURL.path)")
+        print("🎬 ProgramRecorder: Container: \(container)")
+        print("🎬 ProgramRecorder: Video config: \(requestedVideo.width)x\(requestedVideo.height) @\(requestedVideo.fps)fps")
+        print("🎬 ProgramRecorder: Audio config: \(requestedAudio.sampleRate)Hz \(requestedAudio.channels)ch")
         
-        self.lastError = nil
-        self.outputURL = url
-        self.pendingContainer = container
-        self.requestedVideoConfig = requestedVideo
-        self.requestedAudioConfig = requestedAudio
-        self.droppedVideoFrames = 0
-        self.droppedAudioFrames = 0
-        self.averageWriteLatencyMs = 0
-        self.writeMeasurementsCount = 0
-        self.bytesWritten = 0
-        self.estimatedBitrateBps = 0
-        self.lastBitrateSampleTime = CFAbsoluteTimeGetCurrent()
-        self.startedAtCMTime = nil
+        // Reset state
+        isFinalizingWriter = false
+        sessionStarted = false
+        hasReceivedFrames = false
+        totalVideoFramesReceived = 0
+        totalAudioFramesReceived = 0
+        totalVideoFramesWritten = 0
+        totalAudioFramesWritten = 0
+        droppedVideoFrames = 0
+        droppedAudioFrames = 0
+        averageWriteLatencyMs = 0
+        writeMeasurementsCount = 0
+        bytesWritten = 0
+        estimatedBitrateBps = 0
+        lastBitrateSampleTime = CFAbsoluteTimeGetCurrent()
+        startedAtCMTime = nil
+        videoQueue.removeAll()
+        audioQueue.removeAll()
+        drainingVideoTask?.cancel()
+        drainingAudioTask?.cancel()
+        drainingVideoTask = nil
+        drainingAudioTask = nil
+        drainingVideo = false
+        drainingAudio = false
+        
+        lastError = nil
+        outputURL = preparedURL
+        pendingContainer = container
+        requestedVideoConfig = requestedVideo
+        requestedAudioConfig = requestedAudio
         
         isRecording = true
+        print("🎬 ProgramRecorder: Recording session initialized, waiting for first frame…")
+    }
+    
+    private func prepareOutputURL(_ url: URL) async throws -> URL {
+        let fileManager = FileManager.default
+        let parentDir = url.deletingLastPathComponent()
         
-        print("🎬 ProgramRecorder: Started recording to \(url.lastPathComponent)")
+        print("🎬 ProgramRecorder: Preparing output URL: \(url.path)")
+        if !fileManager.fileExists(atPath: parentDir.path) {
+            try fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true, attributes: nil)
+        }
+        
+        if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+        
+        // Probe write access
+        try Data().write(to: url)
+        try fileManager.removeItem(at: url)
+        
+        return url
     }
     
     func stopAndFinalize() async throws -> URL {
         try Task.checkCancellation()
         
-        // Prevent multiple finalization attempts
+        print("🎬 ProgramRecorder: STOPPING RECORDING SESSION")
+        print("🎬 ProgramRecorder: Current state - isRecording: \(isRecording), hasReceivedFrames: \(hasReceivedFrames)")
+        print("🎬 ProgramRecorder: Frame counts - Video: \(totalVideoFramesWritten), Audio: \(totalAudioFramesWritten)")
+        
         guard !isFinalizingWriter else {
-            print("🎬 ProgramRecorder: Already finalizing, waiting...")
-            // Return existing URL if available
-            if let url = outputURL {
-                return url
-            }
+            if let url = outputURL { return url }
             throw RecordingError.finalizeFailed
         }
-        
         guard isRecording else {
-            if let url = outputURL {
-                return url
-            }
+            if let url = outputURL { return url }
             throw RecordingError.notRecording
         }
         
         isFinalizingWriter = true
         isRecording = false
         
-        print("🎬 ProgramRecorder: Stopping and finalizing recording...")
+        drainingVideoTask?.cancel()
+        drainingAudioTask?.cancel()
+        drainingVideoTask = nil
+        drainingAudioTask = nil
+        drainingVideo = false
+        drainingAudio = false
         
         guard let writer = writer else {
+            print("🎬 ProgramRecorder: No writer created, no file to finalize")
             guard let url = outputURL else { throw RecordingError.noWriter }
             return url
         }
         
-        // Mark inputs as finished
+        guard hasReceivedFrames else {
+            print("🎬 ProgramRecorder: No frames received, cancelling writer")
+            writer.cancelWriting()
+            throw RecordingError.noFramesReceived
+        }
+        
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
         
-        print("🎬 ProgramRecorder: Inputs marked as finished, finalizing writer...")
-        
-        return try await withCheckedThrowingContinuation { [writer] (cont: CheckedContinuation<URL, Error>) in
+        return try await withCheckedThrowingContinuation { cont in
             writer.finishWriting {
                 if writer.status == .completed {
-                    print("🎬 ProgramRecorder: Writer finalized successfully")
                     cont.resume(returning: writer.outputURL)
                 } else {
-                    print("🎬 ProgramRecorder: Writer finalization failed - status: \(writer.status.rawValue)")
-                    if let error = writer.error {
-                        print("🎬 ProgramRecorder: Writer error: \(error)")
-                        cont.resume(throwing: error)
-                    } else {
-                        cont.resume(throwing: RecordingError.finalizeFailed)
-                    }
+                    cont.resume(throwing: writer.error ?? RecordingError.finalizeFailed)
                 }
             }
         }
     }
     
+    // MARK: - Public Ingest
+    
     func appendVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer) async {
         guard isRecording && !isFinalizingWriter else { return }
-        do {
-            try Task.checkCancellation()
-            if writer == nil {
-                try configureWriterForFirstVideoBuffer(sampleBuffer)
-            }
-            guard let videoInput = videoInput else { return }
-            if videoInput.isReadyForMoreMediaData {
-                let t0 = CFAbsoluteTimeGetCurrent()
-                if videoInput.append(sampleBuffer) {
-                    updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
-                } else {
-                    droppedVideoFrames += 1
-                }
-            } else {
-                droppedVideoFrames += 1
-            }
-        } catch {
-            lastError = error
-            await stopSilentlyOnError()
+        totalVideoFramesReceived &+= 1
+        
+        guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            droppedVideoFrames &+= 1
+            return
         }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        await appendVideoPixelBuffer(pb, presentationTime: pts)
     }
     
     func appendAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) async {
         guard isRecording && !isFinalizingWriter else { return }
+        totalAudioFramesReceived &+= 1
+        
         do {
             try Task.checkCancellation()
             if writer == nil {
-                try configureWriterForFirstAudioBuffer(sampleBuffer)
+                try configureWriterForAudioOnly()
             }
-            guard let audioInput = audioInput else { return }
-            if audioInput.isReadyForMoreMediaData {
-                let t0 = CFAbsoluteTimeGetCurrent()
-                if audioInput.append(sampleBuffer) {
-                    updatePostWriteMetrics(t0: t0, buffer: sampleBuffer)
-                } else {
-                    droppedAudioFrames += 1
-                }
-            } else {
-                droppedAudioFrames += 1
-            }
+            audioQueue.append(sampleBuffer)
+            startAudioDrainIfNeeded()
         } catch {
             lastError = error
             await stopSilentlyOnError()
         }
     }
     
-    private func configureWriterForFirstVideoBuffer(_ sb: CMSampleBuffer) throws {
-        guard let url = outputURL else { throw RecordingError.missingURL }
-        let formatDesc = CMSampleBufferGetFormatDescription(sb)
-        let dimsOptional = formatDesc.map { CMVideoFormatDescriptionGetDimensions($0) }
-        let width = Int(dimsOptional?.width ?? Int32(requestedVideoConfig.width))
-        let height = Int(dimsOptional?.height ?? Int32(requestedVideoConfig.height))
+    func appendVideoPixelBuffer(_ pixelBuffer: CVPixelBuffer, presentationTime: CMTime) async {
+        guard isRecording && !isFinalizingWriter else { return }
+        totalVideoFramesReceived &+= 1
         
-        print("🎬 ProgramRecorder: Configuring writer for video - \(width)x\(height)")
+        do {
+            try Task.checkCancellation()
+            if writer == nil {
+                try configureWriterForFirstVideoPixelBuffer(pixelBuffer)
+            } else if videoInput == nil {
+                try addVideoInputToExistingWriter(for: pixelBuffer)
+            }
+            if !sessionStarted {
+                try startSession(at: presentationTime)
+            }
+            videoQueue.append((pixelBuffer, presentationTime))
+            startVideoDrainIfNeeded()
+        } catch {
+            lastError = error
+            await stopSilentlyOnError()
+        }
+    }
+    
+    // MARK: - Drainers (no AVAssetWriterInput callbacks)
+    
+    private func startVideoDrainIfNeeded() {
+        guard let input = videoInput, let adaptor = pixelBufferAdaptor else { return }
+        if drainingVideoTask != nil { return }
+        drainingVideo = true
+        drainingVideoTask = Task.detached(priority: .userInitiated) { [weak self, input, adaptor] in
+            guard let self else { return }
+            while await self.shouldKeepDrainingVideo() {
+                // Wait until the input is ready without using 'await' in an autoclosure
+                while true {
+                    if input.isReadyForMoreMediaData { break }
+                    let keep = await self.shouldKeepDrainingVideo()
+                    if !keep { break }
+                    try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+                }
+
+                var processed = 0
+                while input.isReadyForMoreMediaData {
+                    let next: (CVPixelBuffer, CMTime)? = await self.popNextVideo()
+                    guard let (pb, ts) = next else { break }
+                    let ok = adaptor.append(pb, withPresentationTime: ts)
+                    await self.afterVideoAppend(ok: ok, ts: ts)
+                    processed &+= 1
+                }
+
+                if processed == 0 {
+                    try? await Task.sleep(nanoseconds: 5_000_000) // 5ms
+                }
+            }
+            await self.endVideoDrain()
+        }
+    }
+    
+    private func startAudioDrainIfNeeded() {
+        guard let input = audioInput else { return }
+        if drainingAudioTask != nil { return }
+        drainingAudio = true
+        drainingAudioTask = Task.detached(priority: .userInitiated) { [weak self, input] in
+            guard let self else { return }
+            while await self.shouldKeepDrainingAudio() {
+                // Wait until the input is ready without using 'await' in an autoclosure
+                while true {
+                    if input.isReadyForMoreMediaData { break }
+                    let keep = await self.shouldKeepDrainingAudio()
+                    if !keep { break }
+                    try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+                }
+
+                var processed = 0
+                while input.isReadyForMoreMediaData {
+                    let next: CMSampleBuffer? = await self.popNextAudio()
+                    guard let sb = next else { break }
+                    let t0 = CFAbsoluteTimeGetCurrent()
+                    let ok = input.append(sb)
+                    await self.afterAudioAppend(ok: ok, t0: t0, buffer: sb)
+                    processed &+= 1
+                }
+
+                if processed == 0 {
+                    try? await Task.sleep(nanoseconds: 5_000_000) // 5ms
+                }
+            }
+            await self.endAudioDrain()
+        }
+    }
+
+    private func shouldKeepDrainingVideo() async -> Bool {
+        return drainingVideo && isRecording && !isFinalizingWriter
+    }
+
+    private func shouldKeepDrainingAudio() async -> Bool {
+        return drainingAudio && isRecording && !isFinalizingWriter
+    }
+    
+    // Helpers for drainers (actor-isolated)
+    private func popNextVideo() -> (CVPixelBuffer, CMTime)? {
+        if videoQueue.isEmpty { return nil }
+        return videoQueue.removeFirst()
+    }
+    private func popNextAudio() -> CMSampleBuffer? {
+        if audioQueue.isEmpty { return nil }
+        return audioQueue.removeFirst()
+    }
+    private func afterVideoAppend(ok: Bool, ts: CMTime) {
+        if ok {
+            totalVideoFramesWritten &+= 1
+            if !hasReceivedFrames {
+                hasReceivedFrames = true
+            }
+        } else {
+            droppedVideoFrames &+= 1
+        }
+    }
+    private func afterAudioAppend(ok: Bool, t0: CFAbsoluteTime, buffer: CMSampleBuffer) {
+        if ok {
+            totalAudioFramesWritten &+= 1
+            if !hasReceivedFrames {
+                hasReceivedFrames = true
+            }
+            // Diagnostics
+            let dt = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
+            writeMeasurementsCount &+= 1
+            averageWriteLatencyMs = averageWriteLatencyMs + (dt - averageWriteLatencyMs) / Double(max(writeMeasurementsCount, 1))
+            if let dataBuffer = CMSampleBufferGetDataBuffer(buffer) {
+                let byteCount = CMBlockBufferGetDataLength(dataBuffer)
+                bytesWritten &+= Int64(byteCount)
+            }
+            let now = CFAbsoluteTimeGetCurrent()
+            let elapsed = now - lastBitrateSampleTime
+            if elapsed >= 1.0 {
+                estimatedBitrateBps = Double(bytesWritten) * 8.0 / elapsed
+                bytesWritten = 0
+                lastBitrateSampleTime = now
+            }
+        } else {
+            droppedAudioFrames &+= 1
+        }
+    }
+    private func endVideoDrain() {
+        drainingVideoTask = nil
+        drainingVideo = false
+    }
+    private func endAudioDrain() {
+        drainingAudioTask = nil
+        drainingAudio = false
+    }
+    
+    // MARK: - Session & Config
+    
+    private func startSession(at pts: CMTime) throws {
+        guard let writer = writer, !sessionStarted else { return }
+        guard writer.status == .writing else {
+            throw writer.error ?? RecordingError.finalizeFailed
+        }
+        writer.startSession(atSourceTime: pts)
+        sessionStarted = true
+        startedAtCMTime = pts
+    }
+    
+    private func configureWriterForFirstVideoPixelBuffer(_ pb: CVPixelBuffer) throws {
+        guard let url = outputURL else { throw RecordingError.missingURL }
+        let width = CVPixelBufferGetWidth(pb)
+        let height = CVPixelBufferGetHeight(pb)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pb)
         
         let writer = try AVAssetWriter(outputURL: url, fileType: pendingContainer.avFileType)
         writer.shouldOptimizeForNetworkUse = (pendingContainer == .mp4)
@@ -233,52 +435,83 @@ actor ProgramRecorder {
         ]
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         vInput.expectsMediaDataInRealTime = true
+        guard writer.canAdd(vInput) else { throw RecordingError.cannotAddVideoInput }
+        writer.add(vInput)
         
-        if writer.canAdd(vInput) {
-            writer.add(vInput)
-        } else {
-            throw RecordingError.cannotAddVideoInput
-        }
+        let adaptorAttrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vInput, sourcePixelBufferAttributes: adaptorAttrs)
         
         if audioInput == nil {
             try maybeAddDefaultAudioInput(to: writer)
         }
         
-        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
         writer.startWriting()
-        writer.startSession(atSourceTime: pts)
-        self.startedAtCMTime = pts
-        
-        self.writer = writer
-        self.videoInput = vInput
-        
-        print("🎬 ProgramRecorder: Writer configured and started for video")
-    }
-    
-    private func configureWriterForFirstAudioBuffer(_ sb: CMSampleBuffer) throws {
-        guard let url = outputURL else { throw RecordingError.missingURL }
-        
-        print("🎬 ProgramRecorder: Configuring writer for audio")
-        
-        let writer = try AVAssetWriter(outputURL: url, fileType: pendingContainer.avFileType)
-        writer.shouldOptimizeForNetworkUse = (pendingContainer == .mp4)
-        
-        let aInput = try buildAudioInput()
-        if writer.canAdd(aInput) {
-            writer.add(aInput)
-        } else {
-            throw RecordingError.cannotAddAudioInput
+        if writer.status == .failed {
+            throw writer.error ?? RecordingError.finalizeFailed
         }
         
         self.writer = writer
-        self.audioInput = aInput
+        self.videoInput = vInput
+        self.pixelBufferAdaptor = adaptor
+    }
+    
+    private func addVideoInputToExistingWriter(for pb: CVPixelBuffer) throws {
+        guard let writer = writer else { throw RecordingError.noWriter }
+        let width = CVPixelBufferGetWidth(pb)
+        let height = CVPixelBufferGetHeight(pb)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pb)
         
-        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        var compression: [String: Any] = [
+            AVVideoAverageBitRateKey: requestedVideoConfig.bitrate,
+            AVVideoExpectedSourceFrameRateKey: Int(requestedVideoConfig.fps),
+            AVVideoAllowFrameReorderingKey: requestedVideoConfig.allowFrameReordering
+        ]
+        if requestedVideoConfig.codec == .h264 {
+            compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
+        }
+        
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: requestedVideoConfig.codec.rawValue,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: compression
+        ]
+        let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        vInput.expectsMediaDataInRealTime = true
+        
+        guard writer.canAdd(vInput) else { throw RecordingError.cannotAddVideoInput }
+        writer.add(vInput)
+        
+        let adaptorAttrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: vInput, sourcePixelBufferAttributes: adaptorAttrs)
+        
+        self.videoInput = vInput
+        self.pixelBufferAdaptor = adaptor
+    }
+    
+    private func configureWriterForAudioOnly() throws {
+        guard let url = outputURL else { throw RecordingError.missingURL }
+        let writer = try AVAssetWriter(outputURL: url, fileType: pendingContainer.avFileType)
+        writer.shouldOptimizeForNetworkUse = (pendingContainer == .mp4)
+        let aInput = try buildAudioInput()
+        guard writer.canAdd(aInput) else { throw RecordingError.cannotAddAudioInput }
+        writer.add(aInput)
         writer.startWriting()
-        writer.startSession(atSourceTime: pts)
-        self.startedAtCMTime = pts
-        
-        print("🎬 ProgramRecorder: Writer configured and started for audio")
+        if writer.status == .failed {
+            throw writer.error ?? RecordingError.finalizeFailed
+        }
+        self.writer = writer
+        self.audioInput = aInput
     }
     
     private func maybeAddDefaultAudioInput(to writer: AVAssetWriter) throws {
@@ -286,7 +519,6 @@ actor ProgramRecorder {
         if writer.canAdd(aInput) {
             writer.add(aInput)
             self.audioInput = aInput
-            print("🎬 ProgramRecorder: Added default audio input")
         }
     }
     
@@ -307,33 +539,19 @@ actor ProgramRecorder {
         return input
     }
     
-    private func updatePostWriteMetrics(t0: CFAbsoluteTime, buffer: CMSampleBuffer) {
-        let dt = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
-        writeMeasurementsCount += 1
-        averageWriteLatencyMs = averageWriteLatencyMs + (dt - averageWriteLatencyMs) / Double(max(writeMeasurementsCount, 1))
-        
-        if let dataBuffer = CMSampleBufferGetDataBuffer(buffer) {
-            let byteCount = CMBlockBufferGetDataLength(dataBuffer)
-            bytesWritten += Int64(byteCount)
-        }
-        let now = CFAbsoluteTimeGetCurrent()
-        let elapsed = now - lastBitrateSampleTime
-        if elapsed >= 1.0 {
-            estimatedBitrateBps = Double(bytesWritten) * 8.0 / elapsed
-            bytesWritten = 0
-            lastBitrateSampleTime = now
-        }
-    }
-    
     private func stopSilentlyOnError() async {
         guard !isFinalizingWriter else { return }
-        
         isFinalizingWriter = true
         isRecording = false
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
         writer?.cancelWriting()
-        
+        drainingVideoTask?.cancel()
+        drainingAudioTask?.cancel()
+        drainingVideoTask = nil
+        drainingAudioTask = nil
+        drainingVideo = false
+        drainingAudio = false
         print("🎬 ProgramRecorder: Stopped silently due to error")
     }
     
@@ -344,5 +562,8 @@ actor ProgramRecorder {
         case cannotAddVideoInput
         case cannotAddAudioInput
         case finalizeFailed
+        case outputURLNotWritable
+        case noFramesReceived
+        case fileNotCreated
     }
 }

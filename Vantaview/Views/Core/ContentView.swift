@@ -167,14 +167,16 @@ struct ContentView: View {
         do {
             let manager = try await UnifiedProductionManager()
             await manager.initialize()
-            validateProductionManagerInitialization()
-
-            await manager.connectRecordingSink(appServices.recordingService.sink())
             
             await MainActor.run {
+                self.productionManager = manager
                 appServices.setProductionManager(manager)
+                appServices.recordingService.setProductionManager(manager)
             }
-
+            
+            validateProductionManagerInitialization()
+            await manager.connectRecordingSink(appServices.recordingService.sink())
+            
             await MainActor.run {
                 layerManager.setProductionManager(manager)
                 manager.externalDisplayManager.setLayerStackManager(layerManager)
@@ -188,7 +190,6 @@ struct ContentView: View {
                 suppressInitialAnimations = false
             }
             
-            self.productionManager = manager
         } catch {
             print("Failed to initialize production manager: \(error)")
         }
@@ -419,6 +420,8 @@ struct TopToolbarView: View {
                 .gated(.virtualSet3D, licenseManager: licenseManager)
                 
                 Button {
+                    print("[REC][UI] start tapped (if idle) / stop tapped (if recording)")
+                    print("🚨 BUTTON CLICKED! This should always appear if button works")
                     recordingService.startOrStop()
                 } label: {
                     HStack(spacing: 6) {
@@ -433,18 +436,28 @@ struct TopToolbarView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 .help(recordingService.outputURL?.lastPathComponent ?? "Start/Stop Recording")
-                .disabled(!recordingService.isRecordActionAvailable)
+                .onAppear {
+                    print("🚨 RECORD BUTTON APPEARED - Disabled: \(!recordingService.isRecordActionAvailable)")
+                    print("🚨 RecordingService values:")
+                    print("   - isRecording: \(recordingService.isRecording)")
+                    print("   - isRecordActionAvailable: \(recordingService.isRecordActionAvailable)")
+                    print("   - isEnabledByLicense: \(recordingService.isEnabledByLicense)")
+                }
+                // TEMPORARILY REMOVE: .disabled(!recordingService.isRecordActionAvailable)
             }
         }
         .padding()
         .background(TahoeDesign.Colors.surfaceLight)
         .onAppear {
+            print("🎬 UI: TopToolbarView onAppear - checking program state")
             let isActive: Bool = {
                 switch productionManager.previewProgramManager.programSource {
                 case .none: return false
                 default: return true
                 }
             }()
+            print("🎬 UI: Program is active: \(isActive)")
+            print("🎬 UI: Program source: \(productionManager.previewProgramManager.programSource)")
             recordingService.updateAvailability(isProgramActive: isActive)
         }
     }

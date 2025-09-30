@@ -12,6 +12,7 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
         case audio(CMSampleBuffer)
     }
     
+    // Expose recorder for simple sink
     let recorder: ProgramRecorder
     
     private let stream: AsyncStream<Event>
@@ -30,6 +31,7 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
         }
         self.continuation = cont
         self.workerTask = Task.detached(priority: .utility) { [stream, recorder] in
+            print("🎬 ProgramFrameTap: Worker task started")
             for await ev in stream {
                 try? Task.checkCancellation()
                 switch ev {
@@ -39,14 +41,18 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
                     await recorder.appendAudioSampleBuffer(sb)
                 }
             }
+            print("🎬 ProgramFrameTap: Worker task ended")
         }
+        print("🎬 ProgramFrameTap: Initialized")
     }
     
     deinit {
+        print("🎬 ProgramFrameTap: Deinitializing")
         stop()
     }
     
     func stop() {
+        print("🎬 ProgramFrameTap: Stopping worker task")
         continuation.finish()
         workerTask?.cancel()
         workerTask = nil
@@ -54,11 +60,17 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
     
     func appendVideo(_ sampleBuffer: CMSampleBuffer) {
         videoFrameCount += 1
+        if videoFrameCount == 1 || videoFrameCount % 150 == 0 {
+            print("🎬 ProgramFrameTap: Forwarding video frame #\(videoFrameCount)")
+        }
         continuation.yield(.video(sampleBuffer))
     }
     
     func appendAudio(_ sampleBuffer: CMSampleBuffer) {
         audioFrameCount += 1
+        if audioFrameCount == 1 || audioFrameCount % 500 == 0 {
+            print("🎬 ProgramFrameTap: Forwarding audio frame #\(audioFrameCount)")
+        }
         continuation.yield(.audio(sampleBuffer))
     }
 }
