@@ -23,10 +23,10 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
     private var videoFrameCount: Int64 = 0
     private var audioFrameCount: Int64 = 0
     
-    init(recorder: ProgramRecorder, bufferCapacity: Int = 240) {
+    init(recorder: ProgramRecorder, bufferCapacity: Int = 1024) {
         self.recorder = recorder
         var cont: AsyncStream<Event>.Continuation!
-        self.stream = AsyncStream<Event>(bufferingPolicy: .bufferingNewest(bufferCapacity)) { c in
+        self.stream = AsyncStream<Event>(bufferingPolicy: .bufferingOldest(bufferCapacity)) { c in
             cont = c
         }
         self.continuation = cont
@@ -43,7 +43,7 @@ final class ProgramFrameTap: @unchecked Sendable, RecordingSink {
             }
             print("🎬 ProgramFrameTap: Worker task ended")
         }
-        print("🎬 ProgramFrameTap: Initialized")
+        print("🎬 ProgramFrameTap: Initialized (bufferCapacity=\(bufferCapacity), policy=bufferingOldest)")
     }
     
     deinit {

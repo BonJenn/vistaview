@@ -146,8 +146,17 @@ final class UnifiedProductionManager: ObservableObject {
         self.simpleRecordingSink = SimpleRecordingSink(recorder: recorder, device: effectManager.metalDevice)
         print("🎬 UnifiedProductionManager: Created SimpleRecordingSink (GPU based)")
         
-        // Start direct recording from active program sources
-        await startDirectRecordingPipeline(recorder: recorder)
+        // For media sources, mark the segment begin and defer actual export until stop.
+        switch previewProgramManager.programSource {
+        case .media(_, let player):
+            await recorder.setSourceMode(.filePlayback)
+            if let item = player?.currentItem {
+                beginMediaSegmentCapture(for: item)
+            }
+            print("🎬 UnifiedProductionManager: Media program - deferring export to stop()")
+        default:
+            await startDirectRecordingPipeline(recorder: recorder)
+        }
         
         os_log(.info, log: Self.log, "🎬 Recording sink connected")
         print("🎬 UnifiedProductionManager: ====== RECORDING SINK CONNECTION COMPLETED ======")
@@ -173,31 +182,35 @@ final class UnifiedProductionManager: ObservableObject {
     private func startDirectRecordingPipeline(recorder: ProgramRecorder) async {
         print("🎬 UnifiedProductionManager: ====== STARTING DIRECT RECORDING PIPELINE ======")
         
-        // Determine current program source and connect directly
+        var shouldStartMic = false
+        
         switch previewProgramManager.programSource {
         case .camera(let cameraFeed):
             print("🎬 UnifiedProductionManager: Recording from CAMERA: \(cameraFeed.device.displayName)")
+            await recorder.setSourceMode(.live)
             await startCameraRecording(cameraID: cameraFeed.device.deviceID, recorder: recorder)
-            
+            shouldStartMic = true
         case .media(let mediaFile, let player):
             print("🎬 UnifiedProductionManager: Recording from MEDIA: \(mediaFile.name)")
+            await recorder.setSourceMode(.filePlayback)
             if let player = player {
                 await startMediaRecording(player: player, recorder: recorder)
             } else {
                 print("🎬 UnifiedProductionManager: ERROR - Media source has no player")
             }
-            
+            shouldStartMic = false
         case .virtual(let virtualCamera):
             print("🎬 UnifiedProductionManager: Recording from VIRTUAL CAMERA: \(virtualCamera.name)")
-            // Virtual cameras would need special handling
-            
+            await recorder.setSourceMode(.live)
+            shouldStartMic = true
         case .none:
             print("🎬 UnifiedProductionManager: ERROR - No program source active")
             return
         }
         
-        // Start microphone recording for all cases
-        await startMicrophoneRecording(recorder: recorder)
+        if shouldStartMic {
+            await startMicrophoneRecording(recorder: recorder)
+        }
         
         print("🎬 UnifiedProductionManager: ====== DIRECT RECORDING PIPELINE STARTED ======")
     }
@@ -256,71 +269,99 @@ final class UnifiedProductionManager: ObservableObject {
     }
     
     private func startMediaRecording(player: AVPlayer, recorder: ProgramRecorder) async {
-        print("🎬 UnifiedProductionManager: Starting media recording from AVPlayer")
-        
-        // For media recording, we need to get the AVPlayerItemVideoOutput
+        print("🎬 UnifiedProductionManager: Starting media recording from AVPlayer (host-time anchored)")
+
         guard let playerItem = player.currentItem else {
             print("🎬 UnifiedProductionManager: ERROR - No player item for media recording")
             return
         }
-        
-        // Find or create video output
+
+        // Determine source fps and frame duration from the asset track
+        var sourceFPS: Double = 30.0
+        var frameDuration = CMTime(value: 1, timescale: 30)
+        if let track = playerItem.asset.tracks(withMediaType: .video).first {
+            if track.nominalFrameRate > 0 {
+                sourceFPS = Double(track.nominalFrameRate)
+            }
+            if track.minFrameDuration.isValid && track.minFrameDuration.value > 0 {
+                frameDuration = track.minFrameDuration
+                sourceFPS = max(1.0, 1.0 / CMTimeGetSeconds(frameDuration))
+            }
+        }
+        await recorder.updateVideoConfig(expectedFPS: sourceFPS, allowFrameReordering: true)
+        print("🎬 UnifiedProductionManager: Media source fps: \(sourceFPS), frameDuration: \(frameDuration.seconds)s")
+
+        // Ensure we have AVPlayerItemVideoOutput
         var videoOutput: AVPlayerItemVideoOutput?
         for output in playerItem.outputs {
-            if let output = output as? AVPlayerItemVideoOutput {
-                videoOutput = output
+            if let out = output as? AVPlayerItemVideoOutput {
+                videoOutput = out
                 break
             }
         }
-        
         if videoOutput == nil {
-            print("🎬 UnifiedProductionManager: Creating new AVPlayerItemVideoOutput for recording")
             let attrs: [String: Any] = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:],
                 kCVPixelBufferMetalCompatibilityKey as String: true,
             ]
-            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
-            playerItem.add(output)
-            videoOutput = output
+            let out = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+            out.requestNotificationOfMediaDataChange(withAdvanceInterval: 0.1)
+            playerItem.add(out)
+            videoOutput = out
         }
-        
-        guard let output = videoOutput else {
+        guard let vOut = videoOutput else {
             print("🎬 UnifiedProductionManager: ERROR - Could not get video output for media recording")
             return
         }
-        
-        recordingFrameStreamTask = Task.detached(priority: .userInitiated) {
-            print("🎬 UnifiedProductionManager: Media recording task started")
-            let fps = 30.0
-            let frameInterval = 1.0 / fps
-            var frameCount: Int64 = 0
-            
+
+        // Anchor the timebase to the exact host time when record is pressed.
+        // Using player.currentTime() here is incorrect and can be offset (leading to wrong segment recorded).
+        let hostStart = CACurrentMediaTime()
+        let startItemTime = vOut.itemTime(forHostTime: hostStart)
+        print("🎬 UnifiedProductionManager: Record anchors - hostStart=\(hostStart), startItemTime=\(startItemTime.seconds)s (ts=\(startItemTime.timescale))")
+
+        let videoTask = Task.detached(priority: .userInitiated) {
+            print("🎬 UnifiedProductionManager: Media video recording task started (host-time anchored)")
+            let pollInterval = max(0.002, (1.0 / max(1.0, sourceFPS)) / 2.0)
+            let intervalNs = UInt64(pollInterval * 1_000_000_000.0)
+            var appended: Int64 = 0
+
             while !Task.isCancelled {
-                let hostTime = CACurrentMediaTime()
-                let itemTime = output.itemTime(forHostTime: hostTime)
-                
-                if output.hasNewPixelBuffer(forItemTime: itemTime),
-                   let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) {
-                    
-                    frameCount += 1
-                    if frameCount == 1 {
-                        print("🎬 UnifiedProductionManager: First media frame captured for recording @\(itemTime.seconds)s")
+                let hostNow = CACurrentMediaTime()
+                var itemTime = vOut.itemTime(forHostTime: hostNow)
+
+                if vOut.hasNewPixelBuffer(forItemTime: itemTime) {
+                    var displayTime = CMTime.invalid
+                    if let pb = vOut.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) {
+                        let ts = displayTime.isValid ? displayTime : itemTime
+                        let norm = CMTimeSubtract(ts, startItemTime)
+                        if norm.value >= 0 {
+                            await recorder.appendVideoPixelBuffer(pb, presentationTime: norm)
+                            appended &+= 1
+                            if appended == 1 || appended % 60 == 0 {
+                                print("🎬 UnifiedProductionManager: Appended media frame #\(appended) at norm \(norm.seconds)s")
+                            }
+                        } else {
+                            // If negative due to pipeline latency, skip until we cross zero.
+                            if appended < 5 {
+                                print("🎬 UnifiedProductionManager: Skipping negative norm \(norm.seconds)s (ts \(ts.seconds)s < start \(startItemTime.seconds)s)")
+                            }
+                        }
                     }
-                    
-                    let presentationTime = itemTime.isValid ? itemTime : CMTime(value: frameCount, timescale: CMTimeScale(fps))
-                    await recorder.appendVideoPixelBuffer(pixelBuffer, presentationTime: presentationTime)
-                    
-                    if frameCount % 30 == 0 {
-                        print("🎬 UnifiedProductionManager: Captured \(frameCount) media frames for recording")
-                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: intervalNs)
                 }
-                
-                // Wait for next frame
-                try? await Task.sleep(nanoseconds: UInt64(frameInterval * 1_000_000_000))
             }
-            print("🎬 UnifiedProductionManager: Media recording task ended")
+            print("🎬 UnifiedProductionManager: Media video recording task ended (appended=\(appended))")
         }
+
+        self.recordingFrameStreamTask?.cancel()
+        self.recordingFrameStreamTask = videoTask
+
+        // No microphone for file playback
+        recordingAudioStreamTask?.cancel()
+        recordingAudioStreamTask = nil
     }
     
     private func startMicrophoneRecording(recorder: ProgramRecorder) async {
@@ -794,6 +835,132 @@ final class UnifiedProductionManager: ObservableObject {
     func syncVirtualToLive() { }
     func setVirtualCameraActive(_ cam: VirtualCamera) {
         studioManager.selectCamera(cam)
+    }
+
+    // MARK: - Media segment capture (file playback → exact in/out using AVAssetReader)
+    private var mediaSegmentStartItemTime: CMTime?
+    private var mediaSegmentAsset: AVAsset?
+    private var mediaSegmentPlayerItem: AVPlayerItem?
+
+    private func beginMediaSegmentCapture(for playerItem: AVPlayerItem) {
+        mediaSegmentPlayerItem = playerItem
+        mediaSegmentAsset = playerItem.asset
+        mediaSegmentStartItemTime = playerItem.currentTime()
+        print("🎬 UnifiedProductionManager: Media segment capture BEGIN at itemTime=\(mediaSegmentStartItemTime?.seconds ?? -1)")
+    }
+
+    func exportCurrentMediaSegmentIfNeeded(to recorder: ProgramRecorder) async {
+        guard let item = mediaSegmentPlayerItem,
+              let asset = mediaSegmentAsset,
+              let start = mediaSegmentStartItemTime else {
+            print("🎬 UnifiedProductionManager: No media segment to export")
+            return
+        }
+
+        let end = item.currentTime()
+        if CMTimeCompare(end, start) <= 0 {
+            print("🎬 UnifiedProductionManager: Media segment export skipped (end <= start)")
+            mediaSegmentPlayerItem = nil
+            mediaSegmentAsset = nil
+            mediaSegmentStartItemTime = nil
+            return
+        }
+
+        let duration = CMTimeSubtract(end, start)
+        print("🎬 UnifiedProductionManager: Exporting media segment start=\(start.seconds)s end=\(end.seconds)s dur=\(duration.seconds)s")
+
+        let assetCopy = asset
+        let startCopy = start
+        let durationCopy = duration
+
+        let task = Task.detached(priority: .userInitiated) {
+            do {
+                let reader = try AVAssetReader(asset: assetCopy)
+                reader.timeRange = CMTimeRange(start: startCopy, duration: durationCopy)
+
+                guard let vTrack = assetCopy.tracks(withMediaType: .video).first else {
+                    print("🎬 UnifiedProductionManager: Segment export ERROR - no video track")
+                    return
+                }
+
+                var sourceFPS: Double = 30.0
+                if vTrack.nominalFrameRate > 0 {
+                    sourceFPS = Double(vTrack.nominalFrameRate)
+                } else if vTrack.minFrameDuration.isValid && vTrack.minFrameDuration.value > 0 {
+                    sourceFPS = max(1.0, 1.0 / CMTimeGetSeconds(vTrack.minFrameDuration))
+                }
+                await recorder.setSourceMode(.filePlayback)
+                await recorder.updateVideoConfig(expectedFPS: sourceFPS, allowFrameReordering: true)
+
+                let vSettings: [String: Any] = [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+                ]
+                let vOut = AVAssetReaderTrackOutput(track: vTrack, outputSettings: vSettings)
+                vOut.alwaysCopiesSampleData = false
+                guard reader.canAdd(vOut) else {
+                    print("🎬 UnifiedProductionManager: Segment export ERROR - cannot add video output")
+                    return
+                }
+                reader.add(vOut)
+
+                var aOut: AVAssetReaderTrackOutput?
+                if let aTrack = assetCopy.tracks(withMediaType: .audio).first {
+                    let aSettings: [String: Any] = [
+                        AVFormatIDKey: kAudioFormatLinearPCM,
+                        AVSampleRateKey: 48_000,
+                        AVNumberOfChannelsKey: 2,
+                        AVLinearPCMIsFloatKey: false,
+                        AVLinearPCMBitDepthKey: 16
+                    ]
+                    let out = AVAssetReaderTrackOutput(track: aTrack, outputSettings: aSettings)
+                    out.alwaysCopiesSampleData = false
+                    if reader.canAdd(out) {
+                        reader.add(out)
+                        aOut = out
+                    }
+                }
+
+                guard reader.startReading() else {
+                    print("🎬 UnifiedProductionManager: Segment export ERROR - reader failed: \(reader.error?.localizedDescription ?? "unknown")")
+                    return
+                }
+
+                var vCount: Int64 = 0
+                while let sb = vOut.copyNextSampleBuffer() {
+                    try? Task.checkCancellation()
+                    vCount &+= 1
+                    await recorder.appendVideoSampleBuffer(sb)
+                    if vCount == 1 || vCount % 120 == 0 {
+                        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+                        print("🎬 UnifiedProductionManager: Segment video sb#\(vCount) PTS=\(pts.seconds)")
+                    }
+                }
+
+                var aCount: Int64 = 0
+                if let aOut {
+                    while let sb = aOut.copyNextSampleBuffer() {
+                        try? Task.checkCancellation()
+                        aCount &+= 1
+                        await recorder.appendAudioSampleBuffer(sb)
+                        if aCount == 1 || aCount % 300 == 0 {
+                            let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+                            print("🎬 UnifiedProductionManager: Segment audio sb#\(aCount) PTS=\(pts.seconds)")
+                        }
+                    }
+                }
+
+                print("🎬 UnifiedProductionManager: Segment export finished status=\(reader.status.rawValue) err=\(reader.error?.localizedDescription ?? "nil") v=\(vCount) a=\(aCount)")
+            } catch {
+                print("🎬 UnifiedProductionManager: Segment export ERROR - \(error.localizedDescription)")
+            }
+        }
+
+        await task.value
+
+        mediaSegmentPlayerItem = nil
+        mediaSegmentAsset = nil
+        mediaSegmentStartItemTime = nil
     }
 }
 

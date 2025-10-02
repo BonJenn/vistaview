@@ -85,77 +85,38 @@ final class RecordingService: ObservableObject {
             needsSecurityScope = true
             print("🎬 RecordingService: User selected URL: \(saveURL.path)")
             
-            // Try to access the security-scoped resource
             let hasAccess = saveURL.startAccessingSecurityScopedResource()
             print("🎬 RecordingService: Security-scoped resource access: \(hasAccess)")
-            
-            // Test access by trying to write to the location
-            do {
-                print("🎬 RecordingService: Testing write access to user-selected location...")
-                let testData = Data("test".utf8)
-                try testData.write(to: saveURL)
-                try FileManager.default.removeItem(at: saveURL)
-                print("🎬 RecordingService: ✅ User-selected location is writable")
-            } catch {
-                print("🎬 RecordingService: ❌ Cannot write to user-selected location: \(error)")
-                print("🎬 RecordingService: Falling back to Movies directory...")
-                
-                // Stop accessing the failed location
-                if hasAccess {
-                    saveURL.stopAccessingSecurityScopedResource()
-                }
-                needsSecurityScope = false
-                
-                // Fallback to Movies directory (typically accessible)
-                let moviesURL = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-                saveURL = moviesURL.appendingPathComponent(defaultName)
-                
-                // Test fallback location
-                do {
-                    let testData = Data("test".utf8)
-                    try testData.write(to: saveURL)
-                    try FileManager.default.removeItem(at: saveURL)
-                    print("🎬 RecordingService: ✅ Movies directory is writable")
-                } catch {
-                    print("🎬 RecordingService: ❌ Even Movies directory is not writable: \(error)")
-                    
-                    // Last resort: Documents directory
-                    let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                    saveURL = documentsURL.appendingPathComponent(defaultName)
-                    print("🎬 RecordingService: Final fallback to Documents: \(saveURL.path)")
-                }
-            }
         } catch {
             print("🎬 RecordingService: User cancelled file selection or error: \(error)")
             throw CancellationError()
         }
-        
         #else
         saveURL = FileManager.default.temporaryDirectory.appendingPathComponent(defaultName)
         print("🎬 RecordingService: Using temp URL: \(saveURL.path)")
         #endif
         
-        // Final verification that we can write to the chosen location
+        // Store the URL immediately so ProgramRecorder can create the writer
+        self.outputURL = saveURL
+        
+        // IMPORTANT: Start the ProgramRecorder BEFORE connecting the sink.
+        // Otherwise the ProgramRecorder has no outputURL when the program pipeline begins pushing frames,
+        // leading to missingURL/startSession failures and zero-frame files.
+        print("🎬 RecordingService: Starting ProgramRecorder FIRST (before connecting sink)")
         do {
-            print("🎬 RecordingService: Final write test for location: \(saveURL.path)")
-            let testData = Data("test".utf8)
-            try testData.write(to: saveURL)
-            try FileManager.default.removeItem(at: saveURL)
-            print("🎬 RecordingService: ✅ Final location verified writable")
+            try await recorder.start(url: saveURL, container: container)
+            print("🎬 RecordingService: ProgramRecorder started successfully")
         } catch {
-            print("🎬 RecordingService: ❌ FATAL: Cannot write to any location: \(error)")
+            print("🎬 RecordingService: FAILED to start ProgramRecorder: \(error)")
             if needsSecurityScope {
                 saveURL.stopAccessingSecurityScopedResource()
             }
-            throw NSError(domain: "RecordingService", code: -3, userInfo: [NSLocalizedDescriptionKey: "Cannot write to any accessible location: \(error.localizedDescription)"])
+            throw error
         }
         
-        // Store the URL and security scope flag
-        self.outputURL = saveURL
-        
-        // Connect recording sink
+        // Now connect the sink and start feeding frames
         if let productionManager = productionManager {
-            print("🎬 RecordingService: Production manager available, connecting recording sink...")
+            print("🎬 RecordingService: Connecting recording sink to production manager…")
             await productionManager.connectRecordingSink(self.sink())
             print("🎬 RecordingService: Recording sink connected successfully")
         } else {
@@ -166,41 +127,21 @@ final class RecordingService: ObservableObject {
             throw NSError(domain: "RecordingService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No production manager available"])
         }
         
-        print("🎬 RecordingService: Starting ProgramRecorder with URL: \(saveURL.path)")
-        print("🎬 RecordingService: Container: \(container)")
+        self.isRecording = true
+        self.startedAt = Date()
+        startTickers()
         
-        do {
-            try await recorder.start(url: saveURL, container: container)
-            print("🎬 RecordingService: ProgramRecorder started successfully")
-            
-            self.isRecording = true
-            self.startedAt = Date()
-            startTickers()
-            
-            print("🎬 RecordingService: ====== RECORDING PIPELINE FULLY STARTED ======")
-            print("🎬 RecordingService: Output file will be: \(saveURL.path)")
-            print("🎬 RecordingService: Waiting for frames to be captured and processed...")
-            
-            // Schedule a check to verify frames are being received
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                let frameCount = await self.recorder.totalVideoFramesReceived
-                let writtenCount = await self.recorder.totalVideoFramesWritten
-                print("🎬 RecordingService: 5s check - Frames received: \(frameCount), written: \(writtenCount)")
-                if frameCount == 0 {
-                    print("🎬 RecordingService: WARNING - No frames received after 5 seconds!")
-                }
-                if writtenCount == 0 {
-                    print("🎬 RecordingService: WARNING - No frames written after 5 seconds!")
-                }
-            }
-            
-        } catch {
-            print("🎬 RecordingService: FAILED to start ProgramRecorder: \(error)")
-            if needsSecurityScope {
-                saveURL.stopAccessingSecurityScopedResource()
-            }
-            throw error
+        print("🎬 RecordingService: ====== RECORDING PIPELINE FULLY STARTED ======")
+        print("🎬 RecordingService: Output file will be: \(saveURL.path)")
+        
+        // Optional 5s health check
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            let frameCount = await self.recorder.totalVideoFramesReceived
+            let writtenCount = await self.recorder.totalVideoFramesWritten
+            print("🎬 RecordingService: 5s check - Frames received: \(frameCount), written: \(writtenCount)")
+            if frameCount == 0 { print("🎬 RecordingService: WARNING - No frames received after 5 seconds!") }
+            if writtenCount == 0 { print("🎬 RecordingService: WARNING - No frames written after 5 seconds!") }
         }
     }
     
@@ -209,6 +150,20 @@ final class RecordingService: ObservableObject {
         
         print("🎬 RecordingService: ====== STOPPING RECORDING PIPELINE ======")
         stopTickers()
+
+        // If current program is media, export the exact segment [record-start .. now] before disconnect/finalize.
+        if let pm = productionManager {
+            print("🎬 RecordingService: Asking production manager to export media segment (if any)…")
+            await pm.exportCurrentMediaSegmentIfNeeded(to: recorder)
+            print("🎬 RecordingService: Media segment export complete (if any)")
+        }
+        
+        // Now cut producers to avoid new frames while we finalize
+        if let pm = productionManager {
+            print("🎬 RecordingService: Requesting production manager to disconnect recording sink…")
+            await pm.disconnectRecordingSink()
+            print("🎬 RecordingService: Production manager disconnected recording sink")
+        }
         
         do {
             let url = try await recorder.stopAndFinalize()
@@ -217,7 +172,6 @@ final class RecordingService: ObservableObject {
             
             print("🎬 RecordingService: Recording completed - reported file: \(url.path)")
             
-            // Verify final file with detailed checks
             let fileManager = FileManager.default
             print("🎬 RecordingService: Checking file existence...")
             
@@ -238,7 +192,6 @@ final class RecordingService: ObservableObject {
                 }
             } else {
                 print("🎬 RecordingService: ❌ FILE DOES NOT EXIST!")
-                print("🎬 RecordingService: Checking parent directory...")
                 let parentDir = url.deletingLastPathComponent()
                 if fileManager.fileExists(atPath: parentDir.path) {
                     print("🎬 RecordingService: Parent directory exists: \(parentDir.path)")
@@ -253,7 +206,6 @@ final class RecordingService: ObservableObject {
                 }
             }
             
-            // CRITICAL: Stop accessing security-scoped resource
             #if os(macOS)
             print("🎬 RecordingService: Stopping security-scoped resource access")
             url.stopAccessingSecurityScopedResource()
@@ -265,13 +217,11 @@ final class RecordingService: ObservableObject {
             print("🎬 RecordingService: Recording failed: \(error)")
             self.isRecording = false
             
-            // Still need to stop accessing the resource on error
             if let url = outputURL {
                 #if os(macOS)
                 url.stopAccessingSecurityScopedResource()
                 #endif
             }
-            
             return outputURL
         }
     }
@@ -331,58 +281,6 @@ final class RecordingService: ObservableObject {
         fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let stamp = fmt.string(from: Date())
         return "Recording_\(stamp).\(container.fileExtension)"
-    }
-    
-    private func primeFirstFrameIfNeeded() async {
-        guard isRecording else { return }
-        
-        // Obtain current program texture size (MainActor-only UI object)
-        let tuple: (Int, Int, Double) = await MainActor.run { [weak productionManager] () -> (Int, Int, Double) in
-            guard let pm = productionManager else {
-                return (1920, 1080, 30.0)
-            }
-            let tex = pm.previewProgramManager.programMetalTexture ?? pm.programCurrentTexture
-            let width = tex?.width ?? 1920
-            let height = tex?.height ?? 1080
-            let fps = pm.previewProgramManager.targetFPS
-            return (width, height, fps)
-        }
-        let (w, h, fps) = tuple
-        
-        let width = max(2, w)
-        let height = max(2, h)
-        let timescale = max(1, Int32(fps.rounded()))
-        let pts = CMTime(value: 0, timescale: timescale)
-        
-        do {
-            if let pb = createBlackBGRA(pixelWidth: width, pixelHeight: height) {
-                print("🎬 RecordingService: Priming writer with black frame \(width)x\(height) @\(fps)fps")
-                await recorder.appendVideoPixelBuffer(pb, presentationTime: pts)
-            } else {
-                print("🎬 RecordingService: Failed to create prime pixel buffer")
-            }
-        }
-    }
-    
-    private func createBlackBGRA(pixelWidth: Int, pixelHeight: Int) -> CVPixelBuffer? {
-        let attrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey: pixelWidth,
-            kCVPixelBufferHeightKey: pixelHeight,
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
-            kCVPixelBufferMetalCompatibilityKey: true
-        ]
-        var pb: CVPixelBuffer?
-        let r = CVPixelBufferCreate(kCFAllocatorDefault, pixelWidth, pixelHeight, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
-        guard r == kCVReturnSuccess, let buffer = pb else { return nil }
-        
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-        if let base = CVPixelBufferGetBaseAddress(buffer) {
-            let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
-            memset(base, 0, bytesPerRow * pixelHeight)
-        }
-        return buffer
     }
 }
 
