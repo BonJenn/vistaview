@@ -145,6 +145,7 @@ final class UnifiedProductionManager: ObservableObject {
         let recorder = programFrameTap.recorder
         self.simpleRecordingSink = SimpleRecordingSink(recorder: recorder, device: effectManager.metalDevice)
         print("🎬 UnifiedProductionManager: Created SimpleRecordingSink (GPU based)")
+        self.simpleRecordingSink?.setActive(true)
         
         switch previewProgramManager.programSource {
         case .media(_, let player):
@@ -168,6 +169,7 @@ final class UnifiedProductionManager: ObservableObject {
         
         simpleRecordingSink?.setActive(false)
         simpleRecordingSink = nil
+        programFrameTap?.stop()
         programFrameTap = nil
         
         try? await audioEngine.stopMicrophoneCapture()

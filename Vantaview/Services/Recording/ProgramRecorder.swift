@@ -129,7 +129,10 @@ actor ProgramRecorder {
         try Task.checkCancellation()
         guard !isRecording else { return }
         
-        // Do NOT "probe-write" here; rely on security scope from UI. Just ensure parent exists or remove pre-existing file.
+        // Full teardown of any previous session (ensures second/third recordings work reliably)
+        await teardownInternalState(reason: "begin start()")
+        
+        // Prepare URL (create parent dir, remove pre-existing file)
         let preparedURL = try await prepareOutputURL(url)
         print("🎬 ProgramRecorder: STARTING RECORDING SESSION")
         print("🎬 ProgramRecorder: Output path: \(preparedURL.path)")
@@ -157,7 +160,7 @@ actor ProgramRecorder {
         videoQueue.removeAll()
         audioQueue.removeAll()
         
-        // Cancel any previous drainers
+        // Cancel any previous drainers (double-safety)
         drainingVideoTask?.cancel()
         drainingAudioTask?.cancel()
         drainingVideoTask = nil
@@ -165,6 +168,7 @@ actor ProgramRecorder {
         drainingVideo = false
         drainingAudio = false
         
+        // Assign new config
         lastError = nil
         outputURL = preparedURL
         pendingContainer = container
@@ -228,6 +232,8 @@ actor ProgramRecorder {
         guard let writer = writer else {
             print("🎬 ProgramRecorder: No writer created, no file to finalize")
             guard let url = outputURL else { throw RecordingError.noWriter }
+            // Teardown state even if writer is nil, to avoid poisoning next session
+            await teardownInternalState(reason: "stopAndFinalize() with no writer")
             return url
         }
         
@@ -238,13 +244,15 @@ actor ProgramRecorder {
         guard hasReceivedFrames else {
             print("🎬 ProgramRecorder: No frames received, cancelling writer")
             writer.cancelWriting()
+            // Teardown internal state so next recording can start cleanly
+            await teardownInternalState(reason: "stopAndFinalize() no frames")
             throw RecordingError.noFramesReceived
         }
         
         videoInput?.markAsFinished()
         audioInput?.markAsFinished()
         
-        return try await withCheckedThrowingContinuation { cont in
+        let url: URL = try await withCheckedThrowingContinuation { cont in
             writer.finishWriting {
                 print("🎬 ProgramRecorder: finishWriting() completed with status: \(writer.status.rawValue), error: \(writer.error?.localizedDescription ?? "nil")")
                 if writer.status == .completed {
@@ -254,6 +262,10 @@ actor ProgramRecorder {
                 }
             }
         }
+        
+        // Full teardown after completion so subsequent recordings can configure a fresh writer
+        await teardownInternalState(reason: "post-finishWriting")
+        return url
     }
     
     // MARK: - Public Ingest
@@ -302,6 +314,10 @@ actor ProgramRecorder {
                 try configureWriterForFirstVideoPixelBuffer(pixelBuffer)
             } else if videoInput == nil {
                 try addVideoInputToExistingWriter(for: pixelBuffer)
+            } else if let w = writer, w.status != .writing {
+                print("🎬 ProgramRecorder: Writer status is not writing (\(w.status.rawValue)); reinitializing writer")
+                await teardownWriterOnly(reason: "writer not writing on append")
+                try configureWriterForFirstVideoPixelBuffer(pixelBuffer)
             }
             if !sessionStarted {
                 try startSession(at: presentationTime)
@@ -648,6 +664,43 @@ actor ProgramRecorder {
     private func stopSilentlyOnError() async {
         // Deprecated path: keep writer alive; just log.
         print("🎬 ProgramRecorder: stopSilentlyOnError() invoked - lastError=\(lastError?.localizedDescription ?? "nil") writerStatus=\(String(describing: writer?.status.rawValue)) writerError=\(String(describing: writer?.error?.localizedDescription))")
+    }
+    
+    // MARK: - Teardown helpers
+    
+    private func teardownWriterOnly(reason: String) async {
+        print("🎬 ProgramRecorder: Tearing down writer only (\(reason))")
+        videoInput = nil
+        audioInput = nil
+        pixelBufferAdaptor = nil
+        writer = nil
+        sessionStarted = false
+        startedAtCMTime = nil
+    }
+    
+    private func teardownInternalState(reason: String) async {
+        print("🎬 ProgramRecorder: Full teardown (\(reason))")
+        // Stop drainers
+        drainingVideoTask?.cancel()
+        drainingAudioTask?.cancel()
+        drainingVideoTask = nil
+        drainingAudioTask = nil
+        drainingVideo = false
+        drainingAudio = false
+        
+        // Clear queues
+        videoQueue.removeAll()
+        audioQueue.removeAll()
+        
+        // Reset writer and inputs
+        await teardownWriterOnly(reason: reason)
+        
+        // Reset flags
+        acceptingNewAppends = false
+        isFinalizingWriter = false
+        isRecording = false
+        hasReceivedFrames = false
+        lastVideoPTS = nil
     }
     
     enum RecordingError: Error {
