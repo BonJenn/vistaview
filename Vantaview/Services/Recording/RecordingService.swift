@@ -28,6 +28,8 @@ final class RecordingService: ObservableObject {
     private var diagTask: Task<Void, Never>?
     private var startedAt: Date?
     private var productionManager: UnifiedProductionManager?
+    private var stopInProgress = false
+    private var startInProgress = false
     
     func sink() -> RecordingSink { tap }
     
@@ -40,13 +42,25 @@ final class RecordingService: ObservableObject {
         print("🎬 RecordingService: Current state - isRecording: \(isRecording)")
         
         if isRecording {
+            guard !stopInProgress else {
+                print("🎬 RecordingService: Stop already in progress; ignoring tap")
+                return
+            }
+            stopInProgress = true
             print("🎬 RecordingService: Stopping recording...")
             Task {
+                defer { self.stopInProgress = false }
                 _ = await stopRecording()
             }
         } else {
+            guard !startInProgress else {
+                print("🎬 RecordingService: Start already in progress; ignoring tap")
+                return
+            }
+            startInProgress = true
             print("🎬 RecordingService: Starting recording...")
             Task {
+                defer { self.startInProgress = false }
                 do {
                     try await startRecording(container: container)
                 } catch {
@@ -114,7 +128,7 @@ final class RecordingService: ObservableObject {
             throw error
         }
         
-        // Now connect the sink and start feeding frames
+        // Now connect the sink and start feeding frames (or mark media-segment begin)
         if let productionManager = productionManager {
             print("🎬 RecordingService: Connecting recording sink to production manager…")
             await productionManager.connectRecordingSink(self.sink())
@@ -151,9 +165,10 @@ final class RecordingService: ObservableObject {
         print("🎬 RecordingService: ====== STOPPING RECORDING PIPELINE ======")
         stopTickers()
 
-        // If current program is media, export the exact segment [record-start .. now] before disconnect/finalize.
+        // For media program, pause player and export exact segment [start..now] before disconnect/finalize
         if let pm = productionManager {
-            print("🎬 RecordingService: Asking production manager to export media segment (if any)…")
+            print("🎬 RecordingService: Asking production manager to pause media (if any) and export segment…")
+            await pm.pauseProgramMediaIfAny()
             await pm.exportCurrentMediaSegmentIfNeeded(to: recorder)
             print("🎬 RecordingService: Media segment export complete (if any)")
         }

@@ -146,7 +146,6 @@ final class UnifiedProductionManager: ObservableObject {
         self.simpleRecordingSink = SimpleRecordingSink(recorder: recorder, device: effectManager.metalDevice)
         print("🎬 UnifiedProductionManager: Created SimpleRecordingSink (GPU based)")
         
-        // For media sources, mark the segment begin and defer actual export until stop.
         switch previewProgramManager.programSource {
         case .media(_, let player):
             await recorder.setSourceMode(.filePlayback)
@@ -849,6 +848,18 @@ final class UnifiedProductionManager: ObservableObject {
         print("🎬 UnifiedProductionManager: Media segment capture BEGIN at itemTime=\(mediaSegmentStartItemTime?.seconds ?? -1)")
     }
 
+    func pauseProgramMediaIfAny() async {
+        switch previewProgramManager.programSource {
+        case .media(_, let player):
+            player?.pause()
+            if let t = player?.currentTime() {
+                print("🎬 UnifiedProductionManager: Paused program media at \(t.seconds)s for segment export")
+            }
+        default:
+            break
+        }
+    }
+
     func exportCurrentMediaSegmentIfNeeded(to recorder: ProgramRecorder) async {
         guard let item = mediaSegmentPlayerItem,
               let asset = mediaSegmentAsset,
@@ -857,6 +868,7 @@ final class UnifiedProductionManager: ObservableObject {
             return
         }
 
+        // Snapshot end AFTER pausing (caller pauses before exporting)
         let end = item.currentTime()
         if CMTimeCompare(end, start) <= 0 {
             print("🎬 UnifiedProductionManager: Media segment export skipped (end <= start)")
@@ -866,32 +878,38 @@ final class UnifiedProductionManager: ObservableObject {
             return
         }
 
-        let duration = CMTimeSubtract(end, start)
-        print("🎬 UnifiedProductionManager: Exporting media segment start=\(start.seconds)s end=\(end.seconds)s dur=\(duration.seconds)s")
+        print("🎬 UnifiedProductionManager: Exporting media segment start=\(start.seconds)s end=\(end.seconds)s dur=\(CMTimeSubtract(end, start).seconds)s")
 
         let assetCopy = asset
         let startCopy = start
-        let durationCopy = duration
+        let endCopy = end
 
+        // Do the heavy work off the main actor
         let task = Task.detached(priority: .userInitiated) {
             do {
                 let reader = try AVAssetReader(asset: assetCopy)
-                reader.timeRange = CMTimeRange(start: startCopy, duration: durationCopy)
 
                 guard let vTrack = assetCopy.tracks(withMediaType: .video).first else {
                     print("🎬 UnifiedProductionManager: Segment export ERROR - no video track")
                     return
                 }
 
+                // Determine fps and half-frame tolerance for inclusive range comparison
                 var sourceFPS: Double = 30.0
+                var halfFrameTol = CMTime(value: 1, timescale: 120) // ~0.0083s default
                 if vTrack.nominalFrameRate > 0 {
                     sourceFPS = Double(vTrack.nominalFrameRate)
+                    let fd = CMTime(seconds: 1.0 / sourceFPS, preferredTimescale: 600)
+                    halfFrameTol = CMTimeMultiplyByRatio(fd, multiplier: 1, divisor: 2)
                 } else if vTrack.minFrameDuration.isValid && vTrack.minFrameDuration.value > 0 {
                     sourceFPS = max(1.0, 1.0 / CMTimeGetSeconds(vTrack.minFrameDuration))
+                    halfFrameTol = CMTimeMultiplyByRatio(vTrack.minFrameDuration, multiplier: 1, divisor: 2)
                 }
+
                 await recorder.setSourceMode(.filePlayback)
                 await recorder.updateVideoConfig(expectedFPS: sourceFPS, allowFrameReordering: true)
 
+                // Configure track outputs (no timeRange here; we’ll clamp by PTS manually to avoid rounding)
                 let vSettings: [String: Any] = [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                     kCVPixelBufferIOSurfacePropertiesKey as String: [:]
@@ -926,25 +944,51 @@ final class UnifiedProductionManager: ObservableObject {
                     return
                 }
 
+                // Clamp helpers
+                let startMin = CMTimeSubtract(startCopy, halfFrameTol)
+                let endMax = CMTimeAdd(endCopy, halfFrameTol)
+
+                // Video loop: forward only samples in [start .. end], preserving original PTS
                 var vCount: Int64 = 0
+                var firstLoggedPTS: CMTime?
                 while let sb = vOut.copyNextSampleBuffer() {
                     try? Task.checkCancellation()
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+
+                    if CMTimeCompare(pts, startMin) < 0 {
+                        continue
+                    }
+                    if CMTimeCompare(pts, endMax) > 0 {
+                        break
+                    }
+
                     vCount &+= 1
+                    if firstLoggedPTS == nil {
+                        firstLoggedPTS = pts
+                        print("🎬 UnifiedProductionManager: Segment first video PTS=\(pts.seconds)s (ts=\(pts.timescale))")
+                    }
                     await recorder.appendVideoSampleBuffer(sb)
-                    if vCount == 1 || vCount % 120 == 0 {
-                        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+
+                    if vCount == 1 || vCount % 150 == 0 {
                         print("🎬 UnifiedProductionManager: Segment video sb#\(vCount) PTS=\(pts.seconds)")
                     }
                 }
 
+                // Audio loop: drop anything before first video PTS to maintain A/V sync
                 var aCount: Int64 = 0
                 if let aOut {
                     while let sb = aOut.copyNextSampleBuffer() {
                         try? Task.checkCancellation()
+                        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+                        if let firstPTS = firstLoggedPTS, CMTimeCompare(pts, firstPTS) < 0 {
+                            continue
+                        }
+                        if CMTimeCompare(pts, endMax) > 0 {
+                            break
+                        }
                         aCount &+= 1
                         await recorder.appendAudioSampleBuffer(sb)
                         if aCount == 1 || aCount % 300 == 0 {
-                            let pts = CMSampleBufferGetPresentationTimeStamp(sb)
                             print("🎬 UnifiedProductionManager: Segment audio sb#\(aCount) PTS=\(pts.seconds)")
                         }
                     }
@@ -956,8 +1000,10 @@ final class UnifiedProductionManager: ObservableObject {
             }
         }
 
+        // Wait for export to complete
         await task.value
 
+        // Reset markers
         mediaSegmentPlayerItem = nil
         mediaSegmentAsset = nil
         mediaSegmentStartItemTime = nil
