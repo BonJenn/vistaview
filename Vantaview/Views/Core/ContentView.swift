@@ -46,90 +46,98 @@ struct ContentView: View {
 
     var body: some View {
         if let productionManager = productionManager {
-            VStack(spacing: 0) {
-                TopToolbarView(
-                    productionManager: productionManager,
-                    productionMode: $productionMode,
-                    showingStudioSelector: $showingStudioSelector,
-                    showingVirtualCameraDemo: $showingVirtualCameraDemo,
-                    projectCoordinator: projectCoordinator
-                )
-                .environmentObject(appServices.recordingService)
-                
-                Divider()
-                
-                Group {
-                    switch productionMode {
-                    case .virtual:
-                        VirtualProductionView()
-                            .environmentObject(productionManager.studioManager)
-                            .environmentObject(productionManager)
-                            .gated(.virtualSet3D, licenseManager: licenseManager)
-                    case .live:
-                        FinalCutProStyleView(
-                            productionManager: productionManager,
-                            rtmpURL: $rtmpURL,
-                            streamKey: $streamKey,
-                            selectedTab: $selectedTab,
-                            showingFilePicker: $showingFilePicker,
-                            mediaFiles: $mediaFiles,
-                            selectedPlatform: $selectedPlatform,
-                            scenesManager: scenesManager
-                        )
-                        .environmentObject(layerManager)
-                        .environmentObject(appServices.recordingService)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .sheet(isPresented: $showingStudioSelector) {
-                StudioSelectorSheet(productionManager: productionManager)
+            ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: 0) {
+                    TopToolbarView(
+                        productionManager: productionManager,
+                        productionMode: $productionMode,
+                        showingStudioSelector: $showingStudioSelector,
+                        showingVirtualCameraDemo: $showingVirtualCameraDemo,
+                        projectCoordinator: projectCoordinator
+                    )
                     .environmentObject(appServices.recordingService)
-            }
-            .sheet(isPresented: $showingVirtualCameraDemo) {
-                VirtualCameraDemoView()
-                    .frame(minWidth: 1000, minHeight: 700)
-            }
-            .fileImporter(
-                isPresented: $showingFilePicker,
-                allowedContentTypes: [.movie, .image, .audio],
-                allowsMultipleSelection: true
-            ) { result in
-                handleFileImport(result)
-            }
-            .transaction { tx in
-                if suppressInitialAnimations {
-                    tx.animation = nil
-                }
-            }
-            .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
-                if let projectState = projectCoordinator.currentProjectState {
-                    await applyProjectTemplate(projectState)
-                }
-            }
-            .onChange(of: productionManager.previewProgramManager.programSource) { _, newValue in
-                let isActive = {
-                    switch newValue {
-                    case .none:
-                        return false
-                    default:
-                        return true
+                    
+                    Divider()
+                    
+                    Group {
+                        switch productionMode {
+                        case .virtual:
+                            VirtualProductionView()
+                                .environmentObject(productionManager.studioManager)
+                                .environmentObject(productionManager)
+                                .gated(.virtualSet3D, licenseManager: licenseManager)
+                        case .live:
+                            FinalCutProStyleView(
+                                productionManager: productionManager,
+                                rtmpURL: $rtmpURL,
+                                streamKey: $streamKey,
+                                selectedTab: $selectedTab,
+                                showingFilePicker: $showingFilePicker,
+                                mediaFiles: $mediaFiles,
+                                selectedPlatform: $selectedPlatform,
+                                scenesManager: scenesManager
+                            )
+                            .environmentObject(layerManager)
+                            .environmentObject(appServices.recordingService)
+                        }
                     }
-                }()
-                appServices.recordingService.updateAvailability(isProgramActive: isActive)
-            }
-            .onAppear {
-                let isActive = {
-                    switch productionManager.previewProgramManager.programSource {
-                    case .none:
-                        return false
-                    default:
-                        return true
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .sheet(isPresented: $showingStudioSelector) {
+                    StudioSelectorSheet(productionManager: productionManager)
+                        .environmentObject(appServices.recordingService)
+                }
+                .sheet(isPresented: $showingVirtualCameraDemo) {
+                    VirtualCameraDemoView()
+                        .frame(minWidth: 1000, minHeight: 700)
+                }
+                .fileImporter(
+                    isPresented: $showingFilePicker,
+                    allowedContentTypes: [.movie, .image, .audio],
+                    allowsMultipleSelection: true
+                ) { result in
+                    handleFileImport(result)
+                }
+                .transaction { tx in
+                    if suppressInitialAnimations {
+                        tx.animation = nil
                     }
-                }()
-                appServices.recordingService.updateAvailability(isProgramActive: isActive)
-                appServices.recordingService.isEnabledByLicense = true
+                }
+                .task(id: projectCoordinator.currentProjectState?.manifest.projectId) {
+                    if let projectState = projectCoordinator.currentProjectState {
+                        await applyProjectTemplate(projectState)
+                    }
+                }
+                .onChange(of: productionManager.previewProgramManager.programSource) { _, newValue in
+                    let isActive = {
+                        switch newValue {
+                        case .none:
+                            return false
+                        default:
+                            return true
+                        }
+                    }()
+                    appServices.recordingService.updateAvailability(isProgramActive: isActive)
+                }
+                .onAppear {
+                    let isActive = {
+                        switch productionManager.previewProgramManager.programSource {
+                        case .none:
+                            return false
+                        default:
+                            return true
+                        }
+                    }()
+                    appServices.recordingService.updateAvailability(isProgramActive: isActive)
+                    appServices.recordingService.isEnabledByLicense = true
+                }
+                
+                // Always-present overlay host that observes RecordingService
+                FinalizationHUDOverlay()
+                    .padding(16)
             }
+            // Provide RecordingService to the whole subtree so the overlay can observe it
+            .environmentObject(appServices.recordingService)
         } else {
             ProgressView("Initializing Production Manager...")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -234,6 +242,80 @@ struct ContentView: View {
         }
     }
 }
+
+// MARK: - Finalization HUD
+
+struct FinalizationHUDOverlay: View {
+    @EnvironmentObject var recordingService: RecordingService
+    
+    var body: some View {
+        Group {
+            if recordingService.isFinalizing && recordingService.showFinalizationHUD {
+                FinalizationHUDView(
+                    progress: recordingService.finalizeProgress,
+                    status: recordingService.finalizeStatusText,
+                    filename: recordingService.outputURL?.lastPathComponent
+                ) {
+                    recordingService.showFinalizationHUD = false
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: recordingService.isFinalizing)
+        .animation(.easeInOut(duration: 0.2), value: recordingService.showFinalizationHUD)
+    }
+}
+
+struct FinalizationHUDView: View {
+    let progress: Double
+    let status: String
+    let filename: String?
+    let onClose: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Finalizing Recording")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Hide")
+            }
+            if let filename {
+                Text(filename)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            ProgressView(value: progress, total: 1.0)
+                .progressViewStyle(.linear)
+            HStack {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+        )
+        .frame(maxWidth: 320)
+    }
+}
+
+// MARK: - Top Toolbar View
 
 struct TopToolbarView: View {
     @ObservedObject var productionManager: UnifiedProductionManager
@@ -443,7 +525,6 @@ struct TopToolbarView: View {
                     print("   - isRecordActionAvailable: \(recordingService.isRecordActionAvailable)")
                     print("   - isEnabledByLicense: \(recordingService.isEnabledByLicense)")
                 }
-                // TEMPORARILY REMOVE: .disabled(!recordingService.isRecordActionAvailable)
             }
         }
         .padding()

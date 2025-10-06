@@ -15,6 +15,12 @@ final class RecordingService: ObservableObject {
     @Published var isEnabledByLicense: Bool = true
     @Published var isRecordActionAvailable: Bool = false
     
+    // Finalization HUD state
+    @Published var isFinalizing: Bool = false
+    @Published var finalizeProgress: Double = 0.0
+    @Published var finalizeStatusText: String = "Preparing…"
+    @Published var showFinalizationHUD: Bool = true
+    
     struct Diagnostics: Sendable {
         var droppedVideo: Int = 0
         var droppedAudio: Int = 0
@@ -26,6 +32,7 @@ final class RecordingService: ObservableObject {
     private lazy var tap = ProgramFrameTap(recorder: recorder)
     private var tickerTask: Task<Void, Never>?
     private var diagTask: Task<Void, Never>?
+    private var finalizeProgressTask: Task<Void, Never>?
     private var startedAt: Date?
     private var productionManager: UnifiedProductionManager?
     private var stopInProgress = false
@@ -84,6 +91,11 @@ final class RecordingService: ObservableObject {
             return
         }
         
+        isFinalizing = false
+        finalizeProgress = 0.0
+        finalizeStatusText = "Preparing…"
+        showFinalizationHUD = true
+        
         print("🎬 RecordingService: ====== STARTING RECORDING PIPELINE ======")
         print("🎬 RecordingService: Current state - isRecording: \(isRecording), isEnabledByLicense: \(isEnabledByLicense), isRecordActionAvailable: \(isRecordActionAvailable)")
         
@@ -110,12 +122,8 @@ final class RecordingService: ObservableObject {
         print("🎬 RecordingService: Using temp URL: \(saveURL.path)")
         #endif
         
-        // Store the URL immediately so ProgramRecorder can create the writer
         self.outputURL = saveURL
         
-        // IMPORTANT: Start the ProgramRecorder BEFORE connecting the sink.
-        // Otherwise the ProgramRecorder has no outputURL when the program pipeline begins pushing frames,
-        // leading to missingURL/startSession failures and zero-frame files.
         print("🎬 RecordingService: Starting ProgramRecorder FIRST (before connecting sink)")
         do {
             try await recorder.start(url: saveURL, container: container)
@@ -128,7 +136,6 @@ final class RecordingService: ObservableObject {
             throw error
         }
         
-        // Now connect the sink and start feeding frames (or mark media-segment begin)
         if let productionManager = productionManager {
             print("🎬 RecordingService: Connecting recording sink to production manager…")
             await productionManager.connectRecordingSink(self.sink())
@@ -148,7 +155,6 @@ final class RecordingService: ObservableObject {
         print("🎬 RecordingService: ====== RECORDING PIPELINE FULLY STARTED ======")
         print("🎬 RecordingService: Output file will be: \(saveURL.path)")
         
-        // Optional 5s health check
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             let frameCount = await self.recorder.totalVideoFramesReceived
@@ -164,8 +170,13 @@ final class RecordingService: ObservableObject {
         
         print("🎬 RecordingService: ====== STOPPING RECORDING PIPELINE ======")
         stopTickers()
-
-        // For media program, pause player and export exact segment [start..now] before disconnect/finalize
+        
+        // Show HUD immediately; user can keep using app
+        isFinalizing = true
+        finalizeProgress = 0.0
+        finalizeStatusText = "Exporting…"
+        startFinalizationProgressPolling()
+        
         if let pm = productionManager {
             print("🎬 RecordingService: Asking production manager to pause media (if any) and export segment…")
             await pm.pauseProgramMediaIfAny()
@@ -173,7 +184,6 @@ final class RecordingService: ObservableObject {
             print("🎬 RecordingService: Media segment export complete (if any)")
         }
         
-        // Now cut producers to avoid new frames while we finalize
         if let pm = productionManager {
             print("🎬 RecordingService: Requesting production manager to disconnect recording sink…")
             await pm.disconnectRecordingSink()
@@ -181,6 +191,7 @@ final class RecordingService: ObservableObject {
         }
         
         do {
+            finalizeStatusText = "Finalizing file…"
             let url = try await recorder.stopAndFinalize()
             self.isRecording = false
             self.outputURL = url
@@ -198,10 +209,6 @@ final class RecordingService: ObservableObject {
                     let modificationDate = attributes[.modificationDate] as? Date
                     print("🎬 RecordingService: File size: \(fileSize) bytes")
                     print("🎬 RecordingService: Modified: \(modificationDate?.description ?? "unknown")")
-                    
-                    if fileSize == 0 {
-                        print("🎬 RecordingService: ⚠️  WARNING - File is empty (0 bytes)")
-                    }
                 } catch {
                     print("🎬 RecordingService: ERROR getting file attributes: \(error)")
                 }
@@ -226,6 +233,11 @@ final class RecordingService: ObservableObject {
             url.stopAccessingSecurityScopedResource()
             #endif
             
+            finalizeProgress = 1.0
+            finalizeStatusText = "Completed"
+            stopFinalizationProgressPolling()
+            isFinalizing = false
+            
             return url
         } catch {
             lastError = error.localizedDescription
@@ -237,6 +249,8 @@ final class RecordingService: ObservableObject {
                 url.stopAccessingSecurityScopedResource()
                 #endif
             }
+            stopFinalizationProgressPolling()
+            isFinalizing = false
             return outputURL
         }
     }
@@ -289,6 +303,28 @@ final class RecordingService: ObservableObject {
         tickerTask = nil
         diagTask?.cancel()
         diagTask = nil
+    }
+    
+    private func startFinalizationProgressPolling() {
+        stopFinalizationProgressPolling()
+        finalizeProgressTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                let snap = await self.recorder.progressSnapshot()
+                await MainActor.run {
+                    if snap.isFinalizing {
+                        self.finalizeStatusText = "Finalizing…"
+                    }
+                    self.finalizeProgress = snap.fraction
+                }
+            }
+        }
+    }
+    
+    private func stopFinalizationProgressPolling() {
+        finalizeProgressTask?.cancel()
+        finalizeProgressTask = nil
     }
     
     private func defaultFileName(container: ProgramRecorder.Container) -> String {

@@ -59,6 +59,15 @@ actor ProgramRecorder {
         case filePlayback
     }
     
+    struct FinalizeSnapshot: Sendable {
+        var isFinalizing: Bool
+        var fraction: Double
+        var remainingVideo: Int
+        var remainingAudio: Int
+        var totalWrittenVideo: Int64
+        var totalWrittenAudio: Int64
+    }
+    
     // State
     private(set) var isRecording = false
     private(set) var outputURL: URL?
@@ -106,6 +115,11 @@ actor ProgramRecorder {
     private var drainingVideo = false
     private var drainingAudio = false
     
+    // Finalization progress bookkeeping
+    private var initialPendingVideo: Int = 0
+    private var initialPendingAudio: Int = 0
+    private var lastFinalizeCompletedAt: CFAbsoluteTime?
+    
     // MARK: - Public Configuration
     
     func setSourceMode(_ mode: RecordingSourceMode) {
@@ -123,16 +137,42 @@ actor ProgramRecorder {
         print("🎬 ProgramRecorder: Updated video config - fps: \(requestedVideoConfig.fps), reorder: \(requestedVideoConfig.allowFrameReordering)")
     }
     
+    // Expose a lightweight progress snapshot for UI polling
+    func progressSnapshot() -> FinalizeSnapshot {
+        let remainingV = videoQueue.count
+        let remainingA = audioQueue.count
+        let initial = max(1, initialPendingVideo + initialPendingAudio)
+        var fraction: Double = 0.0
+        if isFinalizingWriter {
+            let remaining = remainingV + remainingA
+            fraction = Double(initial - remaining) / Double(initial)
+            if remaining == 0 {
+                fraction = min(0.99, max(0.0, fraction))
+            }
+            fraction = min(0.99, max(0.0, fraction))
+        } else if lastFinalizeCompletedAt != nil {
+            fraction = 1.0
+        } else {
+            fraction = isRecording ? 0.0 : 0.0
+        }
+        return FinalizeSnapshot(
+            isFinalizing: isFinalizingWriter,
+            fraction: fraction,
+            remainingVideo: remainingV,
+            remainingAudio: remainingA,
+            totalWrittenVideo: totalVideoFramesWritten,
+            totalWrittenAudio: totalAudioFramesWritten
+        )
+    }
+    
     // MARK: - Lifecycle
     
     func start(url: URL, container: Container = .mov, requestedVideo: VideoConfig = .default(), requestedAudio: AudioConfig = .default()) async throws {
         try Task.checkCancellation()
         guard !isRecording else { return }
         
-        // Full teardown of any previous session (ensures second/third recordings work reliably)
         await teardownInternalState(reason: "begin start()")
         
-        // Prepare URL (create parent dir, remove pre-existing file)
         let preparedURL = try await prepareOutputURL(url)
         print("🎬 ProgramRecorder: STARTING RECORDING SESSION")
         print("🎬 ProgramRecorder: Output path: \(preparedURL.path)")
@@ -140,7 +180,6 @@ actor ProgramRecorder {
         print("🎬 ProgramRecorder: Requested Video cfg: \(requestedVideo.width)x\(requestedVideo.height) @\(requestedVideo.fps)fps reorder=\(requestedVideo.allowFrameReordering)")
         print("🎬 ProgramRecorder: Requested Audio cfg: \(requestedAudio.sampleRate)Hz \(requestedAudio.channels)ch")
         
-        // Reset state
         isFinalizingWriter = false
         sessionStarted = false
         hasReceivedFrames = false
@@ -160,7 +199,6 @@ actor ProgramRecorder {
         videoQueue.removeAll()
         audioQueue.removeAll()
         
-        // Cancel any previous drainers (double-safety)
         drainingVideoTask?.cancel()
         drainingAudioTask?.cancel()
         drainingVideoTask = nil
@@ -168,12 +206,16 @@ actor ProgramRecorder {
         drainingVideo = false
         drainingAudio = false
         
-        // Assign new config
         lastError = nil
         outputURL = preparedURL
         pendingContainer = container
         requestedVideoConfig = requestedVideo
         requestedAudioConfig = requestedAudio
+        
+        // Reset finalize progress state
+        initialPendingVideo = 0
+        initialPendingAudio = 0
+        lastFinalizeCompletedAt = nil
         
         isRecording = true
         acceptingNewAppends = true
@@ -222,7 +264,11 @@ actor ProgramRecorder {
         isFinalizingWriter = true
         isRecording = false
         
-        // Ensure drainers are active and let them flush
+        // Capture initial pending counts for progress
+        initialPendingVideo = videoQueue.count
+        initialPendingAudio = audioQueue.count
+        print("🎬 ProgramRecorder: Initial pending for finalize - video:\(initialPendingVideo) audio:\(initialPendingAudio)")
+        
         startVideoDrainIfNeeded()
         startAudioDrainIfNeeded()
         
@@ -232,8 +278,8 @@ actor ProgramRecorder {
         guard let writer = writer else {
             print("🎬 ProgramRecorder: No writer created, no file to finalize")
             guard let url = outputURL else { throw RecordingError.noWriter }
-            // Teardown state even if writer is nil, to avoid poisoning next session
             await teardownInternalState(reason: "stopAndFinalize() with no writer")
+            lastFinalizeCompletedAt = CFAbsoluteTimeGetCurrent()
             return url
         }
         
@@ -244,7 +290,6 @@ actor ProgramRecorder {
         guard hasReceivedFrames else {
             print("🎬 ProgramRecorder: No frames received, cancelling writer")
             writer.cancelWriting()
-            // Teardown internal state so next recording can start cleanly
             await teardownInternalState(reason: "stopAndFinalize() no frames")
             throw RecordingError.noFramesReceived
         }
@@ -263,7 +308,7 @@ actor ProgramRecorder {
             }
         }
         
-        // Full teardown after completion so subsequent recordings can configure a fresh writer
+        lastFinalizeCompletedAt = CFAbsoluteTimeGetCurrent()
         await teardownInternalState(reason: "post-finishWriting")
         return url
     }
@@ -643,7 +688,6 @@ actor ProgramRecorder {
                 print("🎬 ProgramRecorder: Queues empty before finish")
                 return true
             }
-            // Ensure drainers continue running
             startVideoDrainIfNeeded()
             startAudioDrainIfNeeded()
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -658,11 +702,9 @@ actor ProgramRecorder {
         } else {
             print("🎬 ProgramRecorder: Writer is nil at time of error")
         }
-        // Do NOT cancel the writer here; allow stop() to finalize if possible.
     }
     
     private func stopSilentlyOnError() async {
-        // Deprecated path: keep writer alive; just log.
         print("🎬 ProgramRecorder: stopSilentlyOnError() invoked - lastError=\(lastError?.localizedDescription ?? "nil") writerStatus=\(String(describing: writer?.status.rawValue)) writerError=\(String(describing: writer?.error?.localizedDescription))")
     }
     
@@ -680,7 +722,6 @@ actor ProgramRecorder {
     
     private func teardownInternalState(reason: String) async {
         print("🎬 ProgramRecorder: Full teardown (\(reason))")
-        // Stop drainers
         drainingVideoTask?.cancel()
         drainingAudioTask?.cancel()
         drainingVideoTask = nil
@@ -688,14 +729,11 @@ actor ProgramRecorder {
         drainingVideo = false
         drainingAudio = false
         
-        // Clear queues
         videoQueue.removeAll()
         audioQueue.removeAll()
         
-        // Reset writer and inputs
         await teardownWriterOnly(reason: reason)
         
-        // Reset flags
         acceptingNewAppends = false
         isFinalizingWriter = false
         isRecording = false
