@@ -90,19 +90,35 @@ class AuthenticationManager: ObservableObject {
     
     private func saveSession() {
         guard let token = accessToken, let userID = userID else { return }
-        
+
         let sessionData = SessionData(accessToken: token, userID: userID)
-        
+
         do {
             let data = try JSONEncoder().encode(sessionData)
+
+            // Try to add new item first
             let status = SecItemAdd([
                 kSecClass: kSecClassGenericPassword,
                 kSecAttrService: "app.vantaview.session",
                 kSecAttrAccount: "current_user",
                 kSecValueData: data
             ] as CFDictionary, nil)
-            
-            if status != errSecSuccess && status != errSecDuplicateItem {
+
+            if status == errSecDuplicateItem {
+                // Item exists, update it instead
+                let query: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: "app.vantaview.session",
+                    kSecAttrAccount as String: "current_user"
+                ]
+                let updateQuery: [String: Any] = [
+                    kSecValueData as String: data
+                ]
+                let updateStatus = SecItemUpdate(query as CFDictionary, updateQuery as CFDictionary)
+                if updateStatus != errSecSuccess {
+                    print("Failed to update session in keychain: \(updateStatus)")
+                }
+            } else if status != errSecSuccess {
                 print("Failed to save session to keychain: \(status)")
             }
         } catch {
@@ -150,13 +166,46 @@ class AuthenticationManager: ObservableObject {
     // MARK: - User Info
     
     private func fetchUserInfo() async {
-        // TODO: Fetch user info from your API
-        // For now, create a basic user object
-        currentUser = VantaviewUser(
-            id: userID ?? "",
-            email: "user@example.com", // TODO: Get from API
-            name: "User Name" // TODO: Get from API
-        )
+        guard let token = accessToken else { return }
+
+        do {
+            // Use Supabase auth endpoint to get user info
+            let url = SupabaseConfig.projectURL.appendingPathComponent("auth/v1/user")
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue(SupabaseConfig.anonKey, forHTTPHeaderField: "apikey")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                print("Failed to fetch user info: Invalid response")
+                return
+            }
+
+            // Parse response
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let id = json["id"] as? String,
+               let email = json["email"] as? String {
+
+                // Get display name from user_metadata if available
+                let name: String
+                if let userMetadata = json["user_metadata"] as? [String: Any],
+                   let displayName = userMetadata["display_name"] as? String {
+                    name = displayName
+                } else {
+                    name = email.components(separatedBy: "@").first ?? "User"
+                }
+
+                currentUser = VantaviewUser(
+                    id: id,
+                    email: email,
+                    name: name
+                )
+            }
+        } catch {
+            print("Error fetching user info: \(error.localizedDescription)")
+        }
     }
     
     // MARK: - Sign Out
@@ -212,12 +261,12 @@ enum AuthError: LocalizedError {
 extension AuthenticationManager {
     func handleOAuthCallback(url: URL) async throws {
         // Extract authorization code from callback URL
-        let redirectURI = "https://vantaview.app/auth/callback"
-        
+        _ = "https://vantaview.live/auth/callback" // redirectURI for future OAuth implementation
+
         // TODO: Implement OAuth callback parsing and token exchange
         // This would parse the callback URL, extract the auth code,
         // exchange it for tokens, and complete the sign-in process
-        
+
         throw AuthError.notImplemented("OAuth callback handling needs implementation")
     }
 }

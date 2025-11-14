@@ -64,39 +64,23 @@ struct AccountView: View {
     }
     
     private var subscriptionStatusSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                statusIcon
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    if let tier = licenseManager.currentTier {
-                        Text(tier.displayName)
-                            .font(.headline)
-                        
-                        Text("$\(tier.monthlyPrice)/month")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("No Active Subscription")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Text(licenseManager.status.displayText)
-                        .font(.caption)
-                        .foregroundColor(statusColor)
+        VStack(alignment: .leading, spacing: 8) {
+            if let tier = licenseManager.currentTier {
+                HStack {
+                    Text(tier.displayName)
+                    Spacer()
+                    Text("$\(tier.monthlyPrice)/month")
                 }
-                
-                Spacer()
+            } else {
+                Text("No active subscription")
             }
-            
-            if let lastRefresh = licenseManager.lastRefreshDate {
-                Text("Last updated: \(lastRefresh, style: .relative) ago")
-                    .font(.caption2)
+
+            HStack {
+                Text("This device:")
+                Text(DeviceID.deviceName())
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.vertical, 4)
     }
     
     private var actionButtonsSection: some View {

@@ -2,15 +2,28 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.vantaview</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>vantaview</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Vantaview Project</string>
 			<key>CFBundleTypeDescription</key>
 			<string>Vantaview Project Package</string>
 			<key>CFBundleTypeIconFiles</key>
 			<array/>
+			<key>CFBundleTypeName</key>
+			<string>Vantaview Project</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
@@ -42,11 +55,5 @@
 			</dict>
 		</dict>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>Vantaview needs camera access to capture video for live production and virtual studios.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Vantaview needs microphone access to capture audio for live production and streaming.</string>
-	<key>NSScreenCaptureDescription</key>
-	<string>Vantaview needs screen recording permission to capture screen content for streaming and virtual production.</string>
 </dict>
 </plist>

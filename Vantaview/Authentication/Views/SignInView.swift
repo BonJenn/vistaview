@@ -37,31 +37,14 @@ struct SignInView: View {
             
             // Sign In Options
             VStack(spacing: 16) {
-                
-                // Google Sign In
+
+                // Sign in via Website (Primary method)
                 Button(action: {
-                    signInWithGoogle()
+                    signInViaWebsite()
                 }) {
                     HStack {
-                        Image(systemName: "globe")
-                        Text("Sign in with Google")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color(.controlBackgroundColor))
-                    .foregroundColor(.primary)
-                    .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-                .disabled(isLoading)
-                
-                // Email Sign In (placeholder)
-                Button(action: {
-                    // TODO: Implement email sign in
-                }) {
-                    HStack {
-                        Image(systemName: "envelope")
-                        Text("Sign in with Email")
+                        Image(systemName: "safari")
+                        Text("Sign in via Browser")
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -70,9 +53,12 @@ struct SignInView: View {
                     .cornerRadius(8)
                 }
                 .buttonStyle(.plain)
-                .disabled(true) // Disabled until implemented
-                .opacity(0.6)
-                
+                .disabled(isLoading)
+
+                Text("Opens vantaview.live in your browser")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
             }
             .frame(maxWidth: 280)
             
@@ -110,10 +96,17 @@ struct SignInView: View {
         }
     }
     
+    private func signInViaWebsite() {
+        // Open the website with a query parameter to indicate app sign-in
+        if let url = URL(string: "https://vantaview.live/?auth=1&open_in_app=true") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func signInWithGoogle() {
         isLoading = true
         errorMessage = nil
-        
+
         Task {
             do {
                 try await authManager.signInWithGoogle()

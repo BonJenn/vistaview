@@ -4,33 +4,34 @@ import os
 
 @MainActor
 final class LicenseManager: ObservableObject {
-    // Derived UI state
     @Published private(set) var currentLicense: LicenseInfo?
     @Published private(set) var lastErrorMessage: String?
-    
-    // Back-compat for existing UI (AccountView, FeatureGatingModifiers, etc.)
+
     @Published private(set) var currentTier: PlanTier?
     @Published private(set) var status: LicenseStatus = .unknown
     @Published private(set) var lastRefreshDate: Date?
-    
-    private let service: LicenseService
+
+    private let logger = Logger(subsystem: "app.vantaview", category: "LicenseManager")
+
+    private let deviceService: DeviceService
+    private let licenseAPI: LicenseAPI
+
     private var userID: String?
     private var autoRefreshTask: Task<Void, Never>?
-    private let logger = Logger(subsystem: "app.vantaview", category: "LicenseManager")
-    
+
     #if DEBUG
     @Published var debugImpersonatedTier: PlanTier?
     @Published var debugOfflineMode: Bool = false
     @Published var debugExpiredMode: Bool = false
     #endif
-    
-    init(service: LicenseService = LicenseService()) {
-        self.service = service
+
+    init(deviceService: DeviceService = DeviceService(), licenseAPI: LicenseAPI = LicenseAPI()) {
+        self.deviceService = deviceService
+        self.licenseAPI = licenseAPI
     }
-    
+
     func setCurrentUser(_ id: String?) {
         guard id != userID else { return }
-        logger.debug("Set current user: \(id ?? "nil", privacy: .public)")
         userID = id
         currentLicense = nil
         currentTier = nil
@@ -39,64 +40,82 @@ final class LicenseManager: ObservableObject {
         lastErrorMessage = nil
         stopAutomaticRefresh()
     }
-    
-    // Main API (async throws)
+
     func refreshLicense(sessionToken: String, userID: String) async throws {
         try Task.checkCancellation()
-        
+
         #if DEBUG
         if debugOfflineMode {
-            logger.warning("DEBUG: Simulating offline mode")
             let simulatedError = NSError(domain: "LicenseManager.Debug", code: -1009, userInfo: [NSLocalizedDescriptionKey: "Simulated offline mode"])
             lastErrorMessage = simulatedError.localizedDescription
             status = .error(simulatedError.localizedDescription)
             throw simulatedError
         }
         #endif
-        
+
         do {
-            let fetched = try await service.fetchLicense(sessionToken: sessionToken, userID: userID)
+            let deviceID = DeviceID.deviceID()
+            let deviceName = DeviceID.deviceName()
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+
+            // Single source of truth: fetch signedJWT and derive entitlements
+            let jwtResponse = try await licenseAPI.fetchTier(sessionToken: sessionToken,
+                                                             deviceID: deviceID,
+                                                             deviceName: deviceName,
+                                                             appVersion: appVersion)
             try Task.checkCancellation()
-            
-            var finalInfo = fetched
-            
+            let entitlements = try await LicenseVerifier.verify(jwt: jwtResponse.signedJWT)
+            let verifiedTier = mapPlanTierToLicenseTier(entitlements.tier)
+
+            var finalInfo = LicenseInfo(
+                tier: verifiedTier,
+                expiresAt: entitlements.expiresAt,
+                features: []
+            )
+
             #if DEBUG
             if debugExpiredMode {
-                logger.warning("DEBUG: Forcing expired license")
                 finalInfo = LicenseInfo(
-                    tier: fetched.tier,
+                    tier: finalInfo.tier,
                     expiresAt: Date().addingTimeInterval(-60),
-                    features: fetched.features
+                    features: finalInfo.features
                 )
             }
             if let forced = debugImpersonatedTier {
-                logger.warning("DEBUG: Impersonating tier: \(forced.rawValue, privacy: .public)")
                 finalInfo = LicenseInfo(
                     tier: mapPlanTierToLicenseTier(forced),
                     expiresAt: Date().addingTimeInterval(7 * 24 * 60 * 60),
-                    features: fetched.features
+                    features: finalInfo.features
                 )
             }
             #endif
-            
+
             currentLicense = finalInfo
             lastErrorMessage = nil
             lastRefreshDate = Date()
             currentTier = mapLicenseTierToPlanTier(finalInfo.tier)
             status = finalInfo.isExpired ? .expired : .active
-            logger.debug("License updated: tier=\(finalInfo.tier.rawValue, privacy: .public) expired=\(finalInfo.isExpired, privacy: .public)")
+
+            // Fire-and-forget heartbeat register to update last_seen_at
+            Task.detached { [sessionToken] in
+                try? await self.deviceService.registerDevice(sessionToken: sessionToken,
+                                                             deviceID: deviceID,
+                                                             deviceName: deviceName,
+                                                             appVersion: appVersion)
+                if !DeviceID.isInstalledTracked() {
+                    DeviceID.markInstalledTracked()
+                }
+            }
+
         } catch is CancellationError {
-            logger.debug("refreshLicense cancelled")
             throw CancellationError()
         } catch {
             lastErrorMessage = error.localizedDescription
             status = .error(error.localizedDescription)
-            logger.error("refreshLicense failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
     }
-    
-    // Back-compat utility for legacy call sites (non-throwing, optionals)
+
     func refreshLicense(sessionToken: String?, userID: String?) async {
         do {
             try Task.checkCancellation()
@@ -107,15 +126,13 @@ final class LicenseManager: ObservableObject {
             }
             try await refreshLicense(sessionToken: token, userID: id)
         } catch is CancellationError {
-            logger.debug("refreshLicense(sessionToken:userID:) cancelled")
         } catch {
         }
     }
-    
+
     func startAutomaticRefresh(sessionToken: String, userID: String, every interval: Duration = .seconds(15 * 60)) {
         stopAutomaticRefresh()
-        logger.debug("Starting auto-refresh loop every \(Int(interval.components.seconds), privacy: .public)s")
-        
+
         autoRefreshTask = Task { [weak self] in
             let clock = ContinuousClock()
             while true {
@@ -125,46 +142,35 @@ final class LicenseManager: ObservableObject {
                     guard let self else { return }
                     try await self.refreshLicense(sessionToken: sessionToken, userID: userID)
                 } catch is CancellationError {
-                    self?.logger.debug("Auto-refresh cancelled")
                     return
                 } catch {
                     self?.lastErrorMessage = error.localizedDescription
                     self?.status = .error(error.localizedDescription)
-                    self?.logger.error("Auto-refresh error: \(error.localizedDescription, privacy: .public). Will continue.")
                     continue
                 }
             }
         }
     }
-    
+
     func stopAutomaticRefresh() {
-        if let task = autoRefreshTask {
-            logger.debug("Stopping auto-refresh loop")
-            task.cancel()
-        }
+        autoRefreshTask?.cancel()
         autoRefreshTask = nil
     }
-    
-    // Feature gating back-compat used by UI
+
     func isEnabled(_ feature: FeatureKey) -> Bool {
         #if DEBUG
         if let impersonated = debugImpersonatedTier {
-            let enabled = FeatureMatrix.isEnabled(feature, for: impersonated)
-            return enabled
+            return FeatureMatrix.isEnabled(feature, for: impersonated)
         }
-        if debugExpiredMode {
-            return false
-        }
+        if debugExpiredMode { return false }
         #endif
-        
+
         guard let tier = currentTier, status.isValid else {
             return false
         }
         return FeatureMatrix.isEnabled(feature, for: tier)
     }
-    
-    // MARK: - Mapping Helpers
-    
+
     private func mapLicenseTierToPlanTier(_ tier: LicenseTier) -> PlanTier {
         switch tier {
         case .stream: return .stream
@@ -173,7 +179,7 @@ final class LicenseManager: ObservableObject {
         case .pro: return .pro
         }
     }
-    
+
     private func mapPlanTierToLicenseTier(_ tier: PlanTier) -> LicenseTier {
         switch tier {
         case .stream: return .stream
@@ -184,5 +190,4 @@ final class LicenseManager: ObservableObject {
     }
 }
 
-// Internal protocol conformance preserved for existing code
 extension LicenseManager: FeatureGate {}

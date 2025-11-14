@@ -17,7 +17,7 @@ struct OAuthConfig {
     static let googleClientId = "YOUR_GOOGLE_CLIENT_ID_HERE"
     
     /// OAuth redirect URI (should match your web app)
-    static let redirectURI = "https://vantaview.app/auth/callback"
+    static let redirectURI = "https://vantaview.live/auth/callback"
     
     /// Google OAuth scopes
     static let googleScopes = "openid email profile"
