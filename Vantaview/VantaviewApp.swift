@@ -5,6 +5,7 @@ import os
 @MainActor
 @main
 struct VantaviewApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var authManager = AuthenticationManager()
@@ -16,6 +17,10 @@ struct VantaviewApp: App {
 
     private let deviceService = DeviceService()
     private let logger = Logger(subsystem: "app.vantaview", category: "App")
+
+    init() {
+        print("🚀 VantaviewApp initializing...")
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -68,12 +73,20 @@ struct VantaviewApp: App {
                 }
             }
             .onOpenURL { url in
+                print("📲 onOpenURL called with: \(url.absoluteString)")
                 handleDeepLink(url)
             }
             .onAppear {
+                print("🎬 Window appeared, setting up URL handler")
                 // Ensure only one window exists
                 if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
                     window.makeKeyAndOrderFront(nil)
+                }
+
+                // Set up AppDelegate URL handler
+                appDelegate.urlHandler = { [self] url in
+                    print("🔗 AppDelegate URL handler called with: \(url.absoluteString)")
+                    handleDeepLink(url)
                 }
             }
         }
@@ -304,16 +317,22 @@ struct VantaviewApp: App {
         print("📊 User ID: \(uid)")
         print("📊 Token length: \(token.count)")
 
-        // Sign in with the token
-        Task { @MainActor in
-            logger.info("🚀 Starting signInWithToken...")
-            print("🚀 Starting signInWithToken...")
+        // Sign in with the token - must be on main actor
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                logger.info("🚀 Starting signInWithToken...")
+                print("🚀 Starting signInWithToken...")
+                print("📊 Before: isAuthenticated = \(authManager.isAuthenticated)")
 
-            await authManager.signInWithToken(token, userID: uid)
+                await authManager.signInWithToken(token, userID: uid)
 
-            logger.info("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated, privacy: .public)")
-            print("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated)")
-            print("📊 Current user: \(authManager.currentUser?.email ?? "nil")")
+                logger.info("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated, privacy: .public)")
+                print("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated)")
+                print("📊 Current user: \(authManager.currentUser?.email ?? "nil")")
+
+                // Force SwiftUI to notice the change
+                authManager.objectWillChange.send()
+            }
         }
     }
 }
