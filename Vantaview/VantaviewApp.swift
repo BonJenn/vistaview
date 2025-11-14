@@ -18,7 +18,7 @@ struct VantaviewApp: App {
     private let logger = Logger(subsystem: "app.vantaview", category: "App")
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             Group {
                 if authManager.isAuthenticated {
                     if projectCoordinator.hasOpenProject {
@@ -27,20 +27,21 @@ struct VantaviewApp: App {
                             .environmentObject(projectCoordinator)
                             .task { await bootstrapFlow() }
                             .task(id: authManager.accessToken) { await handleTokenChange() }
-                            .frame(minWidth: 1200, minHeight: 800)
                     } else {
                         ProjectHub()
                             .environmentObject(authManager)
                             .environmentObject(projectCoordinator)
-                            .frame(minWidth: 1000, minHeight: 700)
                     }
                 } else {
                     SignInView(authManager: authManager)
-                        .frame(width: 400, height: 650)
                 }
             }
             .environmentObject(authManager)
             .environmentObject(projectCoordinator)
+            .frame(
+                minWidth: authManager.isAuthenticated ? (projectCoordinator.hasOpenProject ? 1200 : 1000) : 400,
+                minHeight: authManager.isAuthenticated ? (projectCoordinator.hasOpenProject ? 800 : 700) : 650
+            )
             .sheet(item: $deviceConflict) { conflict in
                 DeviceConflictSheet(conflict: conflict) {
                     Task {
@@ -69,8 +70,15 @@ struct VantaviewApp: App {
             .onOpenURL { url in
                 handleDeepLink(url)
             }
+            .onAppear {
+                // Ensure only one window exists
+                if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
         }
         .windowResizability(.contentSize)
+        .handlesExternalEvents(matching: Set(arrayLiteral: "main"))
         .commands {
             CommandGroup(after: .newItem) {
                 if authManager.isAuthenticated {
@@ -246,15 +254,18 @@ struct VantaviewApp: App {
 
     private func handleDeepLink(_ url: URL) {
         logger.info("🔗 Deep link received: \(url.absoluteString, privacy: .public)")
+        print("🔗 Deep link received: \(url.absoluteString)")
 
         // Expected format: vantaview://auth?access_token=...&user_id=...
         guard url.scheme == "vantaview" else {
             logger.warning("Invalid URL scheme: \(url.scheme ?? "none", privacy: .public)")
+            print("❌ Invalid URL scheme: \(url.scheme ?? "none")")
             return
         }
 
         guard url.host == "auth" else {
             logger.warning("Unknown deep link host: \(url.host ?? "none", privacy: .public)")
+            print("❌ Unknown deep link host: \(url.host ?? "none")")
             return
         }
 
@@ -262,6 +273,7 @@ struct VantaviewApp: App {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let queryItems = components.queryItems else {
             logger.error("Failed to parse deep link URL")
+            print("❌ Failed to parse deep link URL")
             return
         }
 
@@ -282,17 +294,26 @@ struct VantaviewApp: App {
         guard let token = accessToken, !token.isEmpty,
               let uid = userID, !uid.isEmpty else {
             logger.error("Missing access_token or user_id in deep link")
+            print("❌ Missing access_token or user_id in deep link")
             return
         }
 
         logger.info("✅ Deep link auth successful for user: \(uid, privacy: .public)")
         logger.info("📊 Token preview: \(String(token.prefix(20)), privacy: .public)...")
+        print("✅ Deep link parsed successfully!")
+        print("📊 User ID: \(uid)")
+        print("📊 Token length: \(token.count)")
 
         // Sign in with the token
         Task { @MainActor in
             logger.info("🚀 Starting signInWithToken...")
+            print("🚀 Starting signInWithToken...")
+
             await authManager.signInWithToken(token, userID: uid)
+
             logger.info("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated, privacy: .public)")
+            print("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated)")
+            print("📊 Current user: \(authManager.currentUser?.email ?? "nil")")
         }
     }
 }

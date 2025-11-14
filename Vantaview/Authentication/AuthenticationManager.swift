@@ -79,6 +79,8 @@ class AuthenticationManager: ObservableObject {
     func signInWithToken(_ token: String, userID: String) async {
         logger.info("📝 signInWithToken called for user: \(userID, privacy: .public)")
         logger.info("📝 Token length: \(token.count, privacy: .public)")
+        print("📝 signInWithToken called for user: \(userID)")
+        print("📝 Token length: \(token.count)")
 
         // Update properties on main actor
         self.accessToken = token
@@ -89,10 +91,12 @@ class AuthenticationManager: ObservableObject {
         self.isAuthenticated = true
 
         logger.info("✅ Set isAuthenticated = true, objectWillChange sent")
+        print("✅ Set isAuthenticated = true")
 
         // Save to keychain
         saveSession()
         logger.info("✅ Session saved to keychain")
+        print("✅ Session saved to keychain")
 
         // Small delay to ensure UI has time to update
         try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
@@ -100,9 +104,11 @@ class AuthenticationManager: ObservableObject {
         // Fetch user info
         await fetchUserInfo()
         logger.info("✅ User info fetched: \(self.currentUser?.email ?? "unknown", privacy: .public)")
+        print("✅ User info fetched: \(self.currentUser?.email ?? "unknown")")
 
         // Force another UI update after user info is loaded
         objectWillChange.send()
+        print("🎉 Authentication complete!")
     }
     
     // MARK: - Session Management
