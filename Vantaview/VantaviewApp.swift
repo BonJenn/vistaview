@@ -286,10 +286,13 @@ struct VantaviewApp: App {
         }
 
         logger.info("✅ Deep link auth successful for user: \(uid, privacy: .public)")
+        logger.info("📊 Token preview: \(String(token.prefix(20)), privacy: .public)...")
 
         // Sign in with the token
-        Task {
+        Task { @MainActor in
+            logger.info("🚀 Starting signInWithToken...")
             await authManager.signInWithToken(token, userID: uid)
+            logger.info("✅ signInWithToken completed. isAuthenticated: \(authManager.isAuthenticated, privacy: .public)")
         }
     }
 }

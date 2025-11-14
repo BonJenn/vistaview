@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import AppKit
+import os
 
 @MainActor
 class AuthenticationManager: ObservableObject {
@@ -15,8 +16,9 @@ class AuthenticationManager: ObservableObject {
     @Published var accessToken: String?
     @Published var userID: String?
     @Published var currentUser: VantaviewUser?
-    
+
     private var cancellables = Set<AnyCancellable>()
+    private let logger = Logger(subsystem: "app.vantaview", category: "Auth")
     
     init() {
         // Try to restore session on app launch
@@ -75,15 +77,32 @@ class AuthenticationManager: ObservableObject {
     // MARK: - Manual Token Entry (for testing)
     
     func signInWithToken(_ token: String, userID: String) async {
+        logger.info("📝 signInWithToken called for user: \(userID, privacy: .public)")
+        logger.info("📝 Token length: \(token.count, privacy: .public)")
+
+        // Update properties on main actor
         self.accessToken = token
         self.userID = userID
+
+        // Force UI update by explicitly sending objectWillChange
+        objectWillChange.send()
         self.isAuthenticated = true
-        
+
+        logger.info("✅ Set isAuthenticated = true, objectWillChange sent")
+
         // Save to keychain
         saveSession()
-        
+        logger.info("✅ Session saved to keychain")
+
+        // Small delay to ensure UI has time to update
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
         // Fetch user info
         await fetchUserInfo()
+        logger.info("✅ User info fetched: \(self.currentUser?.email ?? "unknown", privacy: .public)")
+
+        // Force another UI update after user info is loaded
+        objectWillChange.send()
     }
     
     // MARK: - Session Management
